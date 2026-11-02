@@ -1,0 +1,267 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// The files are the state: one Markdown file per message, in its box's new,
+// read or archive folder. Moving a file between them is the only change of
+// state; there is no database and no index.
+//
+//	<dir>/<who>/new/<id>.md       unread
+//	<dir>/<who>/read/<id>.md      read
+//	<dir>/<who>/archive/<id>.md   filed
+//	<dir>/<who>/files/<id>/...    attachments that came with a message
+
+var stateDirs = []struct{ state, dir string }{
+	{"unread", "new"},
+	{"read", "read"},
+	{"archived", "archive"},
+}
+
+func dirFor(state string) string {
+	for _, s := range stateDirs {
+		if s.state == state {
+			return s.dir
+		}
+	}
+	panic("no state " + state)
+}
+
+const storeReadme = `# The Dead Drop
+
+This folder is a Dead Drop store: each box is a folder, each message a
+Markdown file in its new/, read/ or archive/. The deaddrop command is the
+only writer. Read what you like; change things through deaddrop.
+
+**Never put a secret in a message.** Everyone who can read this folder can
+read every box. A report that needs a secret names where it lives instead.
+`
+
+// openStore makes sure the store exists, with its README.
+func openStore() (string, error) {
+	dir, err := storeDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	readme := filepath.Join(dir, "README.md")
+	if _, err := os.Stat(readme); errors.Is(err, os.ErrNotExist) {
+		writeAtomic(readme, []byte(storeReadme), 0o600)
+	}
+	return dir, nil
+}
+
+// lockBox takes a box's lock: every change of state holds it, so a
+// follow-up raising a message can't race a mark moving it.
+func lockBox(dir, box string) (func(), error) {
+	if err := os.MkdirAll(filepath.Join(dir, box), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, box, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+}
+
+// writeAtomic writes a temp file beside path, syncs it and renames it over
+// path, so a reader never sees half a message.
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(data)
+	if werr == nil {
+		werr = tmp.Chmod(mode)
+	}
+	if werr == nil {
+		werr = tmp.Sync()
+	}
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+	}
+	return werr
+}
+
+// copyAtomic copies a stream into place the same way.
+func copyAtomic(path string, r io.Reader) (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return 0, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return 0, err
+	}
+	n, werr := io.Copy(tmp, r)
+	if werr == nil {
+		werr = tmp.Sync()
+	}
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil {
+		os.Remove(tmp.Name())
+	}
+	return n, werr
+}
+
+// boxes lists every box in the store.
+func boxes(dir string) []string {
+	var out []string
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if e.IsDir() && boxRE.MatchString(e.Name()) && e.Name() != automation {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// loadBox reads a box's messages in the given states. A file that can't be
+// read is reported on stderr and skipped, never dropped silently.
+func loadBox(dir, box string, states []string, withBody bool) []*Message {
+	var out []*Message
+	for _, state := range states {
+		folder := filepath.Join(dir, box, dirFor(state))
+		ents, _ := os.ReadDir(folder)
+		for _, e := range ents {
+			n := e.Name()
+			if !strings.HasSuffix(n, ".md") || !e.Type().IsRegular() || checkID(strings.TrimSuffix(n, ".md")) != nil {
+				continue
+			}
+			path := filepath.Join(folder, n)
+			m, err := readMessage(path, withBody)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					fmt.Fprintf(os.Stderr, "deaddrop: skipping %s: %v\n", path, err)
+				}
+				continue
+			}
+			m.Box, m.State = box, state
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func readMessage(path string, withBody bool) (*Message, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	m, err := parseMessage(b, withBody)
+	if err != nil {
+		return nil, err
+	}
+	// The path is the truth: a file whose id disagrees with its name is read
+	// as its name.
+	m.ID = strings.TrimSuffix(filepath.Base(path), ".md")
+	m.path = path
+	return m, nil
+}
+
+// findMessage finds one message in a box, in any state.
+func findMessage(dir, box, id string, withBody bool) (*Message, error) {
+	if err := checkID(id); err != nil {
+		return nil, err
+	}
+	for _, s := range stateDirs {
+		path := filepath.Join(dir, box, s.dir, id+".md")
+		m, err := readMessage(path, withBody)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", path, err)
+		}
+		m.Box, m.State = box, s.state
+		return m, nil
+	}
+	return nil, fmt.Errorf("no message %s in %s's box", id, box)
+}
+
+// move puts a message in another state. Archiving stamps the file's time, so
+// gc counts from when it was filed.
+func move(dir string, m *Message, state string) error {
+	if m.State == state {
+		return nil
+	}
+	to := filepath.Join(dir, m.Box, dirFor(state), m.ID+".md")
+	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+		return err
+	}
+	if err := os.Rename(m.path, to); err != nil {
+		return err
+	}
+	if state == "archived" {
+		t := now()
+		os.Chtimes(to, t, t)
+	}
+	m.path, m.State = to, state
+	return nil
+}
+
+// sortForPull: unread first, then oldest first.
+func sortForPull(ms []*Message) {
+	rank := map[string]int{"unread": 0, "read": 1, "archived": 2}
+	sort.SliceStable(ms, func(i, j int) bool {
+		if rank[ms[i].State] != rank[ms[j].State] {
+			return rank[ms[i].State] < rank[ms[j].State]
+		}
+		if !ms[i].Sent.Equal(ms[j].Sent) {
+			return ms[i].Sent.Before(ms[j].Sent)
+		}
+		// Sent the same second: the file's own time knows better.
+		if a, b := modTime(ms[i].path), modTime(ms[j].path); !a.Equal(b) {
+			return a.Before(b)
+		}
+		return ms[i].ID < ms[j].ID
+	})
+}
+
+// newest is the most recently sent of ms, or nil.
+func newest(ms []*Message) *Message {
+	var n *Message
+	for _, m := range ms {
+		if n == nil || m.Sent.After(n.Sent) || (m.Sent.Equal(n.Sent) && m.ID > n.ID) {
+			n = m
+		}
+	}
+	return n
+}
+
+func modTime(path string) time.Time {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime()
+	}
+	return time.Time{}
+}
