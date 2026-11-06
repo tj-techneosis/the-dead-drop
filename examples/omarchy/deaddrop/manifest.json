@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "deaddrop",
+  "name": "Dead Drop",
+  "version": "0.2.0",
+  "author": "The Dead Drop",
+  "license": "MIT",
+  "description": "Your Dead Drop in the bar: an envelope, dim when there's no mail, a count when there is, red for urgent. Click for your inbox: read a message, archive it, put it back.",
+  "kinds": ["bar-widget", "service"],
+  "entryPoints": { "barWidget": "BarWidget.qml", "service": "Service.qml" },
+  "barWidget": {
+    "displayName": "Dead Drop",
+    "description": "Your Dead Drop inbox (reads deaddrop watch's inbox file). Click for the inbox; right click checks now. omarchy-shell deaddrop open opens it on the focused monitor.",
+    "category": "Communication",
+    "aliases": ["deaddrop", "mail"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

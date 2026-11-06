@@ -19,6 +19,16 @@ host = "store-box"
 # set up there. It says only which box, never the subject or the sender.
 # ring_urgent = true
 
+# On the store's machine: boxes whose board line (and ring) says what's
+# waiting: who sent the newest unread, when, and its subject. Off for every
+# box not named here, since boards can be on screens anyone sees.
+# board_detail = ["alice"]
+
+# On a machine others reach the store through: commands that arrive here
+# over ssh go on to this machine's host, as whoever sent them. Without it,
+# a command that arrives over ssh runs here.
+# relay = true
+
 # On a machine where everyone logs in as the same user: never take the
 # login name for who you are. Without DEADDROP_FROM, commands that need to
 # know refuse instead of filing mail under the shared login.

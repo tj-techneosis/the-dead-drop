@@ -16,8 +16,10 @@ Claude Code setup.
 | `cmd/deaddrop/remote.go` | remote mode: every command over ssh, the caller's name across |
 | `cmd/deaddrop/followup.go` | follow-ups (Crontinental jobs), the ring |
 | `cmd/deaddrop/firetower.go` | `deaddrop firetower`: one lookout per box |
+| `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
+| `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `agents/` | what ships to users' Claude Code: the skill and the CLAUDE.md snippet |
-| `examples/` | a config, the store machine's jobs |
+| `examples/` | a config, the store machine's jobs, ways to run `watch`, a `new.d` hook, the SwiftBar and Omarchy inboxes |
 | `install.sh` | three modes: piped fetches a release, a checkout builds, an unpacked release installs its binary |
 | `scripts/package.sh` | builds and packages every release target, plus `SHA256SUMS` and `VERSION` |
 | `tests/` | `python3 -m unittest discover -s tests`: run before every commit (it builds the binary) |
@@ -40,13 +42,30 @@ Claude Code setup.
   change of state. Every change of state holds the box's lock. Nothing runs
   in the background.
 - **No clock.** The Dead Drop schedules nothing: follow-ups are Crontinental
-  jobs, the board is kept current by a scheduled `deaddrop firetower`.
+  jobs, the board is kept current by a scheduled `deaddrop firetower`. The
+  one loop is `watch --every`, for machines with no scheduler.
+- **The JSON of `pull`, `inbox` and `show` is a contract.** People's own
+  panels read it directly: fields are added, never renamed or repurposed.
+- **The inbox file is a contract.** Viewers read it: fields are added, never
+  renamed; a breaking change bumps its `version`. It never holds message
+  text, and `new.d` hooks never get it either.
+- **A message is hostile in a viewer.** `show --html` escapes everything and
+  makes only its own tags; no image is ever fetched, no script link made.
+  Viewers render that HTML, never the Markdown themselves.
 - **`pull` never marks.** A crashed session must not lose mail.
+- **Over ssh, a command runs where it lands, or says why not.** A machine
+  with its own `host` passes it on only with `relay = true`, and refuses
+  otherwise; `DEADDROP_HOPS` counts machines, three is the limit. Over ssh
+  only `send` and `reply` may create a store: never an empty inbox that
+  looks real.
 - **Who sends.** `--from` is yourself or `automation`; with `shared_login`
   the login name is never a fallback. Jobs the Dead Drop books run the
   installed binary (`~/.local/bin`), never the one that booked them.
-- **Nothing private on a board or a ring.** Counts and a hash, never a
-  subject, a sender or an id (ids name their sender).
+- **Nothing private on a board or a ring, unless the box opts in.** By
+  default counts and a hash, never a subject, a sender or an id (ids name
+  their sender). Only a box named in `board_detail` gets its sender, age
+  and subject, on one line within the Firetower's cut; the label and the
+  value never carry them.
 - **Never a secret in a message**, and the store's README and the skill say
   so. The secret shapes in `message.go` are a backstop, not a scanner: only
   shapes that are never anything else, so a document *about* secrets goes

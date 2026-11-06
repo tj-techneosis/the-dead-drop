@@ -49,6 +49,67 @@ class Firetower(DeadDrop):
         for word in ("Acquisition", "Example", "carol", "secret"):
             self.assertNotIn(word, report)
 
+    def msg(self, box):
+        return self.reports()["mail/%s/inbox" % box][3]
+
+    def test_board_detail_is_off_unless_the_box_is_named(self):
+        self.config.write_text('board_detail = ["alice"]\n')
+        self.send("x\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
+        self.send("x\n", "--to", "dave", "--urgent", "--subject", "Private matter", DEADDROP_FROM="carol")
+        self.dd("firetower")
+        self.assertEqual(self.msg("bob"), "1 unread")
+        self.assertEqual(self.msg("dave"), "1 urgent")
+        report = " ".join(" ".join(c) for c in self.calls(self.tower_calls))
+        for word in ("Acquisition", "Private", "carol"):
+            self.assertNotIn(word, report)
+
+    def test_board_detail_says_whats_waiting(self):
+        self.config.write_text('board_detail = ["bob"]\n')
+        self.send("x\n", "--to", "bob", "--subject", "Requests for tool X", DEADDROP_FROM="carol")
+        self.send("x\n", "--to", "dave", "--subject", "Not on the board", DEADDROP_FROM="carol")
+        self.dd("firetower", DEADDROP_NOW=at(5))
+        self.assertEqual(self.msg("bob"), "1 unread · from carol, 5m ago: Requests for tool X")
+        self.assertEqual(self.msg("dave"), "1 unread")
+        c = self.reports()["mail/bob/inbox"]
+        self.assertEqual(c[c.index("--label") + 1], "Mail: bob")
+        self.assertRegex(c[c.index("--value") + 1], r"^[0-9a-f]{12}$")
+        self.clock = at(10)
+        self.send("x\n", "--to", "bob", "--subject", "Field notes", DEADDROP_FROM="erin")
+        self.dd("firetower", DEADDROP_NOW=at(12))
+        self.assertEqual(self.calls(self.tower_calls)[-2][3], "2 unread · newest from erin, 2m ago: Field notes")
+
+    def test_board_detail_puts_urgent_first(self):
+        self.config.write_text('board_detail = ["bob"]\n')
+        self.send("x\n", "--to", "bob", "--urgent", "--subject", "The build is down", DEADDROP_FROM="carol")
+        self.clock = at(60)
+        self.send("x\n", "--to", "bob", "--subject", "Newer but not urgent", DEADDROP_FROM="erin")
+        self.send("x\n", "--to", "bob", "--subject", "Also not urgent", DEADDROP_FROM="erin")
+        self.dd("firetower", DEADDROP_NOW=at(120))
+        self.assertEqual(self.msg("bob"), "1 urgent, 3 unread · urgent from carol, 2h ago: The build is down")
+
+    def test_board_detail_cuts_a_long_subject(self):
+        self.config.write_text('board_detail = ["bob"]\n')
+        self.send("x\n", "--to", "bob", "--subject", "word " * 60, DEADDROP_FROM="carol")
+        self.dd("firetower")
+        m = self.msg("bob")
+        self.assertLessEqual(len(m), 200)
+        self.assertTrue(m.startswith("1 unread · from carol, just now: word word"))
+        self.assertTrue(m.endswith("word…"), m)
+        self.assertNotIn("\n", m)
+
+    def test_board_detail_cleans_the_subject(self):
+        # The CLI cleans subjects when it sends, but the file is people's to
+        # read and write: the board line is cleaned again.
+        self.config.write_text('board_detail = ["bob"]\n')
+        sent = self.send("x\n", "--to", "bob", "--subject", "Plain", DEADDROP_FROM="carol")
+        path = next((self.dir / "bob" / "new").glob("*.md"))
+        text = path.read_text().replace('subject: "Plain"', 'subject: "Red\\u001b[31m alert\\tnow\\u0007\\r\\nsecond line"')
+        path.write_text(text)
+        self.dd("firetower")
+        m = self.msg("bob")
+        self.assertEqual(m, "1 unread · from carol, just now: Red[31m alert now second line")
+        self.assertFalse(any(ord(ch) < 32 for ch in m))
+
     def test_next_from_crontinental(self):
         self.send("x\n", "--to", "bob")
         self.dd("firetower", CRONTINENTAL_NEXT="2026-11-02T15:35:00Z")
@@ -178,6 +239,20 @@ class Ring(DeadDrop):
         self.assertEqual(calls[0][:2], ["notify", "--urgent"])
         self.assertNotIn("Private", " ".join(calls[0]))
         self.assertIn("bob", calls[0][-1])
+
+    def test_board_detail_rings_with_what(self):
+        self.config.write_text('ring_urgent = true\nboard_detail = ["bob"]\n')
+        self.send("x\n", "--to", "bob", "--subject", "The build is down", "--urgent", DEADDROP_FROM="carol")
+        self.send("x\n", "--to", "dave", "--subject", "Private matter", "--urgent", DEADDROP_FROM="carol")
+        calls = self.calls(self.cron_calls)
+        self.assertEqual(calls[0][-1], "bob: urgent from carol, just now: The build is down")
+        self.assertIn("drop=" + self.ids(DEADDROP_FROM="bob")[0], calls[0])
+        self.assertEqual(calls[1][-1], "dave: urgent mail waiting")
+
+    def test_a_broken_board_detail_is_refused(self):
+        self.config.write_text('board_detail = ["Not A Box"]\n')
+        p = self.dd("status", ok=False)
+        self.assertIn("board_detail", p.stderr)
 
     def test_a_raised_follow_up_rings(self):
         self.config.write_text("ring_urgent = true\n")

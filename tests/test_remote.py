@@ -85,6 +85,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertEqual(m["subject"], subject)
 
     def test_failures_come_back(self):
+        self.rdd("send", "--to", "carol", input="x\n")
         p = self.rdd("mark", "read", "2026-11-02T153000-bob-0000", ok=False)
         self.assertIn("no message", p.stderr)
         self.assertEqual(p.returncode, 1)
@@ -93,6 +94,8 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("could not reach the store on store-box", p.stderr)
 
     def test_ssh_is_batch_and_no_stdin_unless_needed(self):
+        self.rdd("send", "--to", "carol", input="x\n")
+        self.ssh_log.unlink()
         self.rdd("status")
         args = self.ssh_log.read_text().splitlines()
         self.assertIn("BatchMode=yes", args)
@@ -104,10 +107,94 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.rdd("send", "--to", "bob", input="x\n", env=dict(DEADDROP_HOST=None))
         self.assertEqual(len(list((self.far_store / "bob" / "new").glob("*.md"))), 1)
 
-    def test_local_wins_on_the_store_machine(self):
-        # The far side is told DEADDROP_LOCAL=1, so its own host setting
-        # can't send it round again.
+    def test_a_machine_that_isnt_the_store_says_so(self):
+        # A command that arrives over ssh never goes round again on its own:
+        # a machine whose config points elsewhere, without relay, refuses
+        # rather than answering from an empty store of its own.
         (self.far / ".config" / "deaddrop").mkdir(parents=True)
         (self.far / ".config" / "deaddrop" / "config.toml").write_text('host = "elsewhere"\n')
+        for cmd in (["send", "--to", "bob"], ["inbox"], ["mark", "read", "--tag", "x"], ["watch"]):
+            p = self.rdd(*cmd, input="x\n", ok=False, env=dict(DEADDROP_STATE=str(self.tmp / "st")))
+            self.assertIn("set relay = true", p.stderr, cmd)
+        self.assertFalse(self.far_store.exists())
+
+    def test_no_store_there_is_an_error_not_an_empty_box(self):
+        for cmd in (["inbox"], ["mark", "read", "--tag", "x"], ["show", "2026-11-02T153000-bob-ffff"], ["status"]):
+            p = self.rdd(*cmd, ok=False)
+            self.assertIn("no Dead Drop store on this machine", p.stderr, cmd)
+        p = self.rdd("watch", ok=False, env=dict(DEADDROP_STATE=str(self.tmp / "st")))
+        self.assertIn("no Dead Drop store", p.stderr)
+        self.assertFalse(self.far_store.exists())
+        # The first send starts it.
         self.rdd("send", "--to", "bob", input="x\n")
-        self.assertEqual(len(list((self.far_store / "bob" / "new").glob("*.md"))), 1)
+        self.assertEqual(self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).returncode, 0)
+
+    def test_watch_over_ssh_and_an_unreachable_store(self):
+        state = self.tmp / "near-state"
+        env = dict(DEADDROP_STATE=str(state))
+        self.rdd("send", "--to", "alice", input="# Hello\n\nfar text\n", env=dict(DEADDROP_FROM="bob", **env))
+        self.rdd("watch", env=env)
+        f = json.loads((state / "inbox.json").read_text())
+        self.assertTrue(f["ok"])
+        self.assertEqual([m["subject"] for m in f["messages"]], ["Hello"])
+        # Only the state folder is written on this side, and no text in it.
+        self.assertEqual(self.near_files(), [])
+        self.assertNotIn("far text", (state / "inbox.json").read_text())
+
+        down = script(self.tmp / "down-ssh", "echo 'ssh: connect to host store-box: Network is unreachable' >&2; exit 255\n")
+        p = self.rdd("watch", ok=False, env=dict(DEADDROP_SSH=str(down), **env))
+        self.assertIn("could not reach the store", p.stderr)
+        f = json.loads((state / "inbox.json").read_text())
+        self.assertFalse(f["ok"])
+        self.assertIn("could not reach", f["error"])
+        self.assertEqual([m["subject"] for m in f["messages"]], ["Hello"])  # the last list, kept
+        self.assertIn("can't reach the store", self.rdd("bar", env=env).stdout)
+
+        self.rdd("watch", env=env)
+        f = json.loads((state / "inbox.json").read_text())
+        self.assertTrue(f["ok"])
+        self.assertNotIn("error", f)
+
+    def relay_setup(self, host="store-box"):
+        """A machine between: this one reaches it, and it reaches the store."""
+        mid = self.tmp / "mid-home"
+        (mid / ".local" / "bin").mkdir(parents=True)
+        os.symlink(BIN, mid / ".local" / "bin" / "deaddrop")
+        (mid / ".config" / "deaddrop").mkdir(parents=True)
+        (mid / ".config" / "deaddrop" / "config.toml").write_text(f'host = "{host}"\nrelay = true\n')
+        self.mid_log = self.tmp / "mid-ssh.log"
+        # The middle's own ssh is the stand-in that reaches the store.
+        mid_ssh = script(self.tmp / "mid-ssh", f'''
+printf '%s\\n' "$@" >> "{self.mid_log}"
+for last; do :; done
+exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDROP_SSH="{self.ssh}" sh -c "$last"
+''')
+        return mid, mid_ssh
+
+    def test_through_a_relay(self):
+        mid, mid_ssh = self.relay_setup()
+        env = dict(DEADDROP_SSH=str(mid_ssh), DEADDROP_HOST="relay-box")
+        att = self.tmp / "outside" / "run.log"
+        att.parent.mkdir()
+        att.write_text("two hops\n")
+        id = self.rdd("send", "--to", "bob", "--attach", str(att), input="# Far\n\nx\n", env=env).stdout.split()[1]
+        self.assertRegex(id, r"-alice-")
+        self.assertEqual((self.far_store / "bob" / "files" / id / "run.log").read_text(), "two hops\n")
+        # Nothing landed on the relay but its config.
+        self.assertFalse((mid / ".local" / "share" / "deaddrop").exists())
+        bob = dict(DEADDROP_FROM="bob", **env)
+        self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "--json", env=bob).stdout)], [id])
+        self.rdd("mark", "read", id, env=bob)
+        self.assertTrue((self.far_store / "bob" / "read" / (id + ".md")).exists())
+        state = self.tmp / "near-state"
+        self.rdd("watch", env=dict(DEADDROP_STATE=str(state), **bob))
+        f = json.loads((state / "inbox.json").read_text())
+        self.assertEqual(([m["id"] for m in f["messages"]], f["box"]), ([id], "bob"))
+
+    def test_a_relay_loop_ends(self):
+        mid, mid_ssh = self.relay_setup()
+        # The relay's host is the relay itself.
+        self.ssh.write_text(self.ssh.read_text().replace(str(self.far), str(mid)).replace(
+            "sh -c", f'DEADDROP_SSH="{self.ssh}" sh -c'))
+        p = self.rdd("status", ok=False, env=dict(DEADDROP_SSH=str(mid_ssh), DEADDROP_HOST="relay-box"))
+        self.assertIn("come through 3 machines", p.stderr)

@@ -112,23 +112,83 @@ The store lives on one machine. Everywhere else, every command runs there
 over ssh (`host` in the config): bodies and attachments go over stdin (a
 send with attachments sends one tar stream: the body, then the files), and
 output comes back on stdout. Nothing is written on the caller's side: not a
-cache, not a temp file. ssh runs in batch mode, so a missing key fails
+cache, not a temp file. The one exception is the person's own choice: the
+inbox file `deaddrop watch` keeps (below), which holds no message text. ssh runs in batch mode, so a missing key fails
 instead of waiting for a password a session can't type.
 
-The far side is told `DEADDROP_LOCAL=1` (so its own config can't send the
-command round again) and `DEADDROP_FROM` (the caller). Every argument is
+The far side is told `DEADDROP_FROM` (the caller) and `DEADDROP_HOPS` (how
+many machines the command has come through). It never sends the command round again
+on its own: if its config has a `host` and no `relay = true`, it isn't the
+store, and it refuses with a message saying so rather than answering from an
+empty store. With `relay = true`, it passes the
+command on to its own host, as the same caller, with an attachment stream
+passed through as it is. That's for someone who can only reach the store
+through another machine.
+
+A relay passes the caller's name on, as every remote command does: the
+store takes `DEADDROP_FROM` on trust, from anyone who can ssh in. A relay
+adds no one: whoever can run a command on the relay machine already has its
+key to the store. Names in the Dead Drop stop slips, not people (see
+Names); a store that has to tell people apart needs a login each. Three hops is the limit, so a relay pointed at
+itself fails with a message rather than looping. Over ssh, only `send` and
+`reply` may start a store where there's none; every other command says
+there's no store, so a wrong `host` shows as an error, never as an empty
+inbox. Every argument is
 single-quoted for the far shell.
+
+## Your own machine: the inbox file and hooks
+
+Mail that only a terminal can show isn't mail you read. So the Dead Drop
+provides the wiring, and viewers plug into it, the way the Firetower ships a
+feed and boards that read it, and anyone can put their own look on top:
+
+- **`deaddrop watch`** reads the caller's box (over ssh, like any command)
+  and writes an **inbox file** on their own machine: every unread and read
+  message's header, never its text. The format is documented and versioned,
+  because other people's viewers read it. When the store can't be reached
+  the file keeps its last list and says `ok: false`, so a viewer shows stale
+  mail as stale rather than as no mail.
+- **`deaddrop show ID`** hands out one message's text, on demand. Nothing
+  caches it: the inbox file has headers only, and the pages `open` writes for
+  the browser are removed within the hour.
+- **`new.d` hooks**, like Crontinental's `notify.d`: executables run once per
+  newly arrived message, given its header (never its text). What's been
+  announced is written down before any hook runs, so a hook that hangs or a
+  pass that dies never announces the same mail twice; the first pass
+  announces nothing, since it would be everything at once. Mail read before
+  a pass sees it is not news.
+- **Viewers**: a SwiftBar menu (`deaddrop bar --format swiftbar`, so the
+  menu is tested with the rest) and an Omarchy bar widget. Both read the
+  file and call `show` and `mark`; `mark` rewrites the file at once, so a
+  click shows. Someone else's viewer does the same.
+
+A message is someone else's text, so the HTML that `show --html` makes is
+built from escaped text with a fixed set of tags, links only to http, https
+and mailto, shows images as their alt text, and carries a Content Security
+Policy that loads nothing. The Omarchy widget shows the same HTML rather
+than Qt's own Markdown, which would render raw HTML and fetch images.
 
 ## No clock
 
-The Dead Drop runs nothing by itself, like its siblings.
+The Dead Drop runs nothing by itself, like its siblings, with one exception
+for people with no scheduler: `deaddrop watch --every 1m` loops (a pass,
+then sleep, no faster than every 10 seconds). Everyone with a scheduler
+books `deaddrop watch` with it instead; `examples/watch/` has Crontinental,
+launchd, systemd and cron.
 
 - **The board** is a scheduled `deaddrop firetower` on the store's machine:
   one lookout per box, `mail/<who>/inbox`, clear, smoke or fire. Its value
   stands for the newest unread message, so the board says "moved" when mail
   arrives. The value is a hash of the id, not the id: ids name their
-  sender, and nothing about a message (subject, sender) goes to a board,
-  which may be on a screen anyone sees. Under Crontinental it promises its
+  sender, and by default nothing about a message (subject, sender) goes to
+  a board, which may be on a screen anyone sees. A box named in
+  `board_detail` opts in: its line adds the sender, age and subject of the
+  newest unread message (the newest urgent one first), so its owner knows
+  what's waiting without opening anything. It's per box because it's that
+  person's call, and the Firetower's own `hide` keeps a mailbox off a
+  board that shouldn't show it. The line is shortened here, on a word, to
+  stay inside the Firetower's 200-character cut, and the label never names
+  a sender. Under Crontinental it promises its
   next report from `$CRONTINENTAL_NEXT`, so a stopped job shows as "no
   word".
 - **Follow-ups** are one-off Crontinental jobs booked at send time, named
@@ -142,7 +202,7 @@ The Dead Drop runs nothing by itself, like its siblings.
   send (sending again would only make two).
 - **The ring**, off by default, is `crontinental notify --urgent` when
   urgent mail arrives or a follow-up raises one. Like the board, it names
-  the box and nothing else.
+  the box and nothing else, unless the box is in `board_detail`.
 
 ## Reports people set up
 
@@ -153,6 +213,6 @@ can set it up; the job lives with whatever sends it.
 
 ## Out of scope for now
 
-Real email, a web inbox, boxes for people outside the team, permissions per
+Real email, a web inbox served from the store, boxes for people outside the team, permissions per
 box (per-person users on the store's machine would give each box its own
 owner), search beyond tags, sender and date, encryption at rest.

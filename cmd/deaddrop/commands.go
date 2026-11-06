@@ -296,7 +296,7 @@ func deliver(dir string, d draft) error {
 			}
 		}
 		if m.Urgency == urgent {
-			ring(to)
+			ring(to, m)
 		}
 	}
 	return nil

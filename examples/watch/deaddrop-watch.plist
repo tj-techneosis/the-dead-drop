@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Keep the Dead Drop's inbox file current (macOS): `deaddrop watch` every
+     minute. Replace HOME_DIR with your home folder, save as
+     ~/Library/LaunchAgents/com.example.deaddrop-watch.plist, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.deaddrop-watch.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.deaddrop-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>HOME_DIR/.local/bin/deaddrop</string>
+    <string>watch</string>
+  </array>
+  <key>StartInterval</key><integer>60</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/deaddrop-watch.log</string>
+</dict>
+</plist>

@@ -1,0 +1,36 @@
+#!/bin/sh
+# A new.d hook: a desktop notification for each new message. Copy it into
+# ~/.config/deaddrop/new.d/ and make it executable. `deaddrop watch` runs it
+# once per newly arrived message, with the message's fields as
+# DEADDROP_MSG_* variables (and as JSON on stdin). Never the text.
+#
+# It uses Crontinental's notify when it's installed (so whatever hooks you set
+# up there ring too: phone, chat), else the system's own notifications.
+title="Dead Drop: $DEADDROP_MSG_SENDER"
+body="$DEADDROP_MSG_SUBJECT"
+urgent=""
+[ "$DEADDROP_MSG_URGENCY" = urgent ] && urgent=1
+
+if command -v crontinental >/dev/null 2>&1; then
+  # Tagged with the message, so anything that shows both (a Firetower panel
+  # with the inbox in it, say) can fold the notification into the message.
+  if [ -n "$urgent" ]; then
+    exec crontinental notify --urgent --tag "drop=$DEADDROP_MSG_ID" --title "$title" "$body"
+  fi
+  exec crontinental notify --tag "drop=$DEADDROP_MSG_ID" --title "$title" "$body"
+fi
+
+case "$(uname)" in
+Darwin)
+  # The text goes in as arguments, never into the script, so nothing in a
+  # subject can run.
+  exec osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' "$title" "$body"
+  ;;
+*)
+  if command -v notify-send >/dev/null 2>&1; then
+    exec notify-send ${urgent:+--urgency=critical} --app-name="Dead Drop" -- "$title" "$body"
+  fi
+  echo "deaddrop notify hook: no crontinental, and no notify-send" >&2
+  exit 1
+  ;;
+esac

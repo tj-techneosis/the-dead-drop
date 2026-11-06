@@ -13,9 +13,10 @@ import (
 // cmdFiretower reports one lookout per box, mail/<who>/inbox, to the
 // Firetower on this machine: clear when empty, smoke when there's unread
 // mail, fire when some of it is urgent. The value stands for the newest
-// unread message, so the board says "moved" when mail comes in. The message
-// is only a count: boards can be on screens anyone sees, so no subject and no
-// sender (and so the value is a hash of the id, which names its sender).
+// unread message, so the board says "moved" when mail comes in. By default
+// the message is only a count: boards can be on screens anyone sees, so no
+// subject and no sender (and so the value is a hash of the id, which names its
+// sender). A box named in board_detail also gets what's waiting (whatsWaiting).
 func cmdFiretower(args []string) error {
 	const u = "firetower [--next 6m|TIME|none] [--box WHO]..."
 	f, err := parseFlags(args, map[string]bool{"next": true, "box": true})
@@ -68,6 +69,9 @@ func cmdFiretower(args []string) error {
 		}
 		if s.Newest != nil {
 			value = boardValue(s.Newest.ID)
+			if detailed(box) {
+				msg = whatsWaiting(msg, dir, box, s)
+			}
 		}
 		a := []string{"set", "mail/" + box + "/inbox", status, msg, "--value", value, "--label", "Mail: " + box}
 		if next != "" {
@@ -87,6 +91,56 @@ func cmdFiretower(args []string) error {
 		fmt.Println("No boxes yet: nothing to report.")
 	}
 	return nil
+}
+
+// lineMax keeps a board line inside the Firetower's cut (200 characters), so
+// it's shortened here, cleanly, and not cut off there.
+const lineMax = 200
+
+// whatsWaiting adds the message that matters most to the counts: the newest
+// urgent one when there is any, else the newest unread. One line:
+//
+//	2 unread · newest from bob, 5m ago: Requests for tool X
+//	1 urgent, 3 unread · urgent from bob, 2h ago: The build is down
+func whatsWaiting(counts, dir, box string, s boxStatus) string {
+	m, which := s.Newest, "newest from"
+	if s.Urgent > 0 {
+		var urgentOnes []*Message
+		for _, u := range loadBox(dir, box, []string{"unread"}, false) {
+			if u.Urgency == urgent {
+				urgentOnes = append(urgentOnes, u)
+			}
+		}
+		if u := newest(urgentOnes); u != nil {
+			m, which = u, "urgent from"
+		}
+	} else if s.Unread == 1 {
+		which = "from"
+	}
+	return summaryLine(counts+" · "+which, m)
+}
+
+// summaryLine is "<lead> <sender>, <age>: <subject>", the subject shortened
+// to keep the whole line within lineMax.
+func summaryLine(lead string, m *Message) string {
+	head := cleanLine(fmt.Sprintf("%s %s, %s: ", lead, m.From, ago(m.Sent, now())), lineMax) + " "
+	room := lineMax - len([]rune(head))
+	if room < 2 {
+		return strings.TrimSpace(head)
+	}
+	subject := cleanLine(m.Subject, room)
+	if full := cleanLine(m.Subject, len([]rune(m.Subject))+1); subject != full {
+		// Shortened: end on a whole word when there is one to end on.
+		cut := strings.TrimSuffix(subject, "…")
+		if i := strings.LastIndex(cut, " "); i > 0 && !strings.HasPrefix(full[len(cut):], " ") {
+			cut = cut[:i]
+		}
+		subject = strings.TrimRight(cut, " ,;:.-") + "…"
+	}
+	if subject == "" {
+		subject = "(no subject)"
+	}
+	return head + subject
 }
 
 // boardValue stands for a message on the board without saying who sent it.

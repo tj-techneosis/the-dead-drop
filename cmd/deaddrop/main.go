@@ -23,9 +23,15 @@ Leave something:
 Collect it:
   deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
   deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]
+  deaddrop show ID [--json|--html]  one message in full
   deaddrop file ID [NAME]          an attachment, on stdout (no NAME: list them)
   deaddrop mark read|unread|archive ID... [--box WHO]
   deaddrop mark read|unread|archive --tag T... [--from WHO]... [--box WHO]
+
+On your own machine:
+  deaddrop watch [--every 1m]      keep the inbox file current, run new.d hooks
+  deaddrop open ID                 read one in the browser, and mark it read
+  deaddrop bar [--format swiftbar] the inbox file as a line, or a menu
 
 Look after it:
   deaddrop status [--json]         per box: unread, urgent, newest subject
@@ -125,17 +131,80 @@ func dispatch(cmd string, args []string) error {
 	case "upgrade":
 		return cmdUpgrade(args)
 	}
+	// These run on the caller's machine, and reach the store the way any
+	// other command does.
+	if run, ok := here[cmd]; ok {
+		return run(args)
+	}
 	run, ok := commands[cmd]
 	if !ok {
 		return badf("<command> ...", "no command %q (deaddrop help lists them)", cmd)
 	}
 	// Everything that touches the store runs where the store is.
-	if host, err := remoteHost(); err != nil {
+	host, err := remoteHost()
+	if err != nil {
 		return err
-	} else if host != "" {
-		return runRemote(host, cmd, args)
 	}
-	return run(args)
+	if host != "" {
+		err = runRemote(host, cmd, args)
+	} else if err = arrivedHere(cmd); err == nil {
+		err = run(args)
+	}
+	if err == nil && cmd == "mark" {
+		refreshInbox()
+	}
+	return err
+}
+
+// arrivedHere checks a command that came over ssh and is about to run on this
+// machine. A machine that would send its own commands elsewhere isn't the
+// store, so it says to make it a relay rather than answer from an empty
+// store; and only send and reply may start a store that isn't there.
+func arrivedHere(cmd string) error {
+	if hops() == 0 {
+		return nil
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if c.Host != "" && !c.Relay {
+		return fmt.Errorf("this machine's config sends commands to %s, but this one came here over ssh: to pass it on, set relay = true in %s", c.Host, c.path)
+	}
+	if cmd == "send" || cmd == "reply" {
+		return nil
+	}
+	dir, err := storeDir()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("there's no Dead Drop store on this machine (%s): is host pointing at the right machine?", dir)
+	}
+	return nil
+}
+
+// refreshInbox brings a watched inbox file up to date after a mark, so a
+// viewer shows the change at once. Only for the person whose file it is, and
+// never on the store's machine on someone else's behalf.
+func refreshInbox() {
+	if os.Getenv("DEADDROP_LOCAL") == "1" || hops() > 0 {
+		return
+	}
+	in := readInbox()
+	if in == nil {
+		return
+	}
+	if me, err := whoAmI(); err != nil || me != in.Box {
+		return
+	}
+	watchPass(false)
+}
+
+var here = map[string]func([]string) error{
+	"watch": cmdWatch,
+	"open":  cmdOpen,
+	"bar":   cmdBar,
 }
 
 var commands = map[string]func([]string) error{
@@ -145,6 +214,7 @@ var commands = map[string]func([]string) error{
 	"ls":        cmdInbox,
 	"pull":      cmdPull,
 	"file":      cmdFile,
+	"show":      cmdShow,
 	"mark":      cmdMark,
 	"status":    cmdStatus,
 	"firetower": cmdFiretower,

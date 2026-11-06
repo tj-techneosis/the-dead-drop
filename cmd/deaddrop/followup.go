@@ -159,13 +159,14 @@ func cmdFollowUp(args []string) error {
 		return err
 	}
 	fmt.Printf("%s is still unread: raised to urgent\n", m.ID)
-	ring(box)
+	ring(box, m)
 	return nil
 }
 
 // ring tells the store machine's notify hooks that urgent mail is waiting,
-// when the config asks for it. It never says the subject or the sender.
-func ring(box string) {
+// when the config asks for it. It says only which box, unless the box is in
+// board_detail: then who sent the message and its subject too.
+func ring(box string, m *Message) {
 	c, err := loadConfig()
 	if err != nil || !c.RingUrgent {
 		return
@@ -175,7 +176,12 @@ func ring(box string) {
 		fmt.Fprintln(os.Stderr, "deaddrop: ring_urgent is on, but "+err.Error())
 		return
 	}
-	if out, err := exec.Command(cron, "notify", "--urgent", "--title", "Dead Drop", box+": urgent mail waiting").CombinedOutput(); err != nil {
+	text := box + ": urgent mail waiting"
+	if detailed(box) {
+		text = summaryLine(box+": urgent from", m)
+	}
+	// Tagged with the message, so a viewer can fold the ring into it.
+	if out, err := exec.Command(cron, "notify", "--urgent", "--tag", "drop="+m.ID, "--title", "Dead Drop", text).CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "deaddrop: could not ring: %s\n", strings.TrimSpace(string(out)))
 	}
 }

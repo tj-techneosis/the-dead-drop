@@ -22,6 +22,13 @@ type Config struct {
 	// SharedLogin: everyone logs in to this machine as the same user, so the
 	// login name says nothing about who is asking and is never used.
 	SharedLogin bool `toml:"shared_login"`
+	// BoardDetail: boxes whose board line (and ring) says what's waiting:
+	// who sent the newest unread, when, and its subject. Off for every box
+	// unless named here, since boards can be on screens anyone sees.
+	BoardDetail []string `toml:"board_detail"`
+	// Relay: commands that reach this machine over ssh go on to its host,
+	// for people who can only reach the store through it.
+	Relay bool `toml:"relay"`
 
 	path string
 }
@@ -71,8 +78,27 @@ func loadConfig() (*Config, error) {
 			return nil, fmt.Errorf("%s: %v", c.path, err)
 		}
 	}
+	for _, b := range c.BoardDetail {
+		if err := checkBox("board_detail", b); err != nil {
+			return nil, fmt.Errorf("%s: %v", c.path, err)
+		}
+	}
 	cachedConfig = c
 	return c, nil
+}
+
+// detailed says whether box's board line and ring may say what's waiting.
+func detailed(box string) bool {
+	c, err := loadConfig()
+	if err != nil {
+		return false
+	}
+	for _, b := range c.BoardDetail {
+		if b == box {
+			return true
+		}
+	}
+	return false
 }
 
 // storeDir is where the boxes are, on this machine.

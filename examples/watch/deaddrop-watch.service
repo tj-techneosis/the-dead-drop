@@ -1,0 +1,13 @@
+# Keep the Dead Drop's inbox file current (Linux, systemd). Save as
+# ~/.config/systemd/user/deaddrop-watch.service, then:
+#   systemctl --user enable --now deaddrop-watch
+[Unit]
+Description=The Dead Drop: keep the inbox file current
+
+[Service]
+ExecStart=%h/.local/bin/deaddrop watch --every 1m
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

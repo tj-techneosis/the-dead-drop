@@ -24,10 +24,12 @@ unread  2026-11-02T153012-bob-3f9a         normal   bob         1m ago  tool-x,r
 unread  2026-11-02T153344-bob-01ea         urgent   bob         just now tool-y,field-notes Weekend on the iOS apps
 ```
 
-It only holds and hands out documents. It sends no email, pushes no
-notifications and runs nothing on a timer by itself: a scheduler keeps its
-status current, and a board ([the Firetower](https://github.com/tj-techneosis/the-firetower))
-shows it.
+It holds and hands out documents, and gives you what you need to see your
+mail without a terminal: an inbox file on your own machine, hooks that run
+when mail arrives, and menu-bar inboxes for macOS and Omarchy that read it.
+It sends no email. A scheduler keeps it current (or `deaddrop watch --every`
+does, if you have none), and a board ([the Firetower](https://github.com/tj-techneosis/the-firetower))
+can show it.
 
 ## Install
 
@@ -40,6 +42,10 @@ From a checkout, `./install.sh` builds it (Go 1.26, or mise). Either way, if
 Claude Code is set up, it links the `deaddrop` skill and offers a short
 section for `CLAUDE.md`. `deaddrop upgrade` installs the latest release;
 `./install.sh --uninstall` removes it and leaves the mail alone.
+
+Upgrade the store's machine first, then the machines that use it, and add a
+new setting to a config only once that machine's `deaddrop` knows it: a
+config with a setting it doesn't know stops every command there.
 
 ## Sending
 
@@ -79,6 +85,8 @@ deaddrop mark archive ID ID ...        # file what you used
 within that, each between `===== deaddrop xxxx: … =====` lines (a random
 mark per pull, so a document can't fake one), and ends with the ids and the
 `mark` command to file them. `--json` gives the same to a program.
+The JSON from `pull`, `inbox` and `show` is a contract other people's
+panels read: fields are added, never renamed or repurposed.
 `--unread` leaves out mail already read; `--since 7d` or `--since
 2026-11-01` leaves out older mail.
 
@@ -148,10 +156,103 @@ host = "store-box"
 ```
 
 Bodies and attachments go over ssh's stdin; nothing is written on the
-calling machine except what `pull` prints. Everyone may log in to the
+calling machine except what `pull` prints, and, if you run `deaddrop watch`,
+the inbox file (no message text). Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run
 without one. `examples/config.toml` has every setting.
+
+**Through another machine.** If you can only reach the store's machine
+through a second one, point your `host` at the second one, and put
+`relay = true` in *its* config (beside its own `host`). Commands that reach
+it over ssh then go on to the store, still as you, attachments and all. A
+command passes through at most three machines, so a relay that points back
+at itself stops instead of looping. Without `relay`, a machine with a `host`
+of its own refuses a command that arrives over ssh, and says to set `relay`,
+rather than answering from an empty store. And over ssh, only `send` and
+`reply` start a store where there's none: anything else says there's no
+store there.
+
+Set it up in the usual order: upgrade the relay machine first, then add
+`relay = true` (an older `deaddrop` refuses a setting it doesn't know).
+
+## Reading it without a terminal
+
+On your own machine, `deaddrop watch` keeps an **inbox file** of your box,
+and runs your **hooks** for each new message. Everything else plugs into
+those two: the bundled menu-bar inboxes, notifications, or anything of your
+own.
+
+```sh
+deaddrop watch                 # check once: the inbox file, then the hooks
+deaddrop watch --every 1m      # keep checking, for a machine with no scheduler
+deaddrop show ID               # one message in full (--json, --html)
+deaddrop open ID               # read it in the browser, and mark it read
+```
+
+Run `deaddrop watch` every minute or so with whatever your machine has:
+Crontinental, launchd, systemd, cron, or `--every` in a terminal or a
+service. [`examples/watch/`](examples/watch/) has each.
+
+**The inbox file** is `~/.local/state/deaddrop/inbox.json`
+(`$XDG_STATE_HOME/deaddrop`, or `$DEADDROP_STATE`). It holds your unread
+and read mail, unread first (urgent on top) and newest first, **without the
+text**: a viewer fetches that with `deaddrop show` when someone opens a
+message, and nothing keeps it.
+
+```json
+{
+  "version": 1,
+  "box": "alice",
+  "checked_at": "2026-11-05T23:10:00Z",
+  "ok": true,
+  "last_ok_at": "2026-11-05T23:10:00Z",
+  "unread": 2,
+  "urgent": 1,
+  "messages": [
+    {"id": "2026-11-05T230344-bob-bf2a", "from": "bob", "subject": "The build is down",
+     "tags": ["tool-x"], "urgency": "urgent", "state": "unread",
+     "sent": "2026-11-05T23:03:44Z", "thread": "", "attachments": ["build.log"]}
+  ]
+}
+```
+
+Every message has every field: `tags` and `attachments` are lists (maybe
+empty), `thread` is the id of the message it answers, or `""`. When the
+store can't be reached, the file keeps its last list, `ok` is
+`false` and `error` says why. Fields are added in later versions, never
+renamed. `deaddrop mark` updates the file too, so a viewer shows the change
+at once.
+
+**Hooks** are the executables in `~/.config/deaddrop/new.d/` (beside the
+config). `watch` runs each once per newly arrived message, with
+`DEADDROP_MSG_ID`, `_SENDER`, `_SUBJECT`, `_TAGS`, `_URGENCY`, `_SENT`,
+`_BOX` and `_ATTACHMENTS` set, and the message's entry as JSON on stdin:
+never the text. What's been announced is remembered, so a restart doesn't
+announce everything again, and the very first `watch` announces nothing.
+[`examples/new.d/notify`](examples/new.d/notify) is a desktop notification:
+Crontinental's `notify` when it's installed (tagged `drop=<id>`, so a
+viewer that shows both can fold the notification into the message), else
+the system's own.
+
+**Menu-bar inboxes**, both reading the inbox file and calling `show` and
+`mark`:
+
+- macOS: [`examples/swiftbar/deaddrop.1m.sh`](examples/swiftbar/), for
+  [SwiftBar](https://swiftbar.app). An envelope with the unread count, red
+  for urgent; the menu lists your mail with Read (opens it in the browser and
+  marks it read), Mark read or unread, and Archive. It's
+  `deaddrop bar --format swiftbar`.
+- Omarchy: [`examples/omarchy/deaddrop/`](examples/omarchy/deaddrop/), a bar
+  widget. Click for your inbox, click a message to read it in the panel
+  (that marks it read), archive it or put it back from there. Copy the folder
+  to Omarchy's bar plugins and add it to the bar.
+  `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on
+  the focused monitor: the plugin's service answers once for every bar.
+
+A message is someone else's text, so the pages `show --html` makes escape
+everything, show images as their alt text, link only to http, https and
+mailto, and forbid the browser from loading anything.
 
 ## On the board
 
@@ -168,8 +269,28 @@ reports one lookout per box to the Firetower on the store's machine,
 | unread | smoke, "3 unread" |
 | urgent unread | fire, "1 urgent, 3 unread" |
 
-The board says "moved" when new mail comes in. Only counts go to the board,
-never subjects or senders, because boards can be on screens anyone sees. A
+The board says "moved" when new mail comes in. By default only counts go to
+the board, never subjects or senders, because boards can be on screens
+anyone sees.
+
+A box can opt in to saying what's waiting. Name it in `board_detail` in the
+store machine's config, and its lookout adds who sent the newest unread
+message, when, and its subject (the newest urgent one, when there is one),
+on one line, shortened to fit:
+
+```toml
+board_detail = ["alice"]
+```
+
+| box | lookout, with `board_detail` |
+|---|---|
+| unread | smoke, "2 unread · newest from bob, 5m ago: Requests for tool X" |
+| urgent unread | fire, "1 urgent, 3 unread · urgent from bob, 2h ago: The build is down" |
+
+Other boxes are unchanged. A board on a shared screen can still leave a
+mailbox out with the Firetower's own `hide`.
+
+A
 scheduler runs it (see `examples/store-jobs.sh`): under Crontinental it
 takes the next due time from `$CRONTINENTAL_NEXT`, so the board shows "no
 word" if the job stops.
@@ -185,7 +306,8 @@ urgent if it's still unread, and does nothing if it was read. Marking the
 message read or archived cancels the job. `ring_urgent = true` in the
 store machine's config also runs `crontinental notify --urgent` for urgent
 mail, which rings whatever notify hooks are set up there. It's off by
-default, and like the board it never says the subject or the sender.
+default, and like the board it names only the box, unless the box is in
+`board_detail`: then it says who the message is from and its subject too.
 
 ## Reports of your own
 
@@ -207,17 +329,21 @@ deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to I
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread] [--json]
+deaddrop show ID [--json|--html [--fragment]] [--box WHO]
 deaddrop file ID [NAME] [--box WHO]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]
 deaddrop status [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
+deaddrop watch [--every 1m] [--no-hooks]
+deaddrop open ID [--keep-unread]
+deaddrop bar [--format text|swiftbar]
 deaddrop upgrade [--check] | version | help
 ```
 
 ## Not here (yet)
 
-Real email, a web inbox, boxes for people outside the team, permissions per
+Real email, a web inbox served from the store, boxes for people outside the team, permissions per
 box (every box is readable by anyone who can read the store), search beyond
 tags, sender and date, encryption at rest.
 

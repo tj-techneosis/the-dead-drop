@@ -6,27 +6,56 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
 // Remote mode: on a machine without the store, every command runs on the
 // store's machine over ssh. Bodies and attachments go over stdin, output
-// comes back on stdout, and nothing is written on this side.
+// comes back on stdout, and nothing is written on this side (but the inbox
+// file, if the person runs watch: see watch.go).
+//
+// The far side is told DEADDROP_HOPS (how many machines the command has come
+// through) and runs the command itself, whatever its own host says, unless
+// its config says relay = true: then it passes the command on to its host.
+// That's for a machine you can only reach through another.
 //
 // Everyone may log in to the store's machine as the same user, so its login
 // name says nothing about who is asking: the caller's own name always goes
 // across, and there is no remote mode without one.
 
+// maxHops is how many machines a command may pass through on its way to the
+// store: enough for a relay or two, and an end to a loop.
+const maxHops = 3
+
+// hops is how many machines this command has come through over ssh: 0 when
+// a person or a job ran it here.
+func hops() int {
+	n, _ := strconv.Atoi(os.Getenv("DEADDROP_HOPS"))
+	return n
+}
+
 func remoteHost() (string, error) {
 	if os.Getenv("DEADDROP_LOCAL") == "1" {
 		return "", nil
 	}
-	if h := os.Getenv("DEADDROP_HOST"); h != "" {
-		return h, nil
-	}
 	c, err := loadConfig()
 	if err != nil {
 		return "", err
+	}
+	if hops() > 0 {
+		// It came over ssh. It runs here, unless this machine is a relay:
+		// then it goes on to this machine's own host, as the same person.
+		if !c.Relay || c.Host == "" {
+			return "", nil
+		}
+		if hops() >= maxHops {
+			return "", fmt.Errorf("this command has come through %d machines already; is a relay pointing back at itself? (relay in %s)", hops(), c.path)
+		}
+		return c.Host, nil
+	}
+	if h := os.Getenv("DEADDROP_HOST"); h != "" {
+		return h, nil
 	}
 	return c.Host, nil
 }
@@ -46,6 +75,7 @@ func runRemote(host, cmd string, args []string) error {
 	}
 
 	var stdin io.Reader
+	relaying := hops() > 0
 	// send's attachments are files here: they go across with the body as one
 	// stream, and the far side gets --bundle instead of their paths.
 	if cmd == "send" {
@@ -61,6 +91,10 @@ func runRemote(host, cmd string, args []string) error {
 				i++
 			case strings.HasPrefix(a, "--attach="):
 				attach = append(attach, strings.TrimPrefix(a, "--attach="))
+			case a == "--bundle" && relaying:
+				// Already one stream, from the machine before: pass it on.
+				rest = append(rest, a)
+				stdin = os.Stdin
 			case a == "--bundle":
 				return fmt.Errorf("unknown flag --bundle")
 			default:
@@ -100,7 +134,7 @@ func runRemote(host, cmd string, args []string) error {
 	if bin != "" {
 		line = "d=" + shellQuote(bin) + "; "
 	}
-	line += "DEADDROP_LOCAL=1 DEADDROP_FROM=" + shellQuote(me) + ` exec "$d" ` + shellQuote(cmd)
+	line += fmt.Sprintf("DEADDROP_HOPS=%d DEADDROP_FROM=%s exec \"$d\" %s", hops()+1, shellQuote(me), shellQuote(cmd))
 	for _, a := range args {
 		line += " " + shellQuote(a)
 	}
