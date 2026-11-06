@@ -45,6 +45,31 @@ def script(path: Path, body: str) -> Path:
     return path
 
 
+_KEYS = {}
+
+
+def key(name: str) -> tuple:
+    """An ssh key of name's own (made once), and its allowed_signers line."""
+    if name not in _KEYS:
+        d = tempfile.mkdtemp(prefix="deaddrop-key-")
+        atexit.register(shutil.rmtree, d, ignore_errors=True)
+        path = os.path.join(d, "id_" + name)
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", path], check=True)
+        typ, pub = Path(path + ".pub").read_text().split()[:2]
+        _KEYS[name] = (path, f'{name} namespaces="deaddrop" {typ} {pub}')
+    return _KEYS[name]
+
+
+def signers(path: Path, *names, **as_) -> Path:
+    """An allowed_signers file: each name with their own key, and any
+    as_={principal: whose key} lines on top."""
+    lines = [key(n)[1] for n in names]
+    for principal, who in as_.items():
+        lines.append(principal + key(who)[1][len(who):])
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 class DeadDrop(unittest.TestCase):
     """Each test gets its own store, no config, a pinned clock, and stand-ins
     for Crontinental and the Firetower that write down what they were asked."""

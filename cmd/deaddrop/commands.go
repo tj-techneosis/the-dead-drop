@@ -28,51 +28,95 @@ type draft struct {
 	body                           string
 	attach                         []string // paths on this machine
 	followUp                       time.Time
+	// A signature made on the sender's machine (sign.go), if any.
+	signedBy, signedAt, sig string
 }
 
-func cmdSend(args []string) error {
-	const u = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] < body.md`
-	f, err := parseFlags(args, map[string]bool{
-		"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
-		"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
-	})
-	if err != nil {
-		return bad(u, err)
-	}
+const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] < body.md`
+
+var sendFlags = map[string]bool{
+	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
+	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
+	"signed-by": true, "signed-at": true, "signature": true,
+}
+
+// draftOf works a send's flags out into a draft: the same on the sender's
+// machine, which signs it, and on the store, which delivers it.
+func draftOf(f flags) (draft, error) {
+	const u = sendUsage
+	var err error
 	if len(f.pos) > 0 {
-		return badf(u, "send takes no words of its own (%q): the document comes on stdin, a subject goes in --subject", f.pos[0])
+		return draft{}, badf(u, "send takes no words of its own (%q): the document comes on stdin, a subject goes in --subject", f.pos[0])
 	}
 	if !f.has("to") {
-		return badf(u, "who is it for? --to WHO (--to me for your own box)")
+		return draft{}, badf(u, "who is it for? --to WHO (--to me for your own box)")
 	}
-	d := draft{subject: f.get("subject"), thread: f.get("reply-to"), attach: f.all("attach")}
+	d := draft{subject: f.get("subject"), thread: f.get("reply-to"), attach: f.all("attach"),
+		signedBy: f.get("signed-by"), signedAt: f.get("signed-at"), sig: f.get("signature")}
 	if d.urgency, err = urgencyOf(f); err != nil {
-		return bad(u, err)
+		return d, bad(u, err)
 	}
 	if d.from, err = senderOf(f); err != nil {
-		return bad(u, err)
+		return d, bad(u, err)
 	}
 	for _, w := range f.all("to") {
 		for _, w := range strings.Split(w, ",") {
 			who, err := resolveBox("--to", strings.TrimSpace(w))
 			if err != nil {
-				return bad(u, err)
+				return d, bad(u, err)
 			}
-			d.to = append(d.to, who)
+			if !contains(d.to, who) {
+				d.to = append(d.to, who)
+			}
 		}
 	}
 	if d.tags, err = tagsOf(f); err != nil {
-		return bad(u, err)
+		return d, bad(u, err)
+	}
+	if d.tags == nil {
+		d.tags = []string{}
 	}
 	if d.thread != "" {
 		if err := checkID(d.thread); err != nil {
-			return bad(u, fmt.Errorf("--reply-to: %v", err))
+			return d, bad(u, fmt.Errorf("--reply-to: %v", err))
 		}
 	}
 	if f.has("follow-up") {
 		if d.followUp, err = followUpTime(f.get("follow-up")); err != nil {
-			return bad(u, err)
+			return d, bad(u, err)
 		}
+	}
+	return d, nil
+}
+
+// settle finishes a draft once its body is known: the subject, and the
+// check for secrets.
+func (d *draft) settle() error {
+	if d.subject == "" {
+		d.subject = subjectFrom(d.body)
+	}
+	d.subject = cleanLine(d.subject, 200)
+	if d.subject == "" {
+		return fmt.Errorf("no subject: give --subject, or start the document with a heading")
+	}
+	if looksSecret(d.body) || looksSecret(d.subject) {
+		return fmt.Errorf("that looks like it holds a secret (a key or a token). Never put one in a message: say where it lives instead")
+	}
+	return nil
+}
+
+func cmdSend(args []string) error {
+	const u = sendUsage
+	f, err := parseFlags(args, sendFlags)
+	if err != nil {
+		return bad(u, err)
+	}
+	d, err := draftOf(f)
+	if err != nil {
+		return err
+	}
+	if (d.sig != "") != (d.signedBy != "") || (d.sig != "") != (d.signedAt != "") {
+		return badf(u, "--signature, --signed-by and --signed-at go together")
 	}
 	dir, err := openStore()
 	if err != nil {
@@ -197,6 +241,9 @@ func tagsOf(f flags) ([]string, error) {
 }
 
 func readBody() (string, error) {
+	if presetBody != nil {
+		return *presetBody, nil
+	}
 	if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
 		return "", fmt.Errorf("the document comes on stdin: deaddrop send ... < report.md (or a pipe, or a heredoc)")
 	}
@@ -217,19 +264,12 @@ func readBody() (string, error) {
 // first, then the message, renamed into new/ last, so nobody sees a message
 // whose files aren't there yet.
 func deliver(dir string, d draft) error {
-	if d.subject == "" {
-		d.subject = subjectFrom(d.body)
-	}
-	d.subject = cleanLine(d.subject, 200)
-	if d.subject == "" {
-		return fmt.Errorf("no subject: give --subject, or start the document with a heading")
-	}
-	if looksSecret(d.body) || looksSecret(d.subject) {
-		return fmt.Errorf("that looks like it holds a secret (a key or a token). Never put one in a message: say where it lives instead")
+	if err := d.settle(); err != nil {
+		return err
 	}
 	// Check every attachment before anything is written.
 	names := map[string]bool{}
-	var attached []string
+	var attached, sums []string
 	for _, p := range d.attach {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -250,6 +290,27 @@ func deliver(dir string, d draft) error {
 		}
 		names[name] = true
 		attached = append(attached, name)
+		sum, err := fileSum(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %v", p, err)
+		}
+		sums = append(sums, sum)
+	}
+	if d.sig != "" {
+		// The signature is checked by readers, against their own list of
+		// keys. Here, only that it's a signature of this very message, so a
+		// send that could never verify is refused rather than delivered.
+		if d.from != automation && d.signedBy != d.from {
+			return fmt.Errorf("signed by %s, but sent as %s", d.signedBy, d.from)
+		}
+		as := make([]attachSum, len(attached))
+		for i := range attached {
+			as[i] = attachSum{attached[i], sums[i]}
+		}
+		payload := signedPayload(d.from, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
+		if err := signatureHolds(d.sig, payload); err != nil {
+			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
+		}
 	}
 	if !d.followUp.IsZero() {
 		if _, err := crontinental(); err != nil {
@@ -259,7 +320,10 @@ func deliver(dir string, d draft) error {
 	sent := now()
 	for _, to := range d.to {
 		m := &Message{From: d.from, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
-			Thread: d.thread, Attachments: attached, Sent: sent, Body: d.body}
+			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
+		if d.sig != "" {
+			m.Recipients, m.SignedBy, m.SignedAt, m.Sig = d.to, d.signedBy, d.signedAt, d.sig
+		}
 		if m.Tags == nil {
 			m.Tags = []string{}
 		}
@@ -482,8 +546,8 @@ func boxArg(u string, pos []string) (string, error) {
 }
 
 func cmdInbox(args []string) error {
-	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "all": false, "json": false})
+	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--json]"
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "read": false, "all": false, "json": false, "raw": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -500,11 +564,29 @@ func cmdInbox(args []string) error {
 		return err
 	}
 	states := []string{"unread"}
-	if f.has("all") {
+	switch {
+	case f.has("all"):
 		states = []string{"unread", "read", "archived"}
+	case f.has("read"):
+		states = []string{"unread", "read"}
 	}
-	ms := fl.apply(loadBox(dir, box, states, false))
-	sortForPull(ms)
+	var ms []*Message
+	if viaHost != "" {
+		if ms, err = fetchRemote("inbox", args); err != nil {
+			return err
+		}
+		prepare(ms, false, "")
+	} else {
+		ms = fl.apply(loadBox(dir, box, states, true))
+		sortForPull(ms)
+		prepare(ms, f.has("raw"), dir)
+	}
+	if !f.has("raw") {
+		// A list: the text comes with pull and show.
+		for _, m := range ms {
+			m.Body = ""
+		}
+	}
 	if f.has("json") {
 		return printJSON(ms)
 	}
@@ -517,7 +599,7 @@ func cmdInbox(args []string) error {
 			what += " " + d
 		}
 		fmt.Printf("%s in %s's box.\n", what, box)
-		if !f.has("all") {
+		if !f.has("all") && !f.has("read") && viaHost == "" {
 			if n := len(fl.apply(loadBox(dir, box, []string{"read"}, false))); n > 0 {
 				fmt.Printf("(%d read: --all shows them.)\n", n)
 			}
@@ -526,7 +608,7 @@ func cmdInbox(args []string) error {
 	}
 	at := now()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "STATE\tID\tURGENCY\tFROM\tSENT\tTAGS\tSUBJECT")
+	fmt.Fprintln(tw, "STATE\tID\tURGENCY\tFROM\tSIG\tSENT\tTAGS\tSUBJECT")
 	for _, m := range ms {
 		tags := strings.Join(m.Tags, ",")
 		if tags == "" {
@@ -536,14 +618,22 @@ func cmdInbox(args []string) error {
 		if len(m.Attachments) > 0 {
 			subj += fmt.Sprintf(" [%d attached]", len(m.Attachments))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m.State, m.ID, m.Urgency, m.From, ago(m.Sent, at), tags, subj)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m.State, m.ID, m.Urgency, m.From, sigMark(m), ago(m.Sent, at), tags, subj)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if m.Signature == sigBad {
+			fmt.Printf("\n✗ %s: %s. Don't trust who it says it's from.\n", m.ID, m.SignatureNote)
+		}
+	}
+	return nil
 }
 
 func cmdPull(args []string) error {
 	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "json": false})
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "json": false, "raw": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -563,8 +653,17 @@ func cmdPull(args []string) error {
 	if f.has("unread") {
 		states = states[:1]
 	}
-	ms := fl.apply(loadBox(dir, box, states, true))
-	sortForPull(ms)
+	var ms []*Message
+	if viaHost != "" {
+		if ms, err = fetchRemote("pull", args); err != nil {
+			return err
+		}
+		prepare(ms, false, "")
+	} else {
+		ms = fl.apply(loadBox(dir, box, states, true))
+		sortForPull(ms)
+		prepare(ms, f.has("raw"), dir)
+	}
 	if f.has("json") {
 		return printJSON(ms)
 	}
@@ -589,11 +688,15 @@ func cmdPull(args []string) error {
 	fmt.Printf("%s (%d unread) of %s in %s's box, unread first, oldest first within that.\n\n", plural(len(ms), "message"), unread, what, box)
 	for i, m := range ms {
 		fmt.Printf("===== deaddrop %s: message %d of %d (%s) =====\n", mark, i+1, len(ms), m.State)
-		os.Stdout.Write(m.render())
-		for _, a := range m.Attachments {
-			p := filepath.Join(dir, box, "files", m.ID, a)
+		fmt.Println(sigLine(m))
+		os.Stdout.Write(m.display())
+		for j, a := range m.Attachments {
 			size := "missing"
-			if info, err := os.Stat(p); err == nil {
+			if viaHost != "" {
+				if j < len(m.AttachmentSizes) && m.AttachmentSizes[j] >= 0 {
+					size = humanSize(m.AttachmentSizes[j])
+				}
+			} else if info, err := os.Stat(filepath.Join(dir, box, "files", m.ID, a)); err == nil {
 				size = humanSize(info.Size())
 			}
 			fmt.Printf("[attached: %s (%s); deaddrop file %s %q > %q]\n", a, size, m.ID, a, a)
@@ -644,6 +747,9 @@ func cmdFile(args []string) error {
 	if len(f.pos) < 1 || len(f.pos) > 2 {
 		return badf(u, "which message, and which of its files?")
 	}
+	if viaHost != "" {
+		return fileVia(f)
+	}
 	box, err := resolveBox("--box", f.get("box"))
 	if err != nil {
 		return err
@@ -652,7 +758,7 @@ func cmdFile(args []string) error {
 	if err != nil {
 		return err
 	}
-	m, err := findMessage(dir, box, f.pos[0], false)
+	m, err := findMessage(dir, box, f.pos[0], len(f.pos) == 2)
 	if err != nil {
 		return err
 	}
@@ -673,13 +779,53 @@ func cmdFile(args []string) error {
 	if !found {
 		return fmt.Errorf("%s has no attachment %q (deaddrop file %s lists them)", m.ID, name, m.ID)
 	}
-	in, err := os.Open(filepath.Join(dir, box, "files", m.ID, name))
+	data, err := os.ReadFile(filepath.Join(dir, box, "files", m.ID, name))
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	_, err = io.Copy(os.Stdout, in)
+	return handOver(m, name, data)
+}
+
+// handOver writes an attachment out once it's checked: never a file that
+// isn't what was sent, and a word when nobody vouches for who sent it.
+func handOver(m *Message, name string, data []byte) error {
+	verify(m)
+	if err := checkAttachment(m, name, data); err != nil {
+		return err
+	}
+	switch m.Signature {
+	case sigVerified:
+	case sigBad:
+		return fmt.Errorf("%s: %s, so its attachments aren't handed out", m.ID, m.SignatureNote)
+	default:
+		fmt.Fprintf(os.Stderr, "deaddrop: %s isn't signed by a key this machine knows: the file is the one stored, but who sent it is only a claim\n", m.ID)
+	}
+	_, err := os.Stdout.Write(data)
 	return err
+}
+
+// fileVia is file with the store elsewhere: the bytes and the message come
+// from there, and are checked here.
+func fileVia(f flags) error {
+	if len(f.pos) == 1 {
+		return runRemote(viaHost, "file", append([]string{f.pos[0]}, boxFlag(f)...))
+	}
+	ms, err := fetchRemote("show", append([]string{f.pos[0]}, boxFlag(f)...))
+	if err != nil {
+		return err
+	}
+	data, err := remoteBytes(viaHost, "file", append([]string{f.pos[0], f.pos[1]}, boxFlag(f)...))
+	if err != nil {
+		return err
+	}
+	return handOver(ms[0], f.pos[1], data)
+}
+
+func boxFlag(f flags) []string {
+	if f.has("box") {
+		return []string{"--box", f.get("box")}
+	}
+	return nil
 }
 
 // ---- marking ----

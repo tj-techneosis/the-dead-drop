@@ -29,6 +29,12 @@ type Config struct {
 	// Relay: commands that reach this machine over ssh go on to its host,
 	// for people who can only reach the store through it.
 	Relay bool `toml:"relay"`
+	// Signing (sign.go): the ssh key this machine signs with (a .pub signs
+	// through the agent), who signs automation mail sent from here, and
+	// the list of who holds which key, for checking what arrives.
+	SignKey string `toml:"sign_key"`
+	SignAs  string `toml:"sign_as"`
+	Signers string `toml:"signers"`
 
 	path string
 }

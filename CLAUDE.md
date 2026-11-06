@@ -18,6 +18,8 @@ Claude Code setup.
 | `cmd/deaddrop/firetower.go` | `deaddrop firetower`: one lookout per box |
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
+| `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
+| `cmd/deaddrop/read.go` | reading with the store elsewhere: fetch as stored (`--raw`), check here |
 | `agents/` | what ships to users' Claude Code: the skill and the CLAUDE.md snippet |
 | `examples/` | a config, the store machine's jobs, ways to run `watch`, a `new.d` hook, the SwiftBar and Omarchy inboxes |
 | `install.sh` | three modes: piped fetches a release, a checkout builds, an unpacked release installs its binary |
@@ -58,6 +60,11 @@ Claude Code setup.
   otherwise; `DEADDROP_HOPS` counts machines, three is the limit. Over ssh
   only `send` and `reply` may create a store: never an empty inbox that
   looks real.
+- **Signatures are made where the key is and checked where the reader is.**
+  Never sign on the store, never trust the store's list of keys, never let
+  a reading command with the store elsewhere print the store's verdict
+  instead of checking here. Bad is said loudly wherever a message shows.
+  What's signed (`signedPayload`) changes only with a new version line.
 - **Who sends.** `--from` is yourself or `automation`; with `shared_login`
   the login name is never a fallback. Jobs the Dead Drop books run the
   installed binary (`~/.local/bin`), never the one that booked them.

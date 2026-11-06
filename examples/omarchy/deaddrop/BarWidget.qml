@@ -122,6 +122,16 @@ Panel {
     return Math.floor(s / 86400) + "d ago"
   }
 
+  // Who it's from, as far as this machine can tell (deaddrop checks the
+  // signature here, against this machine's list of keys).
+  function sender(m) {
+    var s = String(m.from || "")
+    if (m.signature === "bad") return s + " · forged or changed"
+    if (m.signature === "unknown") return s + " · can't check"
+    if (m.signature !== "verified") return s + " · unsigned"
+    return s
+  }
+
   function headline() {
     if (!root.watched) return "Not watching yet"
     if (root.urgent > 0)
@@ -391,7 +401,7 @@ Panel {
             width: parent.width
             title: root.reading ? String(root.reading.subject || "") : "Dead Drop"
             meta: root.reading
-              ? "From " + root.reading.from + " · " + root.ago(root.reading.sent) + (root.reading.urgency === "urgent" ? " · urgent" : "")
+              ? "From " + root.sender(root.reading) + " · " + root.ago(root.reading.sent) + (root.reading.urgency === "urgent" ? " · urgent" : "")
               : root.headline() + (root.watched && root.checkedAt ? " · checked " + root.ago(root.checkedAt) : "")
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -497,6 +507,19 @@ Panel {
                 fontFamily: root.fontFamily
                 onClicked: if (root.reading) root.archiveMessage(root.reading)
               }
+            }
+
+            Text {
+              visible: !!root.reading && root.reading.signature !== "verified"
+              width: parent.width
+              leftPadding: Style.space(10)
+              rightPadding: Style.space(10)
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              text: root.reading ? String(root.reading.signature_note || "") : ""
+              color: root.reading && root.reading.signature === "bad" ? root.urgentColor : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
 
             Text {
@@ -607,10 +630,10 @@ Panel {
         Text {
           Layout.fillWidth: true
           textFormat: Text.PlainText
-          text: row.message.from + " · " + root.ago(row.message.sent)
+          text: root.sender(row.message) + " · " + root.ago(row.message.sent)
             + ((row.message.tags || []).length ? " · " + row.message.tags.join(", ") : "")
             + ((row.message.attachments || []).length ? " · " + row.message.attachments.length + " attached" : "")
-          color: root.dim
+          color: row.message.signature === "bad" ? root.urgentColor : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight

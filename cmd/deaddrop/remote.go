@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -62,7 +63,47 @@ func remoteHost() (string, error) {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// tooOld is what a store from before 0.3 is told when it's handed a
+// signed message or asked for one as it is.
+const tooOld = "the store's machine has a deaddrop from before 0.3, which can't take or hand out signed messages: upgrade it there first (deaddrop upgrade)"
+
 func runRemote(host, cmd string, args []string) error {
+	if cmd != "send" || !contains(args, "--signed-by") {
+		return runRemoteTo(host, cmd, args, os.Stdout, os.Stderr)
+	}
+	// A signed send: an older store only says it doesn't know the flags.
+	var errb bytes.Buffer
+	err := runRemoteTo(host, cmd, args, os.Stdout, &errb)
+	if err != nil && strings.Contains(errb.String(), "unknown flag --signed-by") {
+		return errors.New(tooOld)
+	}
+	os.Stderr.Write(errb.Bytes())
+	return err
+}
+
+// remoteBytes runs a command on the store's machine and returns what it
+// printed; what it said on stderr becomes the error.
+func remoteBytes(host, cmd string, args []string) ([]byte, error) {
+	var out, errb bytes.Buffer
+	err := runRemoteTo(host, cmd, args, &out, &errb)
+	if err != nil {
+		msg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(errb.String()), "deaddrop: "))
+		var ee exitError
+		if errors.As(err, &ee) && ee.msg != "" {
+			msg = strings.TrimSpace(ee.msg + "\n" + msg)
+		}
+		if strings.Contains(msg, "unknown flag --raw") {
+			msg = tooOld
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, errors.New(msg)
+	}
+	return out.Bytes(), nil
+}
+
+func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) error {
 	me, err := explicitMe()
 	if err != nil {
 		return err
@@ -121,6 +162,9 @@ func runRemote(host, cmd string, args []string) error {
 	}
 	if stdin == nil && (cmd == "send" || cmd == "reply") {
 		stdin = os.Stdin
+		if presetBody != nil {
+			stdin = strings.NewReader(*presetBody)
+		}
 	}
 
 	bin := os.Getenv("DEADDROP_REMOTE_BIN")
@@ -149,7 +193,7 @@ func runRemote(host, cmd string, args []string) error {
 	}
 	sshArgs = append(sshArgs, host, line)
 	c := exec.Command(ssh, sshArgs...)
-	c.Stdin, c.Stdout, c.Stderr = stdin, os.Stdout, os.Stderr
+	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr
 	err = c.Run()
 	var ee *exec.ExitError
 	switch {

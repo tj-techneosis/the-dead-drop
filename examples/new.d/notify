@@ -7,6 +7,11 @@
 # It uses Crontinental's notify when it's installed (so whatever hooks you set
 # up there ring too: phone, chat), else the system's own notifications.
 title="Dead Drop: $DEADDROP_MSG_SENDER"
+case "$DEADDROP_MSG_SIGNATURE" in
+  verified) ;;
+  bad) title="$title (forged or changed!)" ;;
+  *) title="$title (unverified)" ;;
+esac
 body="$DEADDROP_MSG_SUBJECT"
 urgent=""
 [ "$DEADDROP_MSG_URGENCY" = urgent ] && urgent=1

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,5 +39,17 @@ func TestFollowUpJobName(t *testing.T) {
 	got := followUpJob("2026-11-02T153012-a-very-long-sender-name-here-3f9a")
 	if got != "deaddrop-2026-11-02t153012-3f9a" || len(got) > 49 {
 		t.Fatal(got)
+	}
+}
+
+func TestUnknownHeaderLinesSurviveARewrite(t *testing.T) {
+	in := "---\nid: 2026-11-02T153000-bob-0000\nfrom: bob\nto: alice\nsubject: \"x\"\ntags: []\nurgency: normal\nfrom_the_future: [1, 2]\nsent: 2026-11-02T15:30:00Z\n---\nbody\n"
+	m, err := parseMessage([]byte(in), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Urgency = "urgent"
+	if out := string(m.render()); !strings.Contains(out, "from_the_future: [1, 2]\n") {
+		t.Errorf("the unknown line was dropped:\n%s", out)
 	}
 }

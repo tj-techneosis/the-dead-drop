@@ -51,6 +51,10 @@ type InboxEntry struct {
 	Sent        time.Time `json:"sent"`
 	Thread      string    `json:"thread"`
 	Attachments []string  `json:"attachments"`
+	// Checked on this machine (sign.go): verified, unsigned, unknown or bad.
+	Signature     string `json:"signature"`
+	SignatureNote string `json:"signature_note"`
+	SignedBy      string `json:"signed_by"`
 }
 
 // stateDir is where this machine keeps the inbox file and what watch has
@@ -152,7 +156,7 @@ func watchPass(hooks bool) (passResult, error) {
 
 	at := now().UTC()
 	prev := readInbox()
-	out, ferr := self("inbox", "--all", "--json")
+	out, ferr := self("inbox", "--read", "--json")
 	var ms []Message
 	if ferr == nil {
 		if err := json.Unmarshal(out, &ms); err != nil {
@@ -179,7 +183,8 @@ func watchPass(hooks bool) (passResult, error) {
 			continue
 		}
 		e := InboxEntry{ID: m.ID, From: m.From, Subject: m.Subject, Tags: m.Tags,
-			Urgency: m.Urgency, State: m.State, Sent: m.Sent, Thread: m.Thread, Attachments: m.Attachments}
+			Urgency: m.Urgency, State: m.State, Sent: m.Sent, Thread: m.Thread, Attachments: m.Attachments,
+			Signature: m.Signature, SignatureNote: m.SignatureNote, SignedBy: m.SignedBy}
 		if e.Tags == nil {
 			e.Tags = []string{}
 		}
@@ -293,6 +298,8 @@ func runHooks(box string, e InboxEntry) {
 			"DEADDROP_MSG_URGENCY="+e.Urgency,
 			"DEADDROP_MSG_SENT="+e.Sent.UTC().Format(time.RFC3339),
 			"DEADDROP_MSG_ATTACHMENTS="+fmt.Sprint(len(e.Attachments)),
+			"DEADDROP_MSG_SIGNATURE="+e.Signature,
+			"DEADDROP_MSG_SIGNED_BY="+e.SignedBy,
 		)
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: hook %s, for %s: %v\n", name, e.ID, err)
@@ -371,7 +378,7 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -384,17 +391,27 @@ func cmdShow(args []string) error {
 	if f.has("fragment") && !f.has("html") {
 		return badf(u, "--fragment goes with --html")
 	}
-	box, err := resolveBox("--box", f.get("box"))
-	if err != nil {
-		return err
-	}
-	dir, err := storeDir()
-	if err != nil {
-		return err
-	}
-	m, err := findMessage(dir, box, f.pos[0], true)
-	if err != nil {
-		return err
+	var m *Message
+	if viaHost != "" {
+		ms, err := fetchRemote("show", append([]string{f.pos[0]}, boxFlag(f)...))
+		if err != nil {
+			return err
+		}
+		m = ms[0]
+		prepare(ms, false, "")
+	} else {
+		box, err := resolveBox("--box", f.get("box"))
+		if err != nil {
+			return err
+		}
+		dir, err := storeDir()
+		if err != nil {
+			return err
+		}
+		if m, err = findMessage(dir, box, f.pos[0], true); err != nil {
+			return err
+		}
+		prepare([]*Message{m}, f.has("raw"), dir)
 	}
 	switch {
 	case f.has("json"):
@@ -407,7 +424,8 @@ func cmdShow(args []string) error {
 		_, err := os.Stdout.Write(messagePage(m))
 		return err
 	}
-	_, err = os.Stdout.Write(m.render())
+	fmt.Println(sigLine(m))
+	_, err = os.Stdout.Write(m.display())
 	return err
 }
 
@@ -578,7 +596,11 @@ func swiftbar(in *InboxFile, bin string) string {
 		} else if e.State == "read" {
 			mark = "○"
 		}
-		fmt.Fprintf(&b, "%s %s · %s%s\n", mark, menuText(e.From, 32), menuText(e.Subject, 70), plain)
+		from := menuText(e.From, 32)
+		if e.Signature != sigVerified {
+			from += " (" + map[string]string{sigUnsigned: "unsigned", sigUnknown: "unchecked", sigBad: "FORGED?"}[e.Signature] + ")"
+		}
+		fmt.Fprintf(&b, "%s %s · %s%s\n", mark, from, menuText(e.Subject, 70), plain)
 		meta := ago(e.Sent, now())
 		if len(e.Tags) > 0 {
 			meta += " · " + strings.Join(e.Tags, ", ")
@@ -587,6 +609,9 @@ func swiftbar(in *InboxFile, bin string) string {
 			meta += fmt.Sprintf(" · %d attached", n)
 		}
 		fmt.Fprintf(&b, "--%s | disabled=true%s\n", menuText(meta, 120), strings.TrimPrefix(plain, " |"))
+		if e.Signature != sigVerified && e.SignatureNote != "" {
+			fmt.Fprintf(&b, "--%s | disabled=true%s\n", menuText(e.SignatureNote, 120), strings.TrimPrefix(plain, " |"))
+		}
 		b.WriteString("-----\n")
 		act("--", "Read", "open", e.ID)
 		if e.State == "unread" {

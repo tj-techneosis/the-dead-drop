@@ -77,8 +77,43 @@ there without `DEADDROP_FROM` is refused rather than filed as the shared
 user.
 
 You send as yourself or as `automation`, never as another person: `--from`
-takes nothing else. It isn't security (anyone can set `DEADDROP_FROM`), but
-it stops a slip from putting a message in someone's name.
+takes nothing else. That stops a slip, not a person: anyone can set
+`DEADDROP_FROM`, or write into the store's files. Who really sent a message
+is what its signature says (below).
+
+## Signatures
+
+Everyone may reach the store as one login, so nothing on the store can tell
+people apart: a check there (the ssh key that logged in, say) is undone by
+anyone who writes a file directly. So the proof is made where the key is,
+and checked where the reader is:
+
+- **Signed on the sender's machine** with their ssh key (`ssh-keygen -Y
+  sign`, namespace `deaddrop`), through the agent if they like. The key
+  never reaches the store, so the store and its login can't sign.
+- **What's signed** is a canonical text of what the sender chose: from, the
+  recipients, subject, tags, urgency, thread, each attachment's name and
+  sha256, when it was signed, and the body. The sender works it out with
+  the same code the store uses, and the store checks the signature is of
+  exactly that (by any key: it holds none), so a send that could never
+  verify is refused at once rather than delivered. The id and the sent time
+  are the store's and aren't signed; a copy moved to another box fails the
+  recipients, and one delivered again later fails the time (an hour's
+  slack). A follow-up raising it to urgent is allowed for.
+- **Checked on the reader's machine**, against the reader's own
+  `allowed_signers`, never the store's. With the store elsewhere, `inbox`,
+  `pull`, `show` and `file` fetch the messages as they are (`--raw`) and
+  check them here. The answer is one of four: verified, unsigned, can't
+  check (no key for that person), or bad (changed, moved, sent again, or a
+  key that isn't theirs). Bad is said loudly everywhere a message shows, and
+  `file` won't hand out an attachment whose sum doesn't match.
+- **Automation** is signed by whoever's machine runs the job (`sign_as`).
+- **Old messages and old senders** are unsigned, and say so; nothing
+  breaks. Header fields a version doesn't know are kept when it rewrites a
+  message, so an older store never strips a signature.
+
+The list of keys is the trust: keep it where the store's login can't write,
+in each person's own dotfiles.
 
 There are no permissions per box in this version. Anyone who can read the
 store can read every box. That's why **secrets never go in a message**: the
@@ -213,6 +248,7 @@ can set it up; the job lives with whatever sends it.
 
 ## Out of scope for now
 
-Real email, a web inbox served from the store, boxes for people outside the team, permissions per
+Real email, a web inbox served from the store, encrypting what's in the
+store (signatures prove who wrote it, not who can read it), boxes for people outside the team, permissions per
 box (per-person users on the store's machine would give each box its own
 owner), search beyond tags, sender and date, encryption at rest.

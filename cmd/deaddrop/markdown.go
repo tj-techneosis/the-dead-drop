@@ -26,8 +26,8 @@ func messagePage(m *Message) []byte {
 	b.WriteString(e(m.Subject))
 	b.WriteString(` · Dead Drop</title>
 <style>
-:root { --bg:#fbfaf8; --fg:#1f2328; --dim:#6b7078; --rule:#e3e1dc; --code:#f1efeb; --accent:#2f6fb3; --urgent:#c4352c; }
-@media (prefers-color-scheme: dark) { :root { --bg:#17181a; --fg:#e6e4df; --dim:#9a9ea5; --rule:#2c2e31; --code:#222427; --accent:#7fb0e6; --urgent:#ef7a70; } }
+:root { --bg:#fbfaf8; --fg:#1f2328; --dim:#6b7078; --rule:#e3e1dc; --code:#f1efeb; --accent:#2f6fb3; --urgent:#c4352c; --ok:#2e7d4f; --warn:#9a6a00; }
+@media (prefers-color-scheme: dark) { :root { --bg:#17181a; --fg:#e6e4df; --dim:#9a9ea5; --rule:#2c2e31; --code:#222427; --accent:#7fb0e6; --urgent:#ef7a70; --ok:#7cc79a; --warn:#e0b85c; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
 main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
@@ -35,6 +35,8 @@ header { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bott
 header h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 .5rem; }
 .meta { color: var(--dim); font-size: .9rem; display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
 .urgent { color: var(--urgent); font-weight: 600; }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
 .tag { background: var(--code); border-radius: 4px; padding: 0 .4em; }
 .files { margin-top: .75rem; font-size: .9rem; color: var(--dim); }
 .files code { color: var(--fg); }
@@ -55,6 +57,14 @@ hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
 	b.WriteString("</h1>\n<div class=\"meta\">")
 	fmt.Fprintf(&b, "<span>From <strong>%s</strong> to %s</span>", e(m.From), e(m.To))
 	fmt.Fprintf(&b, "<span>%s</span>", e(m.Sent.Local().Format("Mon 2 Jan 2006, 15:04")))
+	switch m.Signature {
+	case sigVerified:
+		fmt.Fprintf(&b, `<span class="ok">✓ %s</span>`, e(m.SignatureNote))
+	case sigBad:
+		fmt.Fprintf(&b, `<span class="urgent">✗ forged or changed: %s</span>`, e(m.SignatureNote))
+	default:
+		fmt.Fprintf(&b, `<span class="warn">%s</span>`, e(m.SignatureNote))
+	}
 	if m.Urgency == urgent {
 		b.WriteString(`<span class="urgent">urgent</span>`)
 	} else if m.Urgency == fyi {

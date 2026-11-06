@@ -21,7 +21,7 @@ Leave something:
   deaddrop reply ID [--urgent|--fyi] [--tag T]... < body.md
 
 Collect it:
-  deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
+  deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--json]
   deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]
   deaddrop show ID [--json|--html]  one message in full
   deaddrop file ID [NAME]          an attachment, on stdout (no NAME: list them)
@@ -32,6 +32,7 @@ On your own machine:
   deaddrop watch [--every 1m]      keep the inbox file current, run new.d hooks
   deaddrop open ID                 read one in the browser, and mark it read
   deaddrop bar [--format swiftbar] the inbox file as a line, or a menu
+  deaddrop key                     your line for everyone's allowed_signers
 
 Look after it:
   deaddrop status [--json]         per box: unread, urgent, newest subject
@@ -52,6 +53,10 @@ and mark all have to match; several --from match any of them. pull prints
 every matching message in full (unread first, oldest first within that) and
 marks nothing: file them afterwards with mark. --follow-up books a
 Crontinental job that raises the message to urgent if it's still unread then.
+
+Messages are signed with your ssh key (sign_key in the config) and checked
+against your own allowed_signers: inbox, pull and show say whether each one
+is verified, unsigned, can't be checked, or BAD (forged or changed).
 
 Never put a secret in a message: name where it lives instead.
 
@@ -145,6 +150,19 @@ func dispatch(cmd string, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A send is signed here, on the sender's own machine, before it goes.
+	if cmd, args, err = signOutgoing(cmd, args); err != nil {
+		return err
+	}
+	if cmd == "send" {
+		run = commands["send"]
+	}
+	// What's read is checked here, on the reader's own machine: these fetch
+	// the messages from the store as they are, and check and show them here.
+	if host != "" && hops() == 0 && readsHere[cmd] {
+		viaHost = host
+		return run(args)
+	}
 	if host != "" {
 		err = runRemote(host, cmd, args)
 	} else if err = arrivedHere(cmd); err == nil {
@@ -201,7 +219,15 @@ func refreshInbox() {
 	watchPass(false)
 }
 
+// readsHere are the commands whose messages are checked on the reader's
+// machine when the store is elsewhere.
+var readsHere = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "file": true}
+
+// viaHost is the store's machine while a reading command runs here.
+var viaHost string
+
 var here = map[string]func([]string) error{
+	"key":   cmdKey,
 	"watch": cmdWatch,
 	"open":  cmdOpen,
 	"bar":   cmdBar,

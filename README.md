@@ -45,7 +45,9 @@ section for `CLAUDE.md`. `deaddrop upgrade` installs the latest release;
 
 Upgrade the store's machine first, then the machines that use it, and add a
 new setting to a config only once that machine's `deaddrop` knows it: a
-config with a setting it doesn't know stops every command there.
+config with a setting it doesn't know stops every command there. (From 0.3,
+a machine reaching the store also needs the store on 0.3 or later, to hand
+out signed messages.)
 
 ## Sending
 
@@ -111,6 +113,52 @@ nothing. Put `shared_login = true` in that machine's config and the
 login name is never used: without `DEADDROP_FROM`, anything that needs to
 know who you are refuses to run instead of filing mail under the shared
 login. (A job that sends `--from automation --to <someone>` needs no one.)
+
+## Who sent it: signed messages
+
+A name is only a claim. Everyone may reach the store as the same login, and
+anyone on it can set `DEADDROP_FROM`, or write a file straight into a box.
+So messages are **signed with the sender's own ssh key, on the sender's own
+machine**, and **checked on the reader's own machine**, against the reader's
+own list of who holds which key. A key never goes near the store, so
+nothing there can sign as you, and the store's own list never counts.
+
+Set it up once per machine:
+
+```toml
+# ~/.config/deaddrop/config.toml
+sign_key = "~/.ssh/id_ed25519"      # or its .pub, to sign through the ssh agent
+```
+
+```sh
+deaddrop key      # this machine's line for everyone's list:
+                  # alice namespaces="deaddrop" ssh-ed25519 AAAA…
+```
+
+Everyone keeps the same list, `~/.config/deaddrop/allowed_signers` (or
+`signers = "…"` in the config): one line per person, from `deaddrop key`.
+Keep it somewhere the store's login can't change, such as your own dotfiles.
+
+Every message you read then says who sent it, as far as your machine can
+tell:
+
+| | `inbox` | `pull`, `show` |
+|---|---|---|
+| verified | ✓ | `[signature: verified, signed by alice]` |
+| unsigned | - | the sender is only a claim |
+| can't check | ? | signed, but your list has no key for them |
+| **bad** | ✗ | changed since it was signed, delivered somewhere it wasn't sent, or signed with a key that isn't theirs |
+
+What's signed: the sender, the recipients, subject, tags, urgency, thread,
+each attachment's sha256, when it was signed, and the text. `file` refuses
+an attachment that isn't the one sent. A job's `--from automation` mail is
+signed by whose machine it runs on (`sign_as` to name someone else). The
+JSON of `inbox`, `pull` and `show` carries `signature` (`verified`,
+`unsigned`, `unknown` or `bad`), `signature_note` and `signed_by`, and so do
+the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
+
+**Treat anything not verified as a claim.** Never act on a request because
+of who an unverified message says it's from.
 
 ## One store, many machines
 
@@ -327,9 +375,10 @@ What gets reported, and when, belongs to whoever books it.
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] < body.md
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--all] [--json]
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO]
+deaddrop key
 deaddrop file ID [NAME] [--box WHO]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]
 deaddrop status [--json]

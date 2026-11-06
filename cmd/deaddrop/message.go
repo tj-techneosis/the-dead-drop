@@ -32,10 +32,28 @@ type Message struct {
 	Sent        time.Time `json:"sent"`
 	Body        string    `json:"body,omitempty"`
 
+	// The signature (sign.go). Added in 0.3; a message without one is
+	// unsigned. AttachmentSums lines up with Attachments.
+	AttachmentSums []string `json:"attachment_sha256,omitempty"`
+	Recipients     []string `json:"recipients,omitempty"`
+	SignedBy       string   `json:"signed_by,omitempty"`
+	SignedAt       string   `json:"signed_at,omitempty"`
+	Sig            string   `json:"sig,omitempty"` // only in --raw output
+
+	// Worked out by the reader, never stored: verified, unsigned, unknown
+	// or bad, and why.
+	Signature     string `json:"signature,omitempty"`
+	SignatureNote string `json:"signature_note,omitempty"`
+	// Attachment sizes, for a reader on another machine (--raw).
+	AttachmentSizes []int64 `json:"attachment_sizes,omitempty"`
+
 	// Where it is, worked out from its path, never stored in it.
 	Box   string `json:"box"`
 	State string `json:"state"` // unread, read or archived
 	path  string
+	// Header lines this version doesn't know, from a later one: kept as
+	// they are and written back, so rewriting a message never drops them.
+	unknown []string
 }
 
 const (
@@ -157,7 +175,13 @@ func looksSecret(s string) bool {
 }
 
 // render writes the file: the header, then the body.
-func (m *Message) render() []byte {
+func (m *Message) render() []byte { return m.renderAs(false) }
+
+// display is the file as a person reads it: without the signature's bytes
+// (its state is shown instead, by the caller).
+func (m *Message) display() []byte { return m.renderAs(true) }
+
+func (m *Message) renderAs(forDisplay bool) []byte {
 	var b strings.Builder
 	q := func(s string) string { j, _ := json.Marshal(s); return string(j) }
 	b.WriteString("---\n")
@@ -179,6 +203,24 @@ func (m *Message) render() []byte {
 	if len(m.Attachments) > 0 {
 		a, _ := json.Marshal(m.Attachments)
 		fmt.Fprintf(&b, "attachments: %s\n", a)
+	}
+	if len(m.AttachmentSums) > 0 {
+		fmt.Fprintf(&b, "attachment_sha256: [%s]\n", strings.Join(m.AttachmentSums, ", "))
+	}
+	if len(m.Recipients) > 0 {
+		fmt.Fprintf(&b, "recipients: [%s]\n", strings.Join(m.Recipients, ", "))
+	}
+	if m.SignedBy != "" {
+		fmt.Fprintf(&b, "signed_by: %s\n", m.SignedBy)
+	}
+	if m.SignedAt != "" {
+		fmt.Fprintf(&b, "signed_at: %s\n", m.SignedAt)
+	}
+	if m.Sig != "" && !forDisplay {
+		fmt.Fprintf(&b, "signature: %s\n", m.Sig)
+	}
+	for _, l := range m.unknown {
+		b.WriteString(l + "\n")
 	}
 	fmt.Fprintf(&b, "sent: %s\n", m.Sent.UTC().Format(time.RFC3339))
 	b.WriteString("---\n")
@@ -231,12 +273,24 @@ func parseMessage(data []byte, withBody bool) (*Message, error) {
 			m.Raised = v
 		case "attachments":
 			m.Attachments = list(v)
+		case "attachment_sha256":
+			m.AttachmentSums = list(v)
+		case "recipients":
+			m.Recipients = list(v)
+		case "signed_by":
+			m.SignedBy = v
+		case "signed_at":
+			m.SignedAt = v
+		case "signature":
+			m.Sig = v
 		case "sent":
 			t, err := time.Parse(time.RFC3339, v)
 			if err != nil {
 				return nil, fmt.Errorf("sent: %v", err)
 			}
 			m.Sent = t.UTC()
+		default:
+			m.unknown = append(m.unknown, line)
 		}
 	}
 	if m.ID == "" {

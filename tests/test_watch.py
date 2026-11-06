@@ -64,7 +64,9 @@ class Watch(DeadDrop):
         self.assertEqual(f["messages"][3]["state"], "read")
         # Every field, always: a viewer never has to guess.
         for m in f["messages"]:
-            self.assertEqual(set(m), {"id", "from", "subject", "tags", "urgency", "state", "sent", "thread", "attachments"})
+            self.assertEqual(set(m), {"id", "from", "subject", "tags", "urgency", "state", "sent", "thread", "attachments",
+                                      "signature", "signature_note", "signed_by"})
+            self.assertEqual(m["signature"], "unsigned")
         self.assertEqual((f["messages"][1]["attachments"], f["messages"][1]["thread"], f["messages"][1]["tags"]), ([], "", []))
         att = self.tmp / "build.log"
         att.write_text("x\n")
@@ -241,8 +243,8 @@ class Watch(DeadDrop):
         out = self.dd("bar", "--format", "swiftbar").stdout
         lines = out.splitlines()
         self.assertTrue(lines[0].startswith("2 | sfimage=envelope.badge.fill"))
-        self.assertIn("▲ bob · a ¦ b --- c | emojize=false", out)
-        self.assertIn("● bob · leading dashes", out)
+        self.assertIn("▲ bob (unsigned) · a ¦ b --- c | emojize=false", out)
+        self.assertIn("● bob (unsigned) · leading dashes", out)
         self.assertIn('param1="open"', out)
         self.assertIn('param1="mark" param2="read"', out)
         # Every message line is one line, and its own: "|" only before params.

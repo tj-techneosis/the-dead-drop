@@ -24,6 +24,14 @@ host = "store-box"
 # box not named here, since boards can be on screens anyone sees.
 # board_detail = ["alice"]
 
+# Signing (see the README's "Who sent it"): the ssh key this machine signs
+# your mail with (a .pub signs through the agent), and the list of who holds
+# which key, for checking what you read. `deaddrop key` prints your line.
+# sign_key = "~/.ssh/id_ed25519"
+# signers = "~/.config/deaddrop/allowed_signers"
+# Who signs automation mail sent from here (default: me).
+# sign_as = "alice"
+
 # On a machine others reach the store through: commands that arrive here
 # over ssh go on to this machine's host, as whoever sent them. Without it,
 # a command that arrives over ssh runs here.

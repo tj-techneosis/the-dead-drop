@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from _binary import BIN, DeadDrop, script
+from _binary import BIN, DeadDrop, key, script, signers
 
 
 class Remote(DeadDrop):
@@ -198,3 +198,77 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
             "sh -c", f'DEADDROP_SSH="{self.ssh}" sh -c'))
         p = self.rdd("status", ok=False, env=dict(DEADDROP_SSH=str(mid_ssh), DEADDROP_HOST="relay-box"))
         self.assertIn("come through 3 machines", p.stderr)
+
+    # ---- signatures across machines ----
+
+    def signed_env(self, who, **extra):
+        e = dict(DEADDROP_FROM=who, DEADDROP_SIGN_KEY=key(who)[0],
+                 DEADDROP_SIGNERS=str(signers(self.tmp / "near_signers", "alice", "bob")))
+        e.update(extra)
+        return e
+
+    def test_signed_here_checked_here(self):
+        att = self.tmp / "outside" / "run.log"
+        att.parent.mkdir()
+        att.write_text("run 41\n")
+        id = self.rdd("send", "--to", "bob", "--attach", str(att), input="# Notes\n\nx\n", env=self.signed_env("alice")).stdout.split()[1]
+        bob = self.signed_env("bob")
+        ms = json.loads(self.rdd("inbox", "--json", env=bob).stdout)
+        self.assertEqual((ms[0]["signature"], ms[0]["signed_by"]), ("verified", "alice"))
+        self.assertNotIn("sig", ms[0])
+        self.assertNotIn("body", ms[0])
+        self.assertIn("[signature: verified, signed by alice]", self.rdd("pull", env=bob).stdout)
+        self.assertIn("run.log (7 B)", self.rdd("pull", env=bob).stdout)
+        self.assertEqual(json.loads(self.rdd("show", id, "--json", env=bob).stdout)["signature"], "verified")
+        p = self.rdd("file", id, "run.log", env=bob)
+        self.assertEqual((p.stdout, p.stderr), ("run 41\n", ""))
+        # Changed on the store: caught here.
+        f = next((self.far_store / "bob" / "new").glob("*.md"))
+        f.write_text(f.read_text().replace("x\n", "y\n"))
+        self.assertEqual(json.loads(self.rdd("show", id, "--json", env=bob).stdout)["signature"], "bad")
+        (self.far_store / "bob" / "files" / id / "run.log").write_text("run 99\n")
+        self.assertIn("isn't the file that was sent", self.rdd("file", id, "run.log", ok=False, env=bob).stderr)
+        # Nothing written here.
+        self.assertEqual(self.near_files(), [])
+
+    def test_the_stores_own_list_never_counts(self):
+        # Mallory signs as alice, and the store's list says that key is
+        # alice's. The reader's list doesn't, and only the reader's counts.
+        far_cfg = self.far / ".config" / "deaddrop"
+        far_cfg.mkdir(parents=True)
+        signers(far_cfg / "allowed_signers", alice="mallory")
+        self.rdd("send", "--to", "bob", input="# Pay mallory\n\nx\n",
+                 env=dict(DEADDROP_FROM="alice", DEADDROP_SIGN_KEY=key("mallory")[0]))
+        m = json.loads(self.rdd("inbox", "--json", env=self.signed_env("bob")).stdout)[0]
+        self.assertEqual(m["signature"], "bad")
+        self.assertIn("isn't alice's key", m["signature_note"])
+
+    def test_a_reply_over_ssh_is_signed(self):
+        id = self.rdd("send", "--to", "bob", "--tag", "tool-x", input="# Q\n\nx\n", env=self.signed_env("alice")).stdout.split()[1]
+        self.rdd("reply", id, input="Yes.\n", env=self.signed_env("bob"))
+        m = json.loads(self.rdd("inbox", "--json", env=self.signed_env("alice")).stdout)[0]
+        self.assertEqual((m["subject"], m["thread"], m["signature"], m["signed_by"]), ("Re: Q", id, "verified", "bob"))
+
+    def test_signatures_pass_through_a_relay(self):
+        mid, mid_ssh = self.relay_setup()
+        via = dict(DEADDROP_SSH=str(mid_ssh), DEADDROP_HOST="relay-box")
+        att = self.tmp / "outside" / "a.txt"
+        att.parent.mkdir()
+        att.write_text("a\n")
+        self.rdd("send", "--to", "bob", "--attach", str(att), input="# Far\n\nx\n", env=self.signed_env("alice", **via))
+        m = json.loads(self.rdd("inbox", "--json", env=self.signed_env("bob", **via)).stdout)[0]
+        self.assertEqual((m["signature"], m["signed_by"]), ("verified", "alice"))
+
+    def test_an_older_store_says_to_upgrade_it(self):
+        # What a deaddrop from before 0.3 says to flags it doesn't know.
+        old = script(self.tmp / "old-deaddrop", """
+for a; do case "$a" in --signed-by|--raw) echo "deaddrop: unknown flag $a" >&2; echo "usage: deaddrop ..." >&2; exit 2;; esac; done
+exit 0
+""")
+        env = dict(DEADDROP_REMOTE_BIN=str(old))
+        p = self.rdd("send", "--to", "bob", input="# Hi\n\nx\n", ok=False, env=self.signed_env("alice", **env))
+        self.assertIn("from before 0.3", p.stderr)
+        self.assertNotIn("unknown flag", p.stderr)
+        p = self.rdd("inbox", ok=False, env=self.signed_env("bob", **env))
+        self.assertIn("from before 0.3", p.stderr)
+
