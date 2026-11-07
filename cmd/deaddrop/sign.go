@@ -53,12 +53,19 @@ type attachSum struct{ name, sum string }
 //
 // v3 (0.6) adds the helpers it's addressed to, and is used only when there
 // are some, so v1 and v2 letters verify as they always did.
-func signedPayload(from, persona string, helpers []string, recipients []string, subject string, tags []string, urgency, thread string,
+func signedPayload(from, persona string, helpers []string, replyBox string, recipients []string, subject string, tags []string, urgency, thread string,
 	sums []attachSum, signedAt string, body string) []byte {
 	var b bytes.Buffer
 	q, _ := json.Marshal(subject)
 	p, _ := json.Marshal(persona)
 	switch {
+	case replyBox != "":
+		// v4 (0.6.4) adds the reply box; only for letters that name one.
+		fmt.Fprintf(&b, "deaddrop signed message v4\n")
+		fmt.Fprintf(&b, "from: %s\n", from)
+		fmt.Fprintf(&b, "persona: %s\n", p)
+		fmt.Fprintf(&b, "for: %s\n", strings.Join(helpers, ","))
+		fmt.Fprintf(&b, "reply_box: %s\n", replyBox)
 	case len(helpers) > 0:
 		fmt.Fprintf(&b, "deaddrop signed message v3\n")
 		fmt.Fprintf(&b, "from: %s\n", from)
@@ -231,6 +238,9 @@ func wellFormed(m *Message) bool {
 			return false
 		}
 	}
+	if m.ReplyBox != "" && !name(m.ReplyBox) {
+		return false
+	}
 	return m.Urgency == normal || m.Urgency == fyi || m.Urgency == urgent
 }
 
@@ -299,7 +309,7 @@ func verifyState(m *Message) (string, string) {
 		raised = "; raised to urgent by a follow-up, not by the sender"
 	}
 	for _, u := range urgencies {
-		payload := signedPayload(m.From, m.Persona, m.For, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
+		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
@@ -366,6 +376,9 @@ func contains(xs []string, x string) bool {
 // sender's machine, so it goes to the store (and into the signature) as a
 // flag.
 func withPersona(cmd string, args []string) []string {
+	if rb := os.Getenv("DEADDROP_REPLY_BOX"); rb != "" && hops() == 0 && (cmd == "send" || cmd == "reply") && !hasFlag(args, "reply-box") {
+		args = append(append([]string{}, args...), "--reply-box", rb)
+	}
 	p := os.Getenv("DEADDROP_AS")
 	if p == "" || hops() > 0 || (cmd != "send" && cmd != "reply") {
 		return args
@@ -402,6 +415,19 @@ func withFor(cmd string, args []string) []string {
 		}
 	}
 	return append(append([]string{}, args...), "--for", h)
+}
+
+// hasFlag says args name --flag (before any --).
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--"+flag || strings.HasPrefix(a, "--"+flag+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // presetBody, when set, is the body: the signing step has read stdin already.
@@ -472,7 +498,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		sums = append(sums, attachSum{filepath.Base(p), s})
 	}
 	at := now().UTC().Format(time.RFC3339)
-	sig, err := sign(key, signedPayload(d.from, d.persona, d.helpers, d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
+	sig, err := sign(key, signedPayload(d.from, d.persona, d.helpers, d.replyBox, d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
 	if err != nil {
 		return cmd, args, err
 	}
@@ -496,8 +522,8 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
@@ -523,7 +549,7 @@ func replyAsSend(args []string) (string, []string, error) {
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
-	out := []string{"--to", orig.From, "--reply-to", orig.ID, "--subject", subject}
+	out := []string{"--to", replyTo(&orig), "--reply-to", orig.ID, "--subject", subject}
 	for _, t := range kept {
 		out = append(out, "--tag", t)
 	}
@@ -540,6 +566,9 @@ func replyAsSend(args []string) (string, []string, error) {
 	}
 	if f.has("as") {
 		out = append(out, "--as", f.get("as"))
+	}
+	if f.has("reply-box") {
+		out = append(out, "--reply-box", f.get("reply-box"))
 	}
 	hs, err := replyHelpers(&orig, f)
 	if err != nil {

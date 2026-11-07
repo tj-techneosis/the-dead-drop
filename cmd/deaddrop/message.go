@@ -31,10 +31,13 @@ type Message struct {
 	Persona string `json:"persona,omitempty"`
 	// For: the helpers it's addressed to, in the recipient's box (0.6).
 	// Each gets a copy in their own pigeonhole, with its own state.
-	For      []string `json:"for,omitempty"`
-	Thread   string   `json:"thread,omitempty"`
-	FollowUp string   `json:"follow_up,omitempty"`
-	Raised   string   `json:"raised,omitempty"`
+	For []string `json:"for,omitempty"`
+	// ReplyBox: where answers go, when not to the sender's own box (0.6.4),
+	// such as an assistant's own box. Sealed, and honoured only when verified.
+	ReplyBox string `json:"reply_box,omitempty"`
+	Thread   string `json:"thread,omitempty"`
+	FollowUp string `json:"follow_up,omitempty"`
+	Raised   string `json:"raised,omitempty"`
 	// UrgencyWas: what the sender signed, when a follow-up raised it (0.6.4).
 	UrgencyWas  string    `json:"urgency_was,omitempty"`
 	Attachments []string  `json:"attachments,omitempty"`
@@ -207,7 +210,7 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 		safe := func(s string) string { return cleanLine(s, 400) }
 		c.ID, c.From, c.To, c.Thread, c.FollowUp, c.Raised, c.SignedBy, c.SignedAt, c.UrgencyWas =
 			safe(m.ID), safe(m.From), safe(m.To), safe(m.Thread), safe(m.FollowUp), safe(m.Raised), safe(m.SignedBy), safe(m.SignedAt), safe(m.UrgencyWas)
-		c.Urgency = safe(m.Urgency)
+		c.Urgency, c.ReplyBox = safe(m.Urgency), safe(m.ReplyBox)
 		c.unknown = nil
 		for _, l := range m.unknown {
 			c.unknown = append(c.unknown, safe(l))
@@ -228,6 +231,9 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 	}
 	if len(m.For) > 0 {
 		fmt.Fprintf(&b, "for: [%s]\n", strings.Join(m.For, ", "))
+	}
+	if m.ReplyBox != "" {
+		fmt.Fprintf(&b, "reply_box: %s\n", m.ReplyBox)
 	}
 	if m.Thread != "" {
 		fmt.Fprintf(&b, "thread: %s\n", m.Thread)
@@ -311,6 +317,8 @@ func parseMessage(data []byte, withBody bool) (*Message, error) {
 			m.Persona = cleanLine(unquote(v), 60)
 		case "for":
 			m.For = list(v)
+		case "reply_box":
+			m.ReplyBox = v
 		case "thread":
 			m.Thread = v
 		case "follow_up":

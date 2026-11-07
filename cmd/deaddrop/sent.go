@@ -137,7 +137,7 @@ func gatherSent(dir, who string) []*SentMessage {
 func contentKey(m *Message) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00",
-		m.From, m.Persona, strings.Join(m.For, ","), strings.Join(m.Recipients, ","), m.Subject,
+		m.From, m.Persona+"\x00"+m.ReplyBox, strings.Join(m.For, ","), strings.Join(m.Recipients, ","), m.Subject,
 		strings.Join(m.Tags, ","), m.UrgencyWas, m.Thread, strings.Join(m.Attachments, ","),
 		strings.Join(m.AttachmentSums, ","), m.SignedBy, m.SignedAt)
 	h.Write([]byte(canonicalBody(m.Body)))

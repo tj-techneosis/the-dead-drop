@@ -27,6 +27,7 @@ type draft struct {
 	from, subject, urgency, thread string
 	persona                        string
 	helpers                        []string // --for: pigeonholes in each recipient's box
+	replyBox                       string   // --reply-box: where answers go
 	to, tags                       []string
 	body                           string
 	attach                         []string // paths on this machine
@@ -40,7 +41,7 @@ const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
 var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
 	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
-	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true,
+	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true, "reply-box": true,
 }
 
 // helpersOf is a send's --for: the helpers it's addressed to.
@@ -155,6 +156,12 @@ func draftOf(f flags) (draft, error) {
 	if d.helpers, err = helpersOf(f); err != nil {
 		return d, bad(u, err)
 	}
+	if f.has("reply-box") {
+		d.replyBox = strings.ToLower(strings.TrimSpace(f.get("reply-box")))
+		if err := checkBox("--reply-box", d.replyBox); err != nil || d.replyBox == automation {
+			return d, badf(u, "--reply-box: a box, like alice-helper")
+		}
+	}
 	if d.from, err = senderOf(f); err != nil {
 		return d, bad(u, err)
 	}
@@ -238,8 +245,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -266,7 +273,7 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
-	d := draft{from: me, to: []string{orig.From}, thread: orig.ID, tags: kept}
+	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return bad(u, err)
 	}
@@ -275,6 +282,12 @@ func cmdReply(args []string) error {
 	}
 	if d.helpers, err = replyHelpers(orig, f); err != nil {
 		return bad(u, err)
+	}
+	if f.has("reply-box") {
+		d.replyBox = strings.ToLower(strings.TrimSpace(f.get("reply-box")))
+		if err := checkBox("--reply-box", d.replyBox); err != nil || d.replyBox == automation {
+			return badf(u, "--reply-box: a box, like alice-helper")
+		}
 	}
 	extra, err := tagsOf(f)
 	if err != nil {
@@ -300,6 +313,20 @@ func cmdReply(args []string) error {
 	return deliver(dir, d)
 }
 
+// replyTo is the box a reply goes to: the letter's reply box, when it has
+// one and verifies (anyone could write one onto an unsigned letter), else its
+// sender's.
+func replyTo(orig *Message) string {
+	if orig.ReplyBox == "" {
+		return orig.From
+	}
+	if orig.Signature != sigVerified {
+		fmt.Fprintf(os.Stderr, "deaddrop: %s asks for answers at %s, but isn't verified, so this goes to %s\n", orig.ID, orig.ReplyBox, orig.From)
+		return orig.From
+	}
+	return orig.ReplyBox
+}
+
 // replyHelpers is where a reply goes in the sender's box: --for if given,
 // else the pigeonhole of the persona that wrote it (an answer to "bob, as
 // Planner" goes to bob's planner), else bob's own. What the original was for is
@@ -307,6 +334,9 @@ func cmdReply(args []string) error {
 func replyHelpers(orig *Message, f flags) ([]string, error) {
 	if f.has("for") {
 		return helpersOf(f)
+	}
+	if replyTo(orig) != orig.From {
+		return nil, nil // its own box is the address: no pigeonhole on top
 	}
 	// Only a sealed persona that verifies says where a reply goes: anyone can
 	// write a letter claiming one.
@@ -460,7 +490,7 @@ func deliver(dir string, d draft) error {
 		for i := range attached {
 			as[i] = attachSum{attached[i], sums[i]}
 		}
-		payload := signedPayload(d.from, d.persona, d.helpers, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
+		payload := signedPayload(d.from, d.persona, d.helpers, d.replyBox, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
@@ -506,7 +536,7 @@ func deliver(dir string, d draft) error {
 			}
 			locked[to] = unlock
 		}
-		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
+		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, ReplyBox: d.replyBox, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
 			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
 		// Who it went to, in every copy (deaddrop sent puts them together).
 		m.Recipients = d.to

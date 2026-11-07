@@ -18,9 +18,9 @@ const usage = `deaddrop: a shared, tagged inbox of documents
 Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
-                [--from automation] [--as NAME] [--for HELPER]... < body.md
+                [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md
   deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
-                [--for HELPER]... [--follow-up 2d|TIME] < body.md
+                [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 
 Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
   deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for H] [--json]
@@ -57,7 +57,8 @@ config, the login name is never used.
 
 A helper (an assistant working for someone) reads its own pigeonhole with
 --for, or $DEADDROP_FOR for a whole session, and signs as a persona with
---as, or $DEADDROP_AS.
+--as, or $DEADDROP_AS. --reply-box (or $DEADDROP_REPLY_BOX) asks for answers
+at another box, such as its own; reply honours it when the letter verifies.
 
 The body is Markdown on stdin. With no --subject, the subject is the
 document's first heading (or its first line). Several --tag on inbox, pull

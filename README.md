@@ -79,6 +79,7 @@ answered with a status: `--untag proposal --tag status`).
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 | `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
+| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -478,8 +479,9 @@ What gets reported, and when, belongs to whoever books it.
 
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
-              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]... < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md
+              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
+              [--reply-box BOX] < body.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO]

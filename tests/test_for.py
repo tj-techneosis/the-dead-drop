@@ -264,3 +264,27 @@ class PigeonholeReview(DeadDrop):
             subprocess.run(c[c.index("--") + 1:], check=True, capture_output=True, env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(60 * 25)))
         rings = [c for c in self.calls(self.cron_calls) if c[0] == "notify"]
         self.assertEqual(len(rings), 1)
+
+    def test_a_reply_box_takes_the_answers(self):
+        # An assistant with a box of its own signs as its person and asks for
+        # answers there.
+        id = self.send("# A question\n\nx\n", "--to", "bob", "--reply-box", "alice-helper", **self.signed("alice"))
+        m = self.inbox(DEADDROP_FROM="bob")[0]
+        self.assertEqual((m["reply_box"], m["signature"]), ("alice-helper", "verified"))
+        p = self.dd("reply", id, input="An answer.\n", **self.signed("bob"))
+        self.assertIn("to alice-helper", p.stdout)
+        self.assertEqual([x["subject"] for x in self.inbox("alice-helper", DEADDROP_FROM="alice")], ["Re: A question"])
+        self.assertEqual(self.inbox(DEADDROP_FROM="alice"), [])
+        # Sealed: changed by hand, it reads bad, and a reply goes to alice.
+        path = next((self.dir / "bob" / "new").glob("*.md"))
+        path.write_text(path.read_text().replace("reply_box: alice-helper", "reply_box: mallory"))
+        self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["signature"], "bad")
+        p = self.dd("reply", id, input="Again.\n", DEADDROP_FROM="bob")
+        self.assertIn("isn't verified", p.stderr)
+        self.assertEqual(self.inbox("mallory", DEADDROP_FROM="carol"), [])
+        self.assertEqual([x["subject"] for x in self.inbox(DEADDROP_FROM="alice")], ["Re: A question"])
+
+    def test_a_reply_box_set_once(self):
+        self.send("# Q\n\nx\n", "--to", "bob", DEADDROP_REPLY_BOX="alice-helper", **self.signed("alice"))
+        self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["reply_box"], "alice-helper")
+        self.dd("send", "--to", "bob", "--reply-box", "Not A Box", input="# B\n\nx\n", ok=False)

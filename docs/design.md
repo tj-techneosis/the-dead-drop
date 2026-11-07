@@ -98,6 +98,12 @@ only when that persona is signed and verifies: anyone can claim one on an
 unsigned letter, which would send the answer where nobody reads. Never by
 what the original was for. One box, one key, one person.
 
+**A reply box.** Some people give an assistant a box of its own rather than
+a pigeonhole. `--reply-box` puts that box on a letter, sealed (v4 of the
+signed text), and `reply` answers there, as email's Reply-To does, but only
+when the letter verifies: written onto an unsigned letter, it would send the
+answer wherever a forger liked.
+
 ## Signatures
 
 Everyone may reach the store as one login, so nothing on the store can tell
