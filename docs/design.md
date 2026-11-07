@@ -248,7 +248,10 @@ fetched when asked for.
 The cache of signature checks is different: it does say "verified", so it
 is only as good as whoever can write it. It's kept only where that's the
 person who already controls the list: their own list, their own private
-state folder, neither writable by anyone else, and no pinned list (a pin
+state folder, neither writable by anyone else; the state folder, with
+links and `..` resolved, inside home, every folder from it up to home
+(home included) theirs or root's and writable by nobody else, the cache file
+a plain file of theirs; and no pinned list (a pin
 means a shared login, which can write the state folder but not the list).
 It keeps only passes, keyed on the list's bytes, the ssh-keygen that
 checked, the signer, the seal and the signed text, and it steps aside for

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -122,6 +123,7 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 	}
 	me, err := explicitMe()
 	if err != nil || me == "" {
+		fmt.Fprintln(os.Stderr, "deaddrop: --cached needs to know who you are (DEADDROP_FROM, or me in the config): reading from the store")
 		return remoteBytes(host, cmd, args)
 	}
 	path := filepath.Join(mirrorDir(), mirrorKey(host, cmd, args, me)+".json")

@@ -431,7 +431,7 @@ class Mirror(RemoteBase):
         self.rdd("pull", "--json", "--cached", env=self.bob())  # shown the copy from 1
         self.clock = at(4)
         self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # tells the store: heard as of 1
-        self.assertEqual(heard.stat().st_mtime, epoch(at(1)))  # B, at 2, is still unheard
+        self.assertEqual(heard.stat().st_mtime, epoch(at(1)) - 1)  # a second back; B, at 2, is still unheard
 
 
 class DefaultBox(RemoteBase):

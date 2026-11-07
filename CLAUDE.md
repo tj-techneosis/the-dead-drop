@@ -19,7 +19,7 @@ Claude Code setup.
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
-| `cmd/deaddrop/vcache.go` | the reader's cache of signature checks (`verified.json`), keyed on the list, signer, seal and text |
+| `cmd/deaddrop/vcache.go` | the reader's cache of passed signature checks (`verified.json`), keyed on the list, ssh-keygen, signer, seal and text; only where the list is the reader's own and the state folder, resolved, is inside home with every folder up to home theirs |
 | `cmd/deaddrop/ledger.go` | the reader's seal ledger (`seals.json` in the state folder): replays read as delivered again |
 | `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
 | `cmd/deaddrop/thread.go` | `thread` and `with`: both sides in time order, and their page (`markdown.go`) |

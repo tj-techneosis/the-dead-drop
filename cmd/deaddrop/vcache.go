@@ -22,7 +22,10 @@ import (
 // A kept "verified" is only as trustworthy as whoever can write the cache.
 // So it's used only where that's already the person who controls the list:
 // the list is their own file, the state folder is theirs and private, and
-// neither is writable by anyone else. Under a pinned list (a shared login,
+// neither is writable by anyone else; the state folder, resolved (no "..",
+// no links), is inside home, and every folder from it up to home, home
+// included, is the person's (or root's) and writable by nobody else; and the
+// cache file is a plain file of theirs, never a link. Under a pinned list (a shared login,
 // where the login can write the state folder but not the list) there is no
 // cache. Nor when the list has keys that expire (valid-before, valid-after)
 // or a certificate authority, whose answers change with the clock.
@@ -87,11 +90,24 @@ func vcacheAllowed(signers string) bool {
 	if info, err := os.Lstat(vcachePath()); err == nil && (!info.Mode().IsRegular() || !mine(vcachePath())) {
 		return false // a link, or someone else's file
 	}
+	// Home and the state folder as they really are: no "..", no links, so a
+	// path can't look inside home and lead out of it.
+	resolve := func(p string) string {
+		if p == "" {
+			return ""
+		}
+		r, err := filepath.EvalSymlinks(filepath.Clean(p))
+		if err != nil {
+			return ""
+		}
+		return r
+	}
 	home, _ := os.UserHomeDir()
-	if home == "" || !strings.HasPrefix(stateDir(), home+string(filepath.Separator)) {
+	home, state := resolve(home), resolve(stateDir())
+	if home == "" || state == "" || !strings.HasPrefix(state, home+string(filepath.Separator)) {
 		return false // a state folder outside home: nothing here vouches for its folders
 	}
-	for d := filepath.Dir(stateDir()); strings.HasPrefix(d, home); d = filepath.Dir(d) {
+	for d := filepath.Dir(state); strings.HasPrefix(d+string(filepath.Separator), home+string(filepath.Separator)); d = filepath.Dir(d) {
 		info, err := os.Stat(d)
 		if err != nil || info.Mode().Perm()&0o022 != 0 {
 			return false

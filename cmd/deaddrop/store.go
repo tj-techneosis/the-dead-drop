@@ -292,6 +292,9 @@ func hearAt(dir, box, helper string, t time.Time) {
 	if at := now(); t.After(at) {
 		t = at
 	}
+	// A second back: times are kept to the second, so a letter landing later
+	// in the very second of the read stays unheard (louder, never hidden).
+	t = t.Add(-time.Second)
 	if !t.After(heardAt(dir, box, helper)) {
 		return
 	}
@@ -304,7 +307,10 @@ func hearAt(dir, box, helper string, t time.Time) {
 // heardAt is when a pigeonhole was last read: zero if never stamped.
 func heardAt(dir, box, helper string) time.Time {
 	info, err := os.Stat(filepath.Join(slotDir(dir, box, helper), heardFile))
-	if err != nil {
+	if err != nil || info.ModTime().After(now()) {
+		// A stamp in the future (a clock set back, a planted file) would hide
+		// every new letter as heard: it counts as never heard, and the next
+		// read writes a true one.
 		return time.Time{}
 	}
 	return info.ModTime()
