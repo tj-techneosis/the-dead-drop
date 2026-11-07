@@ -169,19 +169,34 @@ func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 	}
 	// A link from a folder others can write, into the checked state folder:
 	// the folder holding the link is checked too, so no cache.
-	shared := t.TempDir()
+	shared := d + "/shared" // inside home, so it's the folder check that refuses
+	os.Mkdir(shared, 0o700)
 	os.Chmod(shared, 0o777)
 	os.Symlink(state, shared+"/ln")
 	t.Setenv("DEADDROP_STATE", shared+"/ln")
 	if vcacheAllowed(list) {
 		t.Fatal("a state folder reached through a shared folder: no cache")
 	}
-	// A refused path outside home is never created.
-	t.Setenv("DEADDROP_STATE", outside+"/never")
-	vcacheAllowed(list)
-	if _, err := os.Stat(outside + "/never"); err == nil {
-		t.Fatal("a refused state folder was created")
+	// A refused path outside home is never created, plainly or through a
+	// link inside home that leads out.
+	for _, p := range []string{outside + "/never", d + "/.local/out/never"} {
+		t.Setenv("DEADDROP_STATE", p)
+		vcacheAllowed(list)
 	}
+	if _, err := os.Stat(outside + "/never"); err == nil {
+		t.Fatal("a refused state folder was created outside home")
+	}
+	// A save goes nowhere once the state folder no longer resolves to the
+	// folder that was checked.
+	t.Setenv("DEADDROP_STATE", state)
+	vcacheAllowed(list)
+	vcache = &verifyCache{Checks: map[string]bool{"k": true}, Owners: map[string][]string{}, dirty: true}
+	t.Setenv("DEADDROP_STATE", d+"/.local/out")
+	saveVCache()
+	if _, err := os.Stat(state + "/verified.json"); err == nil {
+		t.Fatal("a save after the state folder moved")
+	}
+	vcache = nil
 	t.Setenv("DEADDROP_STATE", state)
 	if !vcacheAllowed(list) || vcacheDir == "" {
 		t.Fatal("back home: the cache, in the resolved folder")

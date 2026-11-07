@@ -64,12 +64,15 @@ func signersHash(path string) string {
 // vcacheOK says the cache may be used with this list (see above).
 var vcacheOKMemo = map[string]bool{}
 
+var vcacheDirMemo = map[string]string{}
+
 func vcacheOK(signers string) bool {
 	if ok, seen := vcacheOKMemo[signers]; seen {
+		vcacheDir = vcacheDirMemo[signers] // the folder that passed, with its verdict
 		return ok
 	}
 	ok := vcacheAllowed(signers)
-	vcacheOKMemo[signers] = ok
+	vcacheOKMemo[signers], vcacheDirMemo[signers] = ok, vcacheDir
 	return ok
 }
 
@@ -118,10 +121,23 @@ func vcacheAllowed(signers string) bool {
 	if home == "." || !filepath.IsAbs(literal) || !strings.HasPrefix(literal, home+string(filepath.Separator)) {
 		return false
 	}
+	realHome, err1 := filepath.EvalSymlinks(home)
+	// Before making anything: the nearest folder of it that's already there,
+	// resolved, must be inside home too, so a link on the way can't lead the
+	// creation out of home.
+	existing := literal
+	for {
+		if _, err := os.Stat(existing); err == nil {
+			break
+		}
+		existing = filepath.Dir(existing)
+	}
+	if r, err := filepath.EvalSymlinks(existing); err1 != nil || err != nil || (r != realHome && !strings.HasPrefix(r, realHome+string(filepath.Separator))) {
+		return false
+	}
 	if os.MkdirAll(literal, 0o700) != nil || !chain(literal, home) {
 		return false
 	}
-	realHome, err1 := filepath.EvalSymlinks(home)
 	state, err2 := filepath.EvalSymlinks(literal)
 	if err1 != nil || err2 != nil || !strings.HasPrefix(state, realHome+string(filepath.Separator)) || !chain(state, realHome) {
 		return false
