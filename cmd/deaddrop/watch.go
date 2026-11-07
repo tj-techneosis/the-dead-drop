@@ -374,7 +374,7 @@ func setWatchFor(f flags) error {
 		return fmt.Errorf("--for: one helper (a watch keeps one pigeonhole's file)")
 	}
 	watchFor = helper
-	if f.has("box") {
+	if f.has("box") || defaultBox() != "" {
 		if len(f.all("box")) > 1 {
 			return fmt.Errorf("--box: one box (a watch keeps one box's file; run one watch per box)")
 		}
@@ -475,7 +475,7 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -512,6 +512,9 @@ func cmdShow(args []string) error {
 			return err
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
+		if !f.has("unheard") {
+			hear(dir, m.Box, m.Pigeonhole)
+		}
 	}
 	switch {
 	case f.has("json"):

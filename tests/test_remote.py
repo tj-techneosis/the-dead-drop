@@ -393,3 +393,28 @@ class Mirror(RemoteBase):
         self.ids()
         self.rdd("watch", "--no-hooks", env=self.bob())
         self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())
+
+
+class DefaultBox(RemoteBase):
+    """A session with a box of its own ($DEADDROP_BOX, or the reply box it
+    asks answers at) reads there by default, here and over ssh."""
+
+    def test_reading_commands_default_to_the_sessions_box(self):
+        a = self.rdd("send", "--to", "alice-helper", input="# For the helper\n\nx\n").stdout.split()[1]
+        self.rdd("send", "--to", "alice", input="# For alice\n\nx\n", env=dict(DEADDROP_FROM="bob"))
+        for var in ("DEADDROP_BOX", "DEADDROP_REPLY_BOX"):
+            env = {var: "alice-helper"}
+            self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "--json", env=env).stdout)], [a])
+            self.assertEqual([m["id"] for m in json.loads(self.rdd("pull", "--json", env=env).stdout)], [a])
+            self.assertIn("For the helper", self.rdd("show", a, env=env).stdout)
+        self.rdd("mark", "read", a, env=dict(DEADDROP_REPLY_BOX="alice-helper"))
+        self.assertTrue((self.far_store / "alice-helper" / "read" / (a + ".md")).exists())
+        # What you sent stays yours, and a named box still wins.
+        self.assertIn("For the helper", self.rdd("sent", env=dict(DEADDROP_BOX="alice-helper")).stdout)
+        self.assertIn("For alice", self.rdd("pull", "alice", env=dict(DEADDROP_BOX="alice-helper")).stdout)
+
+    def test_a_letter_in_another_box_says_where(self):
+        a = self.rdd("send", "--to", "alice-helper", input="# Q\n\nx\n").stdout.split()[1]
+        self.rdd("send", "--to", "alice", input="# Mine\n\nx\n", env=dict(DEADDROP_FROM="bob"))
+        p = self.rdd("mark", "read", a, ok=False)
+        self.assertIn("--box alice-helper", p.stderr)

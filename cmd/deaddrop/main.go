@@ -172,6 +172,7 @@ func dispatch(cmd string, args []string) error {
 	// A send is signed here, on the sender's own machine, before it goes.
 	args = withPersona(cmd, args)
 	args = withFor(cmd, args)
+	args = withBox(cmd, args)
 	if cmd, args, err = signOutgoing(cmd, args); err != nil {
 		return err
 	}

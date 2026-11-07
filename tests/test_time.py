@@ -47,16 +47,28 @@ class Firetower(DeadDrop):
         ages = ("--smoke-after", "30m", "--fire-after", "3h")
         self.clock = at(10)
         self.dd("firetower", "--box", "bob", *ages)
-        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["green", "1 unread, the oldest waiting 10m"])
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["green", "1 unread, 1 unheard, the oldest 10m"])
         self.clock = at(45)
         self.dd("firetower", "--box", "bob", *ages)
-        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "1 unread, the oldest waiting 45m"])
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "1 unread, 1 unheard, the oldest 45m"])
+        self.assertIn("mail", self.calls(self.tower_calls)[-1])  # tagged mail
         self.clock = at(200)
         self.dd("firetower", "--box", "bob", *ages)
         self.assertEqual(self.calls(self.tower_calls)[-1][2], "red")
+        # Read without marking: heard, so clear, though still unread.
+        self.dd("pull", "bob")
+        self.clock = at(400)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["green", "1 unread"])
+        # A copy kept by a mirror isn't hearing it: --unheard leaves no stamp.
+        self.send("b\n", "--to", "bob")
+        self.clock = at(500)
+        self.dd("pull", "bob", "--unheard")
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.tower_calls)[-1][2], "yellow")
         # Without ages, as before; and the ages must make sense.
         self.dd("firetower", "--box", "bob")
-        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "1 unread"])
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "2 unread"])
         self.dd("firetower", "--smoke-after", "3h", "--fire-after", "1h", ok=False)
 
     def test_nothing_private_on_the_board(self):

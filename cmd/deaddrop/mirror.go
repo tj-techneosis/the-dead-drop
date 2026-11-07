@@ -113,11 +113,21 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 			return e.Answer, nil
 		}
 	}
-	return fetchIntoMirror(path, host, cmd, args, me)
+	return fetchIntoMirror(path, host, cmd, args, me, false)
 }
 
-func fetchIntoMirror(path, host, cmd string, args []string, me string) ([]byte, error) {
-	out, err := remoteBytes(host, cmd, args)
+func fetchIntoMirror(path, host, cmd string, args []string, me string, refresh bool) ([]byte, error) {
+	var out []byte
+	var err error
+	if refresh && (cmd == "pull" || cmd == "show") {
+		// Keeping a copy isn't reading it: the box isn't stamped heard.
+		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard"))
+		if err != nil && strings.Contains(err.Error(), "--unheard") {
+			out, err = remoteBytes(host, cmd, args) // an older store
+		}
+	} else {
+		out, err = remoteBytes(host, cmd, args)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +184,7 @@ func refreshMirror() (int, error) {
 		if e.Me != me || !mirrored[e.Cmd] {
 			continue // someone else's on this machine, or not ours to ask
 		}
-		if _, err := fetchIntoMirror(k.path, e.Host, e.Cmd, e.Args, e.Me); err != nil {
+		if _, err := fetchIntoMirror(k.path, e.Host, e.Cmd, e.Args, e.Me, true); err != nil {
 			if first == nil {
 				first = err
 			}

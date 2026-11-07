@@ -213,6 +213,9 @@ func cmdSent(args []string) error {
 		return badf(u, "sent takes no words of its own (%q)", f.pos[0])
 	}
 	who, err := resolveBox("--box", f.get("box"))
+	if !f.has("box") {
+		who, err = whoAmI() // what you sent is the person's, whatever box they read
+	}
 	if err != nil {
 		return err
 	}

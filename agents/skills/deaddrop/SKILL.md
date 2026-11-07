@@ -70,7 +70,8 @@ EOF
 - **Several people:** `--to bob --to carol` (each gets a copy).
 - **You have a box of your own** (an assistant with its own box, like
   `alice-helper`): send with `--reply-box <your box>` (or set
-  `DEADDROP_REPLY_BOX` for the session), so answers come to you, not to
+  `DEADDROP_REPLY_BOX` for the session: then `inbox`, `pull`, `show`,
+  `mark` and `watch` read that box by default too), so answers come to you, not to
   the person.
 - **You're an assistant writing for the person:** sign as a persona,
   `--as "<your role>"` (or `DEADDROP_AS` for the session): their name,

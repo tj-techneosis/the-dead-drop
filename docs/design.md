@@ -197,6 +197,15 @@ sent to it, which isn't the tool's call to make for everyone.
 
 ## Pull, then mark
 
+`pull` changes no letter's state, but it does leave one mark: the time it
+read each pigeonhole, in `.heard` beside `new/` (no contents, no reader's
+name). A board can then tell a box someone is reading but hasn't marked
+from a box nobody reads at all: unread says what's still to be dealt
+with, unheard says whether anyone is listening. `show` and `mark` stamp it
+too. `inbox` doesn't, because a watch lists the box every minute, and
+neither does a mirror's copy (`--unheard`), because a watch that fetches
+a box isn't anyone reading it.
+
 `pull` prints everything that matches, in full, in one go: unread first,
 oldest first within that, so a session reads mail in the order it arrived
 and sees the new before the old. Each message sits between separator lines

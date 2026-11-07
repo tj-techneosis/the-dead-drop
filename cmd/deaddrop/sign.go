@@ -496,6 +496,21 @@ func withFor(cmd string, args []string) []string {
 	return append(append([]string{}, args...), "--for", h)
 }
 
+// boxFlagged are the commands that name a box with --box; withBox adds the
+// default box to them. inbox, ls and pull name theirs as a word, which they
+// add themselves when they go to the store.
+var boxFlagged = map[string]bool{"mark": true, "show": true, "file": true}
+
+// withBox adds the default box (defaultBox) to a command that doesn't name
+// one, on the caller's machine, so it reaches the store as a flag.
+func withBox(cmd string, args []string) []string {
+	b := defaultBox()
+	if b == "" || !boxFlagged[cmd] || hasFlag(args, "box") {
+		return args
+	}
+	return append(append([]string{}, args...), "--box", b)
+}
+
 // hasFlag says args name --flag (before any --).
 func hasFlag(args []string, flag string) bool {
 	for _, a := range args {

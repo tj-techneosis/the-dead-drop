@@ -80,7 +80,7 @@ answered with a status: `--untag proposal --tag status`).
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 | `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
 | `--ask` | the letter needs its recipient's decision. Its first paragraph is the question. `deaddrop asks` lists the ones you haven't answered |
-| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session |
+| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session, and that session then reads there by default too (`inbox`, `pull`, `show`, `file`, `mark`, `watch`, the threads); `$DEADDROP_BOX` sets only the reading box. `sent` stays yours, and naming a box always wins |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -485,11 +485,15 @@ reports one lookout per box to the Firetower on the store's machine,
 | unread | smoke, "3 unread" |
 | urgent unread | fire, "1 urgent, 3 unread" |
 
-With `--smoke-after 30m --fire-after 3h`, a box goes by how long its oldest
-unread letter has waited instead: clear until it's waited 30 minutes, smoke
-after that, fire after 3 hours ("2 unread, the oldest waiting 45m"). That
-shows mail nobody is reading, not just mail that's arrived. Either flag can
-be used alone.
+With `--smoke-after 30m --fire-after 3h`, a box goes by its **unheard**
+mail instead: letters that arrived after anyone last read the box (a
+`pull`, a `show`, a `mark`; the store keeps just the time, in `.heard`). It's
+clear until the oldest unheard letter has waited 30 minutes, smoke after
+that, fire after 3 hours ("3 unread, 1 unheard, the oldest 45m"). So a reader
+who pulls and hasn't marked yet stays clear, and a box nobody reads goes to
+fire on its own. Urgent mail is fire either way. `inbox`, `watch` and
+`watch --mirror`'s copies don't count as reading. Either flag can be used
+alone. Every lookout is tagged `mail`.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens

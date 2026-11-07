@@ -86,14 +86,19 @@ func cmdFiretower(args []string) error {
 		case s.Unread > 0:
 			status, msg = "yellow", fmt.Sprintf("%d unread", s.Unread)
 			if smokeAfter > 0 || fireAfter > 0 {
-				waited := oldestWait(dir, box)
+				// By what's unheard: mail that's arrived since anyone last read
+				// the box. Readers who pull and don't mark stay clear; a box
+				// nobody reads goes to fire on its own.
+				unheard, waited := unheardWait(dir, box)
 				switch {
+				case unheard == 0, smokeAfter > 0 && waited < smokeAfter:
+					status = "green"
 				case fireAfter > 0 && waited >= fireAfter:
 					status = "red"
-				case smokeAfter > 0 && waited < smokeAfter:
-					status = "green"
 				}
-				msg += ", the oldest waiting " + spanWords(waited)
+				if unheard > 0 {
+					msg += fmt.Sprintf(", %d unheard, the oldest %s", unheard, spanWords(waited))
+				}
 			}
 		}
 		if s.Newest != nil {
@@ -102,7 +107,7 @@ func cmdFiretower(args []string) error {
 				msg = whatsWaiting(msg, dir, box, s)
 			}
 		}
-		a := []string{"set", "mail/" + box + "/inbox", status, msg, "--value", value, "--label", "Mail: " + box}
+		a := []string{"set", "mail/" + box + "/inbox", status, msg, "--value", value, "--label", "Mail: " + box, "--tag", "mail"}
 		if next != "" {
 			a = append(a, "--next", next)
 		}
@@ -122,18 +127,29 @@ func cmdFiretower(args []string) error {
 	return nil
 }
 
-// oldestWait is how long the box's oldest unread letter has waited: since
-// it was sent, and never less than nothing (a letter can't date itself ahead
-// to look fresh).
-func oldestWait(dir, box string) time.Duration {
-	at := now()
+// unheardWait counts the box's unread letters that arrived after it was last
+// read (heardAt), and how long the oldest has waited. A letter arrived at
+// the earlier of the store's time for its file and the date it gives
+// itself: a letter can make itself look older (louder on the board), never
+// fresher (hidden).
+func unheardWait(dir, box string) (int, time.Duration) {
+	at, heard := now(), heardAt(dir, box, "")
+	n := 0
 	var most time.Duration
 	for _, m := range loadBox(dir, box, []string{"unread"}, false) {
-		if w := at.Sub(m.Sent); w > most {
+		arrived := m.Sent
+		if info, err := os.Stat(m.path); err == nil && info.ModTime().Before(arrived) {
+			arrived = info.ModTime()
+		}
+		if !arrived.After(heard) {
+			continue
+		}
+		n++
+		if w := at.Sub(arrived); w > most {
 			most = w
 		}
 	}
-	return most
+	return n, most
 }
 
 // spanWords is a wait as a board says it: 12m, 3h, 2d.

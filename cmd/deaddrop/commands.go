@@ -790,6 +790,15 @@ func (fl filter) describe() string {
 }
 
 // boxArg is a command's [WHO]: the caller's box unless named.
+// boxAcross names the box for the store when the caller didn't and it isn't
+// theirs (the default box), so the store doesn't read the caller's own.
+func boxAcross(f flags, box string, args []string) []string {
+	if len(f.pos) > 0 || defaultBox() != box {
+		return args
+	}
+	return append([]string{box}, args...)
+}
+
 func boxArg(u string, pos []string) (string, error) {
 	if len(pos) > 1 {
 		return "", badf(u, "one box at a time (got %s)", strings.Join(pos, " "))
@@ -828,7 +837,7 @@ func cmdInbox(args []string) error {
 	}
 	var ms []*Message
 	if viaHost != "" {
-		if ms, err = fetchRemote("inbox", args); err != nil {
+		if ms, err = fetchRemote("inbox", boxAcross(f, box, args)); err != nil {
 			return err
 		}
 		prepare(ms, false, "")
@@ -903,7 +912,7 @@ func cmdInbox(args []string) error {
 
 func cmdPull(args []string) error {
 	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread|--all] [--for HELPER|'*'] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true})
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true, "unheard": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -930,7 +939,7 @@ func cmdPull(args []string) error {
 	}
 	var ms []*Message
 	if viaHost != "" {
-		if ms, err = fetchRemote("pull", args); err != nil {
+		if ms, err = fetchRemote("pull", boxAcross(f, box, args)); err != nil {
 			return err
 		}
 		prepare(ms, false, "")
@@ -942,6 +951,18 @@ func cmdPull(args []string) error {
 		ms = fl.apply(loadFor(dir, box, helper, all, states, true))
 		sortForPull(ms)
 		prepare(ms, f.has("raw"), dir)
+		// Read: what was waiting has been heard. --unheard for a reader
+		// that only keeps a copy (watch --mirror), not one who reads it.
+		if !f.has("unheard") {
+			if all {
+				hear(dir, box, "")
+				for _, h := range helpers(dir, box) {
+					hear(dir, box, h)
+				}
+			} else {
+				hear(dir, box, helper)
+			}
+		}
 	}
 	if f.has("json") {
 		return printJSON(ms)
@@ -1280,6 +1301,7 @@ func cmdMark(args []string) error {
 		if err := move(dir, m, target); err != nil {
 			return err
 		}
+		hear(dir, m.Box, m.Pigeonhole)
 		if was != target {
 			moved++
 			if was == "unread" {
