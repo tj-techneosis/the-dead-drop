@@ -209,7 +209,9 @@ of who an unverified message says it's from.
 that it hasn't been changed. It can't prove that a store shows you
 everything honestly when the account that keeps the store is also the one
 reading it (a front end running on the store's machine as the store's own
-login): that account can hide a letter, put an old one back, or edit what the
+login): that account can hide a letter, put an old one back, plant a copy of a
+signed letter ahead of the real one (which then reads "delivered again"), or
+edit what the
 reader remembers. Readers with logins of their own (on their own machines,
 or through a gated key: see "A gated key" below) are out of its reach.
 
