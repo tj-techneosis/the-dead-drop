@@ -406,8 +406,14 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
   signs as no one else;
-- no `DEADDROP_` setting from the environment reaches it: the store's own
-  settings come from its config file.
+- nothing from the environment sshd built decides anything: no `DEADDROP_`
+  setting, no `XDG_` folder, a fixed `PATH`, and `HOME` from the account.
+  Where the store and its config are is the owner's to say in the line
+  itself (`--dir /srv/drop --config /srv/drop/config.toml`), or else their
+  usual place in the account's home. What goes wrong that the key holder
+  isn't told (a broken config) goes in `gate.log` at the store's top;
+- `file` and `reply` check signatures on the store, against the store's own
+  list (they record nothing outside the key's boxes).
 
 What that costs the key's holder, by design: `sent` lists only letters with
 a copy in a box the key reads, and a letter whose thread starts in a box it
@@ -634,7 +640,7 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
-deaddrop gate --as NAME --read BOX[,BOX]...   # the store's machine: an ssh forced command
+deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]

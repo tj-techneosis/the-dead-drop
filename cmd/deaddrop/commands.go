@@ -572,7 +572,9 @@ func deliver(dir string, d draft) error {
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
 	// not even whether they exist.
-	if d.replyBox != "" && !gateReadable(d.replyBox) {
+	if d.replyBox != "" && !gateReadable(d.replyBox) && d.sig != "" {
+		// (Only a signed letter's reply box is honoured; unsigned, answers go
+		// to the sender.)
 		fmt.Fprintf(os.Stderr, "deaddrop: answers to this go to %s, a box this key can't read\n", d.replyBox)
 	}
 	if d.replyBox != "" && gateReadable(d.replyBox) {

@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The gate: a key that can only do Dead Drop things, as one name, reading
@@ -23,6 +25,21 @@ import (
 // the store's commands, as --as whatever the line says, with every box a
 // reading command picks checked against --read. A shell, scp, sftp, a port
 // forward or anything else is refused: there's nothing for them to run.
+
+// gateLog notes, for the store's owner, what went wrong that a key holder
+// isn't told: one line in gate.log at the store's top (the owner's folder).
+func gateLog(format string, a ...any) {
+	dir, err := storeDir()
+	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "gate.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", now().UTC().Format(time.RFC3339), fmt.Sprintf(format, a...))
+}
 
 // gateRead is the boxes a gated caller may read: nil when not gated.
 var gateRead map[string]bool
@@ -51,8 +68,8 @@ func gateRefusal(box string) error {
 }
 
 func cmdGate(args []string) error {
-	const u = "gate --as NAME --read BOX[,BOX]...   (an ssh forced command on the store's machine)"
-	f, err := parseFlags(args, map[string]bool{"as": true, "read": true})
+	const u = "gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   (an ssh forced command on the store's machine)"
+	f, err := parseFlags(args, map[string]bool{"as": true, "read": true, "dir": true, "config": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -73,15 +90,32 @@ func cmdGate(args []string) error {
 			read[b] = true
 		}
 	}
-	// No DEADDROP_ setting from the environment sshd built reaches the
-	// command (AcceptEnv, environment= in authorized_keys, a profile): some
-	// pick programs that run as the store's login. The store's own settings
-	// come from its config file, at its usual place; the gate says who's
-	// asking.
+	for _, k := range []string{"dir", "config"} {
+		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k))) {
+			return badf(u, "--%s: one full path", k)
+		}
+	}
+	// Nothing from the environment sshd built (AcceptEnv, environment= in
+	// authorized_keys, a profile) decides anything: no DEADDROP_ setting and
+	// no XDG_ folder, PATH a fixed one (it picks the programs that run as the
+	// store's login), HOME the account's own. Where the store and its config
+	// are comes from this line, written by the store's owner (--dir,
+	// --config), or else their usual place in the account's home.
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "DEADDROP_") {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "DEADDROP_") || strings.HasPrefix(k, "XDG_") {
 			os.Unsetenv(k)
 		}
+	}
+	if acct, err := user.Current(); err == nil && acct.HomeDir != "" {
+		os.Setenv("HOME", acct.HomeDir)
+	}
+	home, _ := os.UserHomeDir()
+	os.Setenv("PATH", filepath.Join(home, ".local", "bin")+":/usr/local/bin:/usr/bin:/bin")
+	if f.has("dir") {
+		os.Setenv("DEADDROP_DIR", f.get("dir"))
+	}
+	if f.has("config") {
+		os.Setenv("DEADDROP_CONFIG", f.get("config"))
 	}
 	cachedConfig = nil
 	// Started by its full path, as authorized_keys names it: never found
@@ -94,6 +128,7 @@ func cmdGate(args []string) error {
 	// store: the gate runs only where the store is. (Which host is nobody's
 	// business who holds a key.)
 	if c, err := loadConfig(); err != nil {
+		gateLog("the config can't be read: %v", err) // the owner's to see, not the caller's
 		return fmt.Errorf("the store's config can't be read")
 	} else if c.Host != "" {
 		return fmt.Errorf("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
@@ -106,7 +141,10 @@ func cmdGate(args []string) error {
 	if err != nil {
 		return fmt.Errorf("this key is for the Dead Drop's remote mode only (%v)", err)
 	}
-	if len(words) == 0 || !gateCommands[words[0]] {
+	if len(words) == 0 {
+		return fmt.Errorf("this key runs one deaddrop command: say which (send, inbox, pull, …)")
+	}
+	if !gateCommands[words[0]] {
 		what := "nothing"
 		if len(words) > 0 {
 			what = cleanLine(words[0], 40)

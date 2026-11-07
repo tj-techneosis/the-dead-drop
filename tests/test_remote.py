@@ -473,7 +473,8 @@ class Gate(RemoteBase):
 printf '%s\\n' "$@" >> "{self.ssh_log}"
 for last; do :; done
 exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
-  SSH_ORIGINAL_COMMAND="$last" DEADDROP_FROM=mallory "{self.far}/.local/bin/deaddrop" gate --as alice --read alice,alice-helper
+  SSH_ORIGINAL_COMMAND="$last" DEADDROP_FROM=mallory "{self.far}/.local/bin/deaddrop" gate --as alice --read alice,alice-helper \\
+  --dir "{self.far_store}" --config "{self.far}/.config/deaddrop/config.toml"
 ''')
 
     def far_send(self, box, text, **env):
@@ -503,14 +504,17 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         for cmd in ("gc", "firetower", "follow-up"):
             self.assertIn("can't run", self.rdd(cmd, ok=False).stderr)
 
-    def gate(self, line, argv0=None, input=None, extra_env=None):
+    def gate(self, line, argv0=None, input=None, extra_env=None, gate_args=()):
         """The gate run directly, as sshd would, with this line."""
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "DEADDROP_NOW": self.clock}
         if line is not None:
             env["SSH_ORIGINAL_COMMAND"] = line
         env.update(extra_env or {})
         exe = argv0 or str(self.far / ".local" / "bin" / "deaddrop")
-        return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper"], input=input,
+        owner = ("--config", str(self.far / ".config" / "deaddrop" / "config.toml"))
+        if "--dir" not in gate_args:
+            owner += ("--dir", str(self.far_store))
+        return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner, *gate_args], input=input,
                               capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
 
     def test_sent_shows_only_copies_in_readable_boxes(self):
@@ -552,8 +556,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertNotIn("carol's box", p.stderr)
         p = self.gate("deaddrop send --to dave --reply-box zed --subject x", input="x\n")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("a box this key can't read", p.stderr)  # said, without saying whether it exists
-        self.assertNotIn("no box zed", p.stderr)
+        self.assertNotIn("zed", p.stderr)  # unsigned: answers go to the sender, and nothing is said of zed
 
     def test_a_flag_value_of_dashes_cant_hide_a_from(self):
         p = self.gate("deaddrop send --to bob --subject -- --from carol", input="x\n")
@@ -568,8 +571,14 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
 
     def test_the_environment_says_nothing(self):
         elsewhere = self.tmp / "elsewhere-store"
+        planted = self.tmp / "planted.toml"
+        planted.write_text('host = "elsewhere"\nrelay = true\n')
+        xdg = self.tmp / "xdg"
+        (xdg / "deaddrop").mkdir(parents=True)
+        (xdg / "deaddrop" / "config.toml").write_text('host = "elsewhere"\n')
         p = self.gate("deaddrop send --to alice --subject x", input="x\n",
-                      extra_env={"DEADDROP_DIR": str(elsewhere), "DEADDROP_CRONTINENTAL": "/bin/false", "DEADDROP_FROM": "carol"})
+                      extra_env={"DEADDROP_DIR": str(elsewhere), "DEADDROP_CONFIG": str(planted), "XDG_CONFIG_HOME": str(xdg),
+                                 "XDG_DATA_HOME": str(elsewhere), "DEADDROP_FROM": "carol", "PATH": str(self.tmp)})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(elsewhere.exists())
         self.assertRegex(p.stdout, r"-alice-")
@@ -590,3 +599,23 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("remote mode only", self.gate(None).stderr)
         p = self.gate("deaddrop inbox --raw --json", argv0="./deaddrop")
         self.assertIn("full path", p.stderr)
+
+    def test_the_owner_says_where_the_store_is(self):
+        own = self.tmp / "srv-drop"
+        p = self.gate("deaddrop send --to alice --subject x", input="x\n", gate_args=("--dir", str(own)))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(list((own / "alice" / "new").glob("*.md")))
+        self.assertIn("full path", self.gate("deaddrop inbox --raw --json", gate_args=("--dir", "rel")).stderr)
+
+    def test_a_broken_config_is_logged_for_the_owner(self):
+        cfg = self.far / ".config" / "deaddrop"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "config.toml").write_text("not = [toml\n")
+        p = self.gate("deaddrop inbox --raw --json")
+        self.assertIn("can't be read", p.stderr)
+        self.assertNotIn("toml", p.stderr)
+        log = (self.far_store / "gate.log").read_text()
+        self.assertIn("config can't be read", log)
+
+    def test_no_command_asks_for_one(self):
+        self.assertIn("say which", self.gate("deaddrop").stderr)
