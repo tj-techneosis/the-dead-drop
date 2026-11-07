@@ -277,6 +277,17 @@ there's no store, so a wrong `host` shows as an error, never as an empty
 inbox. Every argument is
 single-quoted for the far shell.
 
+A shared login is the limit of all this: every key on it can say it's
+anyone. `deaddrop gate` is the way out without a login per person. It's a
+forced command for one key, so sshd never gives that key a shell: it hands
+the gate the line remote mode sent, and the gate reads it with a parser that
+accepts only that shape (single-quoted words after remote mode's own front),
+so there's nothing for a shell, scp or sftp to run. It sets who's asking
+itself, allows only the store's commands, and checks every box a reading
+command resolves (in `resolveBox`, where a named box and the default both
+pass) against its `--read`. Signing stays on the caller's machine; the gate
+only carries the letter.
+
 ## Your own machine: the inbox file and hooks
 
 Mail that only a terminal can show isn't mail you read. So the Dead Drop

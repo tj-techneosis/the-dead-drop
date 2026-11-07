@@ -287,6 +287,8 @@ func cmdReply(args []string) error {
 		if in, err = resolveBox("--box", f.get("box")); err != nil {
 			return bad(u, err)
 		}
+	} else if !gateReadable(in) {
+		return gateRefusal(in)
 	}
 	orig, err := findAnywhere(dir, in, f.pos[0], true)
 	if err != nil {

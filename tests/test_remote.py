@@ -458,3 +458,46 @@ class DefaultBox(RemoteBase):
         p = self.rdd("mark", "read", a, ok=False)
         self.assertIn("--box alice-helper", p.stderr)
 
+
+
+class Gate(RemoteBase):
+    """A gated key: the store's login runs `deaddrop gate --as alice --read
+    alice,alice-helper` for it, whatever the caller asks, and nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        # The stand-in for sshd with a forced command: the line the caller
+        # sent goes to the gate as $SSH_ORIGINAL_COMMAND, never to a shell.
+        self.ssh = __import__("_binary").script(self.tmp / "ssh-gated", f'''
+printf '%s\\n' "$@" >> "{self.ssh_log}"
+for last; do :; done
+exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
+  SSH_ORIGINAL_COMMAND="$last" DEADDROP_FROM=mallory "{self.far}/.local/bin/deaddrop" gate --as alice --read alice,alice-helper
+''')
+
+    def far_send(self, box, text, **env):
+        return self.dd("send", "--to", box, input=text, DEADDROP_DIR=str(self.far_store), DEADDROP_FROM=env.get("frm", "carol")).stdout.split()[1]
+
+    def test_the_key_reads_its_own_boxes_and_sends_as_itself(self):
+        a = self.far_send("alice", "# For alice\\n\\nx\\n")
+        self.far_send("alice-helper", "# For the helper\\n\\nx\\n")
+        self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "--json").stdout)], [a])
+        self.assertIn("For the helper", self.rdd("pull", "alice-helper").stdout)
+        self.rdd("mark", "read", a)
+        sent = self.rdd("send", "--to", "bob", input="# Hello\\n\\nx\\n").stdout
+        self.assertRegex(sent, r"-alice-")  # as alice, though the far side was told mallory
+        self.assertTrue((self.far_store / "alice" / "read" / (a + ".md")).exists())
+
+    def test_the_key_reads_nothing_else(self):
+        self.far_send("bob", "# Bob's\\n\\nx\\n")
+        self.assertIn("reads only alice, alice-helper", self.rdd("inbox", "bob", "--json", ok=False).stderr)
+        self.assertIn("reads only", self.rdd("pull", "--json", env=dict(DEADDROP_BOX="bob"), ok=False).stderr)
+        self.assertIn("reads only", self.rdd("status", "--box", "bob", ok=False).stderr)
+        self.assertIn("names its boxes", self.rdd("status", ok=False).stderr)
+        b = self.far_send("bob", "# Another\\n\\nx\\n")
+        self.assertIn("reads only", self.rdd("mark", "read", b, "--box", "bob", ok=False).stderr)
+
+    def test_the_key_sends_only_as_itself_and_runs_only_the_store_commands(self):
+        self.assertIn("sends only as alice", self.rdd("send", "--to", "bob", "--from", "automation", input="x\\n", ok=False).stderr)
+        for cmd in ("gc", "firetower", "follow-up"):
+            self.assertIn("can't run", self.rdd(cmd, ok=False).stderr)

@@ -24,6 +24,7 @@ Claude Code setup.
 | `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
 | `cmd/deaddrop/thread.go` | `thread` and `with`: both sides in time order, and their page (`markdown.go`) |
 | `cmd/deaddrop/read.go` | reading with the store elsewhere: fetch as stored (`--raw`), check here |
+| `cmd/deaddrop/gate.go` | `deaddrop gate`: an ssh forced command for one key: one name, its own boxes, the store's commands only |
 | `agents/` | what ships to users' Claude Code: the skill and the CLAUDE.md snippet |
 | `examples/` | a config, the store machine's jobs, ways to run `watch`, a `new.d` hook, the SwiftBar and Omarchy inboxes, a Claude Code hook that tells a session its unread count (`claude-code/`) |
 | `install.sh` | three modes: piped fetches a release, a checkout builds, an unpacked release installs its binary |
