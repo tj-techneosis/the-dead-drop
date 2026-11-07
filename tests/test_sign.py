@@ -327,3 +327,33 @@ class Signed(DeadDrop):
         ms = self.inbox(DEADDROP_FROM="bob")
         self.assertEqual({m["signature"] for m in ms}, {"verified"})
         self.assertTrue(all("one is a copy" in m["signature_note"] for m in ms))
+
+    # ---- review qwht ----
+
+    def test_a_relative_follow_up_signs_and_verifies(self):
+        installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists():
+            os.symlink(BIN, installed)
+        self.send("# Look\n\nx\n", "--to", "bob", "--follow-up", "90m", **self.as_("alice"))
+        m = self.one()
+        self.assertEqual((m["signature"], m["follow_up"]), ("verified", at(90)))
+
+    def test_a_follow_up_line_nobody_signed_isnt_shown(self):
+        self.send("# Plain\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        path.write_text(path.read_text().replace("urgency: normal", "urgency: normal\nfollow_up: 2030-01-01T00:00:00Z"))
+        m = self.one()
+        self.assertEqual(m["signature"], "verified")
+        self.assertNotIn("follow_up", m)
+
+    def test_sums_must_match_the_attachments(self):
+        att = self.tmp / "a.txt"
+        att.write_text("a\n")
+        self.send("# Hi\n\nx\n", "--to", "bob", "--attach", str(att), **self.as_("alice"))
+        path = self.path()
+        text = path.read_text()
+        sums = next(l for l in text.splitlines() if l.startswith("attachment_sha256:"))
+        extra = sums.replace("]", ", " + "0" * 64 + "]")
+        path.write_text(text.replace(sums, extra))
+        self.assertEqual(self.one()["signature"], "bad")

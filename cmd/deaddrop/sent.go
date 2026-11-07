@@ -216,6 +216,7 @@ func cmdSent(args []string) error {
 	if err != nil {
 		return err
 	}
+	ledgerOff = true
 	fl, err := filterOf(f)
 	if err != nil {
 		return bad(u, err)
@@ -310,7 +311,7 @@ func cmdSent(args []string) error {
 		if tags == "" {
 			tags = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(s.Sent, at), sigMark(s.Message), strings.Join(to, ", "), tags, s.Subject)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(s.Sent, at), sigMark(s.Message), strings.Join(to, ", "), cleanLine(tags, 60), cleanLine(s.Subject, 120))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

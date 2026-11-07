@@ -267,6 +267,8 @@ Panel {
 
   // The pigeonhole on show, as a line: a helper's counts come from its fetch.
   function holeLine() {
+    if (holeReader.running && root.holeMessages.length === 0) return "For " + root.hole + ": looking…"
+    if (root.holeNote !== "" && root.holeMessages.length === 0) return "For " + root.hole + ": couldn't read it"
     var n = 0
     for (var i = 0; i < root.holeMessages.length; i++) if (root.holeMessages[i].state === "unread") n++
     return "For " + root.hole + ": " + (n > 0 ? n + " unread" : "no unread mail")
@@ -319,9 +321,13 @@ Panel {
   // One at a time; one asked for while another runs waits its turn.
   function runAction(cmd, note) {
     if (actor.running) {
-      var key = cmd.join(" ")
-      if (actor.command.slice(1).join(" ") === key) return
-      for (var i = 0; i < root.pending.length; i++) if (root.pending[i][0].join(" ") === key) return
+      // A check asked for again while one runs or waits is the same check;
+      // anything else (a mark, an open) always waits its turn.
+      if (cmd[0] === "watch") {
+        var key = cmd.join(" ")
+        if (actor.command.slice(1).join(" ") === key) return
+        for (var i = 0; i < root.pending.length; i++) if (root.pending[i][0].join(" ") === key) return
+      }
       root.pending = root.pending.concat([[cmd, note]])
       return
     }
@@ -494,6 +500,8 @@ Panel {
     // mark and watch rewrite the inbox file; the FileView picks that up. A
     // helper's pigeonhole and the threads are fetched again.
     onExited: function(exitCode) {
+      // The same action working now clears what it said when it didn't.
+      if (exitCode === 0 && root.actionNote.indexOf(actor.label + " didn't work") === 0) root.actionNote = ""
       inboxFile.reload()
       root.refreshViews()
       if (root.pending.length > 0) {
@@ -680,7 +688,7 @@ Panel {
               model: root.holes
               Chip {
                 required property string modelData
-                label: "for " + modelData + (root.holeUnread[modelData] ? " (" + root.holeUnread[modelData] + ")" : "")
+                label: (root.holeUnread[modelData] ? "(" + root.holeUnread[modelData] + ") " : "") + "for " + modelData
                 on: root.hole === modelData
                 onPicked: root.pickHole(modelData)
               }

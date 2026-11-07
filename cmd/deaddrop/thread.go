@@ -379,7 +379,7 @@ func showCorrespondence(f flags, c *Correspondence) error {
 			who = "→ " + strings.Join(l.Recipients, ", ")
 			state = seen(l)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(l.Sent, at), sigMark(l.Message), who, state, l.Subject)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(l.Sent, at), sigMark(l.Message), who, state, cleanLine(l.Subject, 120))
 		if l.Gist != "" && l.Gist != l.Subject {
 			fmt.Fprintf(tw, "\t\t\t\t  %s\n", cleanLine(l.Gist, 120))
 		}
@@ -609,6 +609,9 @@ func cmdThreads(args []string) error {
 			w := p.Box
 			if p.Persona != "" {
 				w += " as " + p.Persona
+				if p.Signature != sigVerified {
+					w += " (unverified)"
+				}
 			}
 			if p.Signature == sigBad {
 				w += " ✗"

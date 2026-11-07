@@ -263,6 +263,9 @@ func wellFormed(m *Message) bool {
 			return false
 		}
 	}
+	if len(m.AttachmentSums) != 0 && len(m.AttachmentSums) != len(m.Attachments) {
+		return false
+	}
 	for _, s := range m.AttachmentSums {
 		if len(s) != 64 || strings.Trim(s, "0123456789abcdef") != "" {
 			return false
@@ -363,6 +366,11 @@ func verifyState(m *Message) (string, string) {
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
+			if t.followUp == "" && m.FollowUp != "" {
+				// Not in what was signed (a letter from before 0.6.4, or one
+				// written onto it since): not shown as the sender's.
+				m.FollowUp = ""
+			}
 			raised := ""
 			if t.raise {
 				raised = "; raised to urgent by its follow-up, not by the sender"
@@ -557,6 +565,11 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		return cmd, args, err
 	}
 	out := append([]string{}, args...)
+	if fu := followUpText(d.followUp); fu != "" {
+		// Worked out once, here, and sealed: the store must not work out
+		// "2d" again a moment later and get another time.
+		out = append(out, "--follow-up", fu)
+	}
 	return "send", append(out, "--subject", d.subject, "--signed-by", signer, "--signed-at", at, "--signature", sig), nil
 }
 

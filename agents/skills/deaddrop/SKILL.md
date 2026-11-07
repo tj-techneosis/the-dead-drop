@@ -240,14 +240,16 @@ deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F].
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]
-deaddrop show ID [--json|--html] [--box WHO] [--for H]
+deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--since 7d] [--box WHO] [--json]
 deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
-deaddrop threads [--for H] [--json]                # every thread, newest activity first
+deaddrop threads [--for H] [--since 7d] [--limit N] [--letters [--bodies]] [--json]   # every thread, newest first
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
-deaddrop watch [--every 1m] [--for H]    # on the person's own machine
+deaddrop watch [--every 1m] [--no-hooks] [--for H]   # on the person's own machine
+deaddrop bar [--format text|swiftbar] [--for H]
+deaddrop key                             # this machine's line for everyone's allowed_signers
 deaddrop open ID [--for H]               # read it in the browser, mark it read
 # --for H: a helper's pigeonhole ('*': every one); DEADDROP_FOR sets it for a session
 ```

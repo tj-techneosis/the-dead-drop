@@ -47,7 +47,7 @@ class Threads(DeadDrop):
         self.assertEqual(len(json.loads(self.dd("thread", a, "--json").stdout)["letters"]), 3)
         out = self.dd("thread", b).stdout
         self.assertIn("→ bob", out)
-        self.assertIn("← bob, as Release manager", out)
+        self.assertIn("← bob (unverified), as Release manager", out)
         self.assertIn("seen", out)
         self.dd("mark", "unread", "--tag", "tool-x", DEADDROP_FROM="bob")
         self.assertIn("not yet read", self.dd("thread", b).stdout)

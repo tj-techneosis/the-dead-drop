@@ -122,6 +122,10 @@ func cancelFollowUp(m *Message) {
 		return
 	}
 	exec.Command(cron, "rm", followUpJob(m), "--force").Run()
+	// Booked by 0.6.3 or earlier, under the name it had then.
+	if len(m.ID) > 17 {
+		exec.Command(cron, "rm", "deaddrop-"+strings.ToLower(m.ID[:17])+"-"+m.ID[len(m.ID)-4:], "--force").Run()
+	}
 }
 
 // cmdFollowUp is what the job runs: deaddrop follow-up BOX ID.

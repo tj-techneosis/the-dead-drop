@@ -37,9 +37,22 @@ func ledgerPath() string { return filepath.Join(stateDir(), "seals.json") }
 // sealKey is where a letter is and what seals it. The seal is read as bytes,
 // so writing the same signature with other whitespace changes nothing.
 func sealKey(m *Message) string {
-	raw, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(m.Sig), ""))
-	if err != nil {
-		raw = []byte(m.Sig)
+	// The header holds the armored signature, base64'd onto one line. The
+	// seal is what's inside the armor: line breaks, line endings and the
+	// wrapping of either layer change nothing.
+	raw := []byte(m.Sig)
+	if armor, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(m.Sig), "")); err == nil {
+		var body []string
+		for _, l := range strings.Split(strings.ReplaceAll(string(armor), "\r", ""), "\n") {
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "-----") {
+				body = append(body, l)
+			}
+		}
+		if inner, err := base64.StdEncoding.DecodeString(strings.Join(body, "")); err == nil {
+			raw = inner
+		} else {
+			raw = armor
+		}
 	}
 	h := sha256.Sum256(raw)
 	return m.Box + "/" + m.Pigeonhole + "/" + hex.EncodeToString(h[:16])
@@ -58,9 +71,13 @@ func loadLedger() *sealLedger {
 	return ledger
 }
 
+// ledgerOff: what you sent isn't mail you received, so the ledger, which
+// guards a reader against replays, stays out of it.
+var ledgerOff bool
+
 // checkLedger looks a verified letter up in the reader's ledger.
 func checkLedger(m *Message) {
-	if m.Sig == "" || m.ID == "" {
+	if ledgerOff || m.Sig == "" || m.ID == "" {
 		return
 	}
 	l := loadLedger()

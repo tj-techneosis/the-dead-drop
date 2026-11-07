@@ -397,8 +397,9 @@ func (m *Message) sender() string {
 	case m.Signature == "" || m.Signature == sigVerified:
 		return m.From + ", as " + m.Persona
 	}
-	// Anyone can write a persona onto a letter that doesn't verify.
-	return m.From + ", as " + m.Persona + " (unverified)"
+	// Anyone can write a persona onto a letter that doesn't verify. Said
+	// first, so a narrow column can't cut it off.
+	return m.From + " (unverified), as " + m.Persona
 }
 
 func (m *Message) hasTag(t string) bool {
