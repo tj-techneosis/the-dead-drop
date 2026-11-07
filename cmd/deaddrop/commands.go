@@ -939,7 +939,7 @@ func cmdInbox(args []string) error {
 
 func cmdPull(args []string) error {
 	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread|--all] [--for HELPER|'*'] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true, "unheard": false})
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true, "unheard": false, "heard-at": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -980,14 +980,24 @@ func cmdPull(args []string) error {
 		prepare(ms, f.has("raw"), dir)
 		// Read: what was waiting has been heard. --unheard for a reader
 		// that only keeps a copy (watch --mirror), not one who reads it.
+		// --heard-at: a mirror's refresh for a reader who was shown the
+		// box as of then (read from the mirror), not as of this fetch.
+		at := now()
+		if f.has("heard-at") {
+			t, err := time.Parse(time.RFC3339Nano, f.get("heard-at"))
+			if err != nil {
+				return badf(u, "--heard-at %s: a time (RFC 3339)", f.get("heard-at"))
+			}
+			at = t
+		}
 		if !f.has("unheard") {
 			if all {
-				hear(dir, box, "")
+				hearAt(dir, box, "", at)
 				for _, h := range helpers(dir, box) {
-					hear(dir, box, h)
+					hearAt(dir, box, h, at)
 				}
 			} else {
-				hear(dir, box, helper)
+				hearAt(dir, box, helper, at)
 			}
 		}
 	}

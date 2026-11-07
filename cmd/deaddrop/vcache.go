@@ -84,17 +84,23 @@ func vcacheAllowed(signers string) bool {
 	}
 	// The cache file itself, if it's there, and every folder above the state
 	// folder up to home: the person's (or root's), writable by nobody else.
-	if _, err := os.Lstat(vcachePath()); err == nil && !mine(vcachePath()) {
-		return false
+	if info, err := os.Lstat(vcachePath()); err == nil && (!info.Mode().IsRegular() || !mine(vcachePath())) {
+		return false // a link, or someone else's file
 	}
 	home, _ := os.UserHomeDir()
-	for d := filepath.Dir(stateDir()); d != "/" && d != "." && strings.HasPrefix(d, home) && d != home; d = filepath.Dir(d) {
+	if home == "" || !strings.HasPrefix(stateDir(), home+string(filepath.Separator)) {
+		return false // a state folder outside home: nothing here vouches for its folders
+	}
+	for d := filepath.Dir(stateDir()); strings.HasPrefix(d, home); d = filepath.Dir(d) {
 		info, err := os.Stat(d)
 		if err != nil || info.Mode().Perm()&0o022 != 0 {
 			return false
 		}
 		if st, ok := info.Sys().(*syscall.Stat_t); !ok || (int(st.Uid) != os.Getuid() && st.Uid != 0) {
 			return false
+		}
+		if d == home {
+			break
 		}
 	}
 	b, err := os.ReadFile(signers)
@@ -220,9 +226,22 @@ func saveVCache() {
 		}
 	}
 	// Bounded: a cache that only grows would be the slow part one day.
-	if len(vcache.Checks)+len(vcache.Owners) > 20000 {
-		vcache.Checks = map[string]bool{}
-		vcache.Owners = map[string][]string{}
+	// Past the bound, half goes (Go's map order is random), so a big reader
+	// keeps a warm cache rather than starting from nothing.
+	for len(vcache.Checks)+len(vcache.Owners) > 20000 {
+		n := 0
+		for k := range vcache.Checks {
+			if n%2 == 0 {
+				delete(vcache.Checks, k)
+			}
+			n++
+		}
+		for k := range vcache.Owners {
+			if n%2 == 0 {
+				delete(vcache.Owners, k)
+			}
+			n++
+		}
 	}
 	writeJSONFile(vcachePath(), vcache)
 	vcache.dirty = false

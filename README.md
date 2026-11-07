@@ -439,7 +439,8 @@ config). `watch` runs each once per newly arrived message, with
 `DEADDROP_MSG_ID`, `_SENDER`, `_SUBJECT`, `_TAGS`, `_URGENCY`, `_SENT`,
 `_BOX`, `_ATTACHMENTS`, `_SIGNATURE`, `_SIGNED_BY`, `_PERSONA`, `_FOR` (the
 helper, with `watch --for`) and `_SIDE_BOX` (the box, with `watch --box` on
-a box not your own) set, and the message's entry as JSON on stdin:
+a box not your own) set (a hook that runs deaddrop on the letter passes
+`--box "$DEADDROP_MSG_BOX"`), and the message's entry as JSON on stdin:
 never the text. What's been announced is remembered, so a restart doesn't
 announce everything again, and the very first `watch` announces nothing.
 [`examples/new.d/notify`](examples/new.d/notify) is a desktop notification:

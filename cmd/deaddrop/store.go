@@ -279,14 +279,24 @@ func boxHolding(dir, not, id string) string {
 const heardFile = ".heard"
 
 // hear stamps a pigeonhole as read now, if it's there; never makes one.
-func hear(dir, box, helper string) {
+func hear(dir, box, helper string) { hearAt(dir, box, helper, now()) }
+
+// hearAt stamps a pigeonhole heard as of t (never later than now), only
+// moving the stamp forward: a reader who was shown the box as of t has heard
+// what had arrived by then, not what came after.
+func hearAt(dir, box, helper string, t time.Time) {
 	slot := slotDir(dir, box, helper)
 	if _, err := os.Stat(slot); err != nil {
 		return
 	}
+	if at := now(); t.After(at) {
+		t = at
+	}
+	if !t.After(heardAt(dir, box, helper)) {
+		return
+	}
 	path := filepath.Join(slot, heardFile)
 	if writeAtomic(path, nil, 0o600) == nil {
-		t := now()
 		os.Chtimes(path, t, t)
 	}
 }

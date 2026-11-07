@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from _binary import BIN, DeadDrop, key, script, signers
+from _binary import BIN, DeadDrop, at, key, script, signers
 
 
 class RemoteBase(DeadDrop):
@@ -415,16 +415,24 @@ class Mirror(RemoteBase):
         self.assertFalse(entry.exists())
 
 
-    def test_a_cached_read_is_heard_at_the_next_refresh(self):
+    def test_a_cached_read_is_heard_as_of_what_was_shown(self):
+        from datetime import datetime
+        epoch = lambda t: datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
         self.rdd("send", "--to", "bob", input="# A\n\nx\n")
         heard = self.far_store / "bob" / ".heard"
         self.rdd("pull", "--json", "--cached", env=self.bob())  # fetched: heard
         heard.unlink()
-        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # a copy only
+        self.clock = at(1)
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # a copy only, fetched at 1
         self.assertFalse(heard.exists())
-        self.rdd("pull", "--json", "--cached", env=self.bob())  # read from the mirror
-        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # so this one tells the store
-        self.assertTrue(heard.exists())
+        self.clock = at(2)
+        self.dd("send", "--to", "bob", input="# B, after the copy\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol")
+        self.clock = at(3)
+        self.rdd("pull", "--json", "--cached", env=self.bob())  # shown the copy from 1
+        self.clock = at(4)
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # tells the store: heard as of 1
+        self.assertEqual(heard.stat().st_mtime, epoch(at(1)))  # B, at 2, is still unheard
+
 
 class DefaultBox(RemoteBase):
     """A session with a box of its own ($DEADDROP_BOX, or the reply box it

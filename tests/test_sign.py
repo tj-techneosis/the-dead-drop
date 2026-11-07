@@ -392,7 +392,7 @@ class Signed(DeadDrop):
 
 
     def test_checks_are_cached_and_a_changed_letter_is_checked_again(self):
-        state = self.tmp / "state"
+        state = self.tmp / "home" / ".local" / "state" / "deaddrop"  # under home: the cache is only kept there
         self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
         env = dict(DEADDROP_FROM="bob", DEADDROP_STATE=str(state))
         self.assertEqual(self.inbox(**env)[0]["signature"], "verified")

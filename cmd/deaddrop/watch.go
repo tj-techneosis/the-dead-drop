@@ -777,7 +777,7 @@ func swiftbar(in *InboxFile, bin string) string {
 	switch {
 	case in == nil:
 		b.WriteString(" | sfimage=envelope\n---\n")
-		b.WriteString("Not watching yet" + plain + "\n")
+		b.WriteString(menuText(barText(nil), 120) + plain + "\n")
 		act("", "Check now", append([]string{"watch"}, watchArgs()...)...)
 		return b.String()
 	case in.Urgent > 0:

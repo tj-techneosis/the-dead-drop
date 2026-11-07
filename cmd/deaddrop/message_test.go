@@ -128,7 +128,8 @@ func TestOwnSharing(t *testing.T) {
 
 func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 	d := t.TempDir()
-	t.Setenv("DEADDROP_STATE", d+"/state")
+	t.Setenv("HOME", d)
+	t.Setenv("DEADDROP_STATE", d+"/.local/state/deaddrop")
 	t.Setenv("DEADDROP_NO_VCACHE", "")
 	was := systemSigners
 	defer func() { systemSigners = was }()
@@ -138,6 +139,28 @@ func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 	if !vcacheAllowed(list) {
 		t.Fatal("your own private list: the cache is yours")
 	}
+	// Any folder from the state folder up to home, home included, that
+	// others can write: no cache (they could swap the state folder).
+	for _, dir := range []string{d + "/.local", d} {
+		os.Chmod(dir, 0o777)
+		if vcacheAllowed(list) {
+			t.Fatalf("%s writable by others: no cache", dir)
+		}
+		os.Chmod(dir, 0o755)
+	}
+	// A cache file that's a link: no cache.
+	os.WriteFile(d+"/elsewhere.json", []byte("{}"), 0o600)
+	os.Symlink(d+"/elsewhere.json", vcachePath())
+	if vcacheAllowed(list) {
+		t.Fatal("a linked cache file: no cache")
+	}
+	os.Remove(vcachePath())
+	// A state folder outside home: nothing vouches for its folders.
+	t.Setenv("DEADDROP_STATE", t.TempDir())
+	if vcacheAllowed(list) {
+		t.Fatal("a state folder outside home: no cache")
+	}
+	t.Setenv("DEADDROP_STATE", d+"/.local/state/deaddrop")
 	os.Chmod(list, 0o666)
 	if vcacheAllowed(list) {
 		t.Fatal("a list others can write: no cache")
@@ -160,6 +183,7 @@ func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
 	t.Setenv("DEADDROP_STATE", d+"/state")
 	t.Setenv("DEADDROP_NO_VCACHE", "")
 	t.Setenv("HOME", d)
+	os.MkdirAll(d+"/state", 0o700)
 	was := systemSigners
 	defer func() { systemSigners = was }()
 	systemSigners = d + "/no-pin"

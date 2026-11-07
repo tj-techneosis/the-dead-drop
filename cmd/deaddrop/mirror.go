@@ -107,7 +107,11 @@ func mirrorChanged() {
 	if _, err := os.Stat(mirrorDir()); err != nil {
 		return
 	}
-	writeAtomic(filepath.Join(mirrorDir(), ".changed"), nil, 0o600)
+	path := filepath.Join(mirrorDir(), ".changed")
+	if writeAtomic(path, nil, 0o600) == nil {
+		t := now()
+		os.Chtimes(path, t, t)
+	}
 }
 
 // mirroredBytes is remoteBytes through the mirror: a fresh kept answer if
@@ -123,7 +127,7 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 	path := filepath.Join(mirrorDir(), mirrorKey(host, cmd, args, me)+".json")
 	if b, err := os.ReadFile(path); err == nil {
 		var e mirrorEntry
-		at := time.Now()
+		at := now()
 		// Fresh: fetched in the last mirrorFresh, not "in the future", and
 		// after this machine last changed the store.
 		if json.Unmarshal(b, &e) == nil && e.Host == host && e.Cmd == cmd && e.Me == me && equalArgs(e.Args, args) &&
@@ -132,7 +136,7 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 			return e.Answer, nil
 		}
 	}
-	return fetchIntoMirror(path, host, cmd, args, me, false, false)
+	return fetchIntoMirror(path, host, cmd, args, me, false, false, time.Time{})
 }
 
 func equalArgs(a, b []string) bool {
@@ -150,13 +154,19 @@ func equalArgs(a, b []string) bool {
 // fetchIntoMirror asks the store and keeps the answer. unheard: only
 // keeping a copy, so the store doesn't stamp the box heard. fromRefresh: a
 // watch's pass, which prunes once itself.
-func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, fromRefresh bool) ([]byte, error) {
+func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, fromRefresh bool, heardAt time.Time) ([]byte, error) {
 	// Stamped when the fetch starts: a write from here while it's in flight
 	// is later than this, so the answer reads as stale.
-	started := time.Now()
+	started := now()
 	var out []byte
 	var err error
-	if unheard && (cmd == "pull" || cmd == "show") {
+	if !heardAt.IsZero() && cmd == "pull" {
+		// Read from the mirror: heard as of the answer the reader was shown.
+		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--heard-at", heardAt.UTC().Format(time.RFC3339Nano)))
+		if err != nil && strings.Contains(err.Error(), "--heard-at") {
+			out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard")) // an older store
+		}
+	} else if (unheard || !heardAt.IsZero()) && (cmd == "pull" || cmd == "show") {
 		// Keeping a copy isn't reading it: the box isn't stamped heard.
 		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard"))
 		if err != nil && strings.Contains(err.Error(), "--unheard") {
@@ -187,7 +197,7 @@ func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, 
 // mirrorMax, and any half-written file a crash left (letter text included).
 // It returns what's kept, most lately read first.
 func pruneMirror() []string {
-	at := time.Now()
+	at := now()
 	if tmps, _ := filepath.Glob(filepath.Join(mirrorDir(), ".tmp-*")); len(tmps) > 0 {
 		for _, t := range tmps {
 			if info, err := os.Stat(t); err == nil && at.Sub(info.ModTime()) > time.Minute {
@@ -260,10 +270,13 @@ func refreshMirror() (int, error) {
 			continue // someone else's on this machine
 		}
 		// Read from the mirror since it was last fetched: someone read it,
-		// so this fetch tells the store the box was heard. Otherwise it's
-		// only keeping a copy (--unheard).
-		quiet := !used.After(e.FetchedAt)
-		if _, err := fetchIntoMirror(path, e.Host, e.Cmd, e.Args, e.Me, quiet, true); err != nil {
+		// so this fetch tells the store the box was heard as of the answer
+		// they were shown. Otherwise it's only keeping a copy (--unheard).
+		var shown time.Time
+		if used.After(e.FetchedAt) {
+			shown = e.FetchedAt // what the reader saw was as of this
+		}
+		if _, err := fetchIntoMirror(path, e.Host, e.Cmd, e.Args, e.Me, true, true, shown); err != nil {
 			return n, err // the store isn't answering: one try a pass, not 64
 		}
 		os.Chtimes(path, used, used) // a refresh isn't a read

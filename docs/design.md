@@ -239,7 +239,11 @@ kept on a reader's machine, and only when the reader asks. It keeps the
 store's raw answers, exactly as `--raw` hands them over, keyed on the host,
 the command, its flags and the caller. So a kept answer is checked like a
 fresh one: signatures here, against this machine's list, and through the
-seal ledger: nothing in it is believed, only re-checked.
+seal ledger: nothing in it is believed, only re-checked. An answer is used for 10 minutes at most, never after a
+write from this machine (a `.changed` stamp), and `watch --mirror` asks
+again for whatever was read in the last day; 64 answers at most, the least
+lately read let go first. `file` is never kept: attachments' bytes are
+fetched when asked for.
 
 The cache of signature checks is different: it does say "verified", so it
 is only as good as whoever can write it. It's kept only where that's the
@@ -248,11 +252,7 @@ state folder, neither writable by anyone else, and no pinned list (a pin
 means a shared login, which can write the state folder but not the list).
 It keeps only passes, keyed on the list's bytes, the ssh-keygen that
 checked, the signer, the seal and the signed text, and it steps aside for
-keys that expire (`valid-before`, `valid-after`) or a certificate authority. An answer is used for 10 minutes at most, never after a
-write from this machine (a `.changed` stamp), and `watch --mirror` asks
-again for whatever was read in the last day; 64 answers at most, the least
-lately read let go first. `file` is never kept: attachments' bytes are
-fetched when asked for.
+keys that expire (`valid-before`, `valid-after`) or a certificate authority.
 
 The far side is told `DEADDROP_FROM` (the caller) and `DEADDROP_HOPS` (how
 many machines the command has come through). It never sends the command round again
