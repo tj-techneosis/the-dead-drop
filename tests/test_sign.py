@@ -156,7 +156,7 @@ class Signed(DeadDrop):
         c = self.calls(self.cron_calls)[0]
         subprocess.run(c[c.index("--") + 1:], check=True, capture_output=True,
                        env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(60 * 25)))
-        m = self.one()
+        m = self.one(DEADDROP_NOW=at(60 * 25))  # read after the follow-up's time
         self.assertEqual((m["urgency"], m["signature"]), ("urgent", "verified"))
 
     def test_automation_is_signed_by_whose_job_it_is(self):
@@ -261,6 +261,7 @@ class Signed(DeadDrop):
     def test_a_copy_delivered_again_says_so(self):
         self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
         path = self.path()
+        self.assertEqual(self.one()["signature"], "verified")  # bob's machine has seen it
         self.dd("mark", "read", path.stem, DEADDROP_FROM="bob")
         read = next((self.dir / "bob" / "read").glob("*.md"))
         again = self.dir / "bob" / "new" / (read.stem[:-4] + "ffff.md")
@@ -291,3 +292,38 @@ class Signed(DeadDrop):
         out = self.dd("inbox", DEADDROP_FROM="bob").stdout
         self.assertNotIn("‮", out)
         self.assertNotIn("\x1b", out)
+
+    # ---- review 48jb ----
+
+    def test_a_follow_up_line_on_an_older_letter_still_verifies_but_cant_raise(self):
+        # A letter signed before follow-ups were sealed carries one unsealed.
+        self.send("# Old\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        good = path.read_text()
+        path.write_text(good.replace("urgency: normal", "urgency: normal\nfollow_up: 2026-11-02T16:00:00Z"))
+        self.assertEqual(self.one()["signature"], "verified")
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-11-02T16:00:00Z\nraised: 2026-11-02T17:00:00Z\nurgency_was: normal"))
+        self.assertEqual(self.one(DEADDROP_NOW=at(60 * 5))["signature"], "bad")
+
+    def test_a_replay_is_caught_however_the_seal_is_written_and_wherever_its_read(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        self.assertEqual(self.one()["signature"], "verified")  # seen once, here
+        self.dd("mark", "read", id, DEADDROP_FROM="bob")
+        src = next((self.dir / "bob" / "read").glob("*.md"))
+        text = src.read_text()
+        sig = next(l for l in text.splitlines() if l.startswith("signature: ")).split(": ", 1)[1]
+        copy_id = id[:-4] + "eeee"
+        (self.dir / "bob" / "new" / (copy_id + ".md")).write_text(text.replace(sig, sig[:20] + "\r" + sig[20:]))
+        for out in (self.dd("show", copy_id, "--json", DEADDROP_FROM="bob").stdout,):
+            self.assertEqual(json.loads(out)["signature"], "bad")
+        self.assertIn("delivered again", json.loads(self.dd("show", copy_id, "--json", DEADDROP_FROM="bob").stdout)["signature_note"])
+        # The original stands.
+        self.assertEqual(json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)["signature"], "verified")
+
+    def test_two_copies_seen_together_first_both_say_so(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        src = self.path()
+        (src.parent / (id[:-4] + "dddd.md")).write_text(src.read_text())
+        ms = self.inbox(DEADDROP_FROM="bob")
+        self.assertEqual({m["signature"] for m in ms}, {"verified"})
+        self.assertTrue(all("one is a copy" in m["signature_note"] for m in ms))

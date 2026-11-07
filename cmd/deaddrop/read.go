@@ -58,26 +58,6 @@ func prepare(ms []*Message, raw bool, dir string) {
 		}
 		verify(m)
 	}
-	// The same signed letter twice in one pigeonhole is a copy delivered
-	// again: the first stands, the rest say so.
-	firstOf := map[string]*Message{}
-	for _, m := range ms {
-		if raw || m.Sig == "" {
-			continue
-		}
-		k := m.Box + "/" + m.Pigeonhole + "/" + m.Sig
-		if f, ok := firstOf[k]; !ok || m.Sent.Before(f.Sent) || (m.Sent.Equal(f.Sent) && m.ID < f.ID) {
-			firstOf[k] = m
-		}
-	}
-	for _, m := range ms {
-		if raw || m.Sig == "" {
-			continue
-		}
-		if f := firstOf[m.Box+"/"+m.Pigeonhole+"/"+m.Sig]; f != m && m.Signature == sigVerified {
-			m.Signature, m.SignatureNote = sigBad, "the same signed letter as "+f.ID+": delivered again"
-		}
-	}
 	for _, m := range ms {
 		if !raw {
 			m.Sig = ""

@@ -160,7 +160,10 @@ Panel {
 
   // Who spoke a letter: its sealed persona, else a persona-<name> tag, else
   // its box. ("persona-release-manager" reads "Release manager".)
+  // Only a verified letter's persona or tag says who spoke: anyone can write
+  // either onto a letter that doesn't verify.
   function speakerOf(l, box) {
+    if (l.signature !== "verified") return l.mine ? box : String(l.from || "")
     if (l.persona) return String(l.persona)
     var tags = l.tags || []
     for (var i = 0; i < tags.length; i++) {
@@ -259,7 +262,7 @@ Panel {
   }
 
   function pickView(v) { root.view = v; root.cursor = 0; root.refreshViews() }
-  function pickHole(h) { root.hole = h; root.holeMessages = []; root.holeNote = ""; root.topics = []; root.cursor = 0; root.refreshViews() }
+  function pickHole(h) { root.hole = h; root.holeMessages = []; root.holeNote = ""; root.topics = []; root.speakers = []; root.who = ""; root.threadsErr = ""; root.cursor = 0; root.refreshViews() }
   function openTopic(t) { root.runAction(["open", "--thread", String(t.root)].concat(root.forArgs()), "Thread") }
 
   // The pigeonhole on show, as a line: a helper's counts come from its fetch.
@@ -322,7 +325,6 @@ Panel {
       root.pending = root.pending.concat([[cmd, note]])
       return
     }
-    root.actionNote = ""
     actor.label = note
     actor.command = [root.deaddrop].concat(cmd)
     actor.running = true
@@ -452,7 +454,7 @@ Panel {
 
   Process {
     id: holeLister
-    command: [root.deaddrop, "inbox", "--for", "*", "--read", "--json"]
+    command: [root.deaddrop, "inbox", "--for", "*", "--all", "--json"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHoles(text) }
     stderr: StdioCollector {
       waitForEnd: true
@@ -463,22 +465,22 @@ Panel {
   Process {
     id: holeReader
     property string askedFor: ""
-    onExited: function(exitCode) { if (root.holeStale) { root.holeStale = false; root.refreshViews() } }
+    onExited: function(exitCode) { if (root.holeStale || holeReader.askedFor !== root.hole) { root.holeStale = false; Qt.callLater(root.refreshViews) } }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHole(text) }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.holeNote = text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: if (text.trim() !== "" && holeReader.askedFor === root.hole) root.holeNote = text.trim().replace(/^deaddrop: /, "")
     }
   }
 
   Process {
     id: threadLister
     property string askedFor: ""
-    onExited: function(exitCode) { if (root.threadsStale) { root.threadsStale = false; root.refreshViews() } }
+    onExited: function(exitCode) { if (root.threadsStale || threadLister.askedFor !== root.hole) { root.threadsStale = false; Qt.callLater(root.refreshViews) } }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadTopics(text) }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.threadsErr = text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: if (text.trim() !== "" && threadLister.askedFor === root.hole) root.threadsErr = text.trim().replace(/^deaddrop: /, "")
     }
   }
 
@@ -497,7 +499,7 @@ Panel {
       if (root.pending.length > 0) {
         var next = root.pending[0]
         root.pending = root.pending.slice(1)
-        root.runAction(next[0], next[1])
+        Qt.callLater(function() { root.runAction(next[0], next[1]) })
       }
     }
   }

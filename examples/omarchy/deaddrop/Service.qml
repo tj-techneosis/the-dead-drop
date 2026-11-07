@@ -37,7 +37,7 @@ Scope {
       if (service.queued.length > 0) {
         var next = service.queued[0]
         service.queued = service.queued.slice(1)
-        service.ask(next)
+        Qt.callLater(function() { service.ask(next) })
       }
     }
   }

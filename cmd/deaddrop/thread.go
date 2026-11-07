@@ -62,11 +62,11 @@ func gist(body string) string {
 	return cleanLine(strings.Join(para, " "), 280)
 }
 
-// letters gathers your mail, both ways: everything in your box (archived
-// too) and everything you sent.
 // lettersFor is the pigeonhole thread and with read: --for, or the person's.
 var lettersFor []string
 
+// letters gathers your mail, both ways: everything in your box (archived
+// too) and everything you sent.
 func letters() (string, []*Letter, string, error) {
 	me, err := whoAmI()
 	if err != nil {
@@ -112,9 +112,16 @@ func letters() (string, []*Letter, string, error) {
 			if len(s.Copies) == 0 {
 				continue
 			}
-			// A helper's view: what that helper wrote (as its persona).
+			// A helper's view: what that helper wrote (as its persona), and
+			// notes the person wrote to that helper.
 			if helper != "" && helperSlug(s.Persona) != helper {
-				continue
+				toIt := false
+				for _, c := range s.Copies {
+					toIt = toIt || (c.Box == me && c.For == helper)
+				}
+				if !toIt {
+					continue
+				}
 			}
 			// A note to yourself that went only to your helpers' pigeonholes
 			// isn't part of the plain view.

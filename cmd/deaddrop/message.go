@@ -391,10 +391,14 @@ func list(v string) []string {
 // sender is who it's from as a person reads it: "alice", or "alice, as Release
 // manager" when one of their robots wrote it.
 func (m *Message) sender() string {
-	if m.Persona != "" {
+	switch {
+	case m.Persona == "":
+		return m.From
+	case m.Signature == "" || m.Signature == sigVerified:
 		return m.From + ", as " + m.Persona
 	}
-	return m.From
+	// Anyone can write a persona onto a letter that doesn't verify.
+	return m.From + ", as " + m.Persona + " (unverified)"
 }
 
 func (m *Message) hasTag(t string) bool {

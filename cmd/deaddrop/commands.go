@@ -937,6 +937,7 @@ func cmdPull(args []string) error {
 	if f.has("json") {
 		return printJSON(ms)
 	}
+	defer helperHint(dir, box, f)
 	what := "mail"
 	if h := f.get("for"); h == "*" {
 		what = "mail, every pigeonhole,"
@@ -1214,6 +1215,10 @@ func cmdMark(args []string) error {
 	dir, err := storeDir()
 	if err != nil {
 		return err
+	}
+	// A box that isn't there has nothing to mark: never make one by asking.
+	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+		return fmt.Errorf("there's no box %s", box)
 	}
 	unlock, err := lockBox(dir, box)
 	if err != nil {

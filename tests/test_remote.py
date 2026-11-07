@@ -42,7 +42,10 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         return self.dd(*args, **self.near_env(**kw.pop("env", {})), **kw)
 
     def near_files(self):
-        return sorted(str(p.relative_to(self.near)) for p in self.near.rglob("*"))
+        """What reading left on this side: nothing but the reader's own
+        ledger of seals (hashes and ids, never a letter's text)."""
+        ledger = {".local", ".local/state", ".local/state/deaddrop", ".local/state/deaddrop/seals.json", ".local/state/deaddrop/.seals.lock"}
+        return sorted(str(p.relative_to(self.near)) for p in self.near.rglob("*") if str(p.relative_to(self.near)) not in ledger)
 
     def test_send_pull_mark_with_nothing_written_here(self):
         # Build order step 3.
@@ -87,7 +90,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
     def test_failures_come_back(self):
         self.rdd("send", "--to", "carol", input="x\n")
         p = self.rdd("mark", "read", "2026-11-02T153000-bob-0000", ok=False)
-        self.assertIn("no message", p.stderr)
+        self.assertIn("no box alice", p.stderr)
         self.assertEqual(p.returncode, 1)
         unreachable = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
         p = self.rdd("status", env=dict(DEADDROP_SSH=str(unreachable)), ok=False)

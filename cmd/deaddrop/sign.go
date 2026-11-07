@@ -51,8 +51,9 @@ type attachSum struct{ name, sum string }
 // verify; v2 adds the persona. Taking a persona off, or putting one on,
 // changes which is checked, and the signature fails.
 //
-// v3 (0.6) adds the helpers it's addressed to, and is used only when there
-// are some, so v1 and v2 letters verify as they always did.
+// v3 (0.6) adds the helpers it's addressed to, v4 (0.6.4) a reply box, and
+// v5 (0.6.4) a follow-up time. Each is used only when the letter has that
+// field, so a letter verifies as the version it was signed as.
 func signedPayload(from, persona string, helpers []string, replyBox, followUp string, recipients []string, subject string, tags []string, urgency, thread string,
 	sums []attachSum, signedAt string, body string) []byte {
 	var b bytes.Buffer
@@ -213,6 +214,9 @@ func sumsOf(m *Message) []attachSum {
 // machine's list of signers. It needs the body.
 func verify(m *Message) {
 	m.Signature, m.SignatureNote = verifyState(m)
+	if m.Signature == sigVerified {
+		checkLedger(m)
+	}
 }
 
 // wellFormed checks every header field a signature covers, before anything
@@ -306,11 +310,15 @@ func verifyState(m *Message) (string, string) {
 	defer done()
 	// A follow-up raises a message to urgent after it was signed, and says
 	// what it was. Only ever to urgent, and the note says so.
-	urgencies := []string{m.Urgency}
-	raised := ""
+	// What the letter could have been signed as. A follow-up time is sealed
+	// from 0.6.4 (v5); a letter signed earlier carries one unsealed, and is
+	// checked as it was signed. Only a sealed follow-up can have raised it.
+	type attempt struct {
+		urgency, followUp string
+		raise             bool
+	}
+	var tries []attempt
 	if m.Raised != "" {
-		// Only a follow-up the sender asked for, sealed in the letter (v5),
-		// whose time had come, can have raised it.
 		fu, err1 := time.Parse(time.RFC3339, m.FollowUp)
 		at, err2 := time.Parse(time.RFC3339, m.Raised)
 		switch {
@@ -318,24 +326,34 @@ func verifyState(m *Message) (string, string) {
 			return sigBad, "marked raised by a follow-up, but it isn't urgent"
 		case m.FollowUp == "" || err1 != nil || err2 != nil || at.Before(fu):
 			return sigBad, "marked raised by a follow-up its sender never asked for"
+		case now().Before(fu):
+			// The shared login can at most do what the sender's own
+			// follow-up would have done, and not before its time.
+			return sigBad, "marked raised by its follow-up before the follow-up's time"
 		}
-		switch m.UrgencyWas {
-		case normal, fyi:
-			urgencies = []string{m.UrgencyWas}
-		default:
+		if m.UrgencyWas != normal && m.UrgencyWas != fyi {
 			return sigBad, tamperedHeader
 		}
-		raised = "; raised to urgent by its follow-up, not by the sender"
+		tries = append(tries, attempt{m.UrgencyWas, m.FollowUp, true})
+	} else {
+		if m.FollowUp != "" {
+			tries = append(tries, attempt{m.Urgency, m.FollowUp, false})
+		}
+		tries = append(tries, attempt{m.Urgency, "", false})
 	}
-	for _, u := range urgencies {
-		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, m.FollowUp, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
+	for _, t := range tries {
+		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, t.followUp, m.Recipients, m.Subject, m.Tags, t.urgency, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
+			raised := ""
+			if t.raise {
+				raised = "; raised to urgent by its follow-up, not by the sender"
+			}
 			// When it was signed, too: a letter delivered again shows its age.
 			when := ""
-			if t, err := time.Parse(time.RFC3339, m.SignedAt); err == nil {
-				when = ", " + t.Local().Format("2006-01-02 15:04")
+			if at, err := time.Parse(time.RFC3339, m.SignedAt); err == nil {
+				when = ", " + at.Local().Format("2006-01-02 15:04")
 			}
 			if m.Persona != "" {
 				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona + when + raised

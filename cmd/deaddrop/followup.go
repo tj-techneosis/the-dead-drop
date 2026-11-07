@@ -142,6 +142,10 @@ func cmdFollowUp(args []string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+		fmt.Printf("there's no box %s; nothing to follow up\n", box)
+		return nil
+	}
 	unlock, err := lockBox(dir, box)
 	if err != nil {
 		return err
