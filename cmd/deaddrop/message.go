@@ -51,6 +51,12 @@ type Message struct {
 	// or bad, and why.
 	Signature     string `json:"signature,omitempty"`
 	SignatureNote string `json:"signature_note,omitempty"`
+	// The letter every copy of this message is, and the letter it answers,
+	// as short fingerprints of their seals: worked out by the store, which
+	// sees every box, so a reader can join a thread across copies whose ids
+	// differ from box to box. Never stored.
+	Letter       string `json:"letter,omitempty"`
+	ThreadLetter string `json:"thread_letter,omitempty"`
 	// Attachment sizes, for a reader on another machine (--raw).
 	AttachmentSizes []int64 `json:"attachment_sizes,omitempty"`
 

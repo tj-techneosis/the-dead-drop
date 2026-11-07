@@ -40,6 +40,9 @@ func fetchRemote(cmd string, args []string) ([]*Message, error) {
 // another machine to check, with their attachments' sizes. Otherwise:
 // checked here, and the signature's bytes left out.
 func prepare(ms []*Message, raw bool, dir string) {
+	if dir != "" {
+		fingerprint(dir, ms)
+	}
 	for _, m := range ms {
 		if raw {
 			m.Signature, m.SignatureNote = "", ""
@@ -55,6 +58,44 @@ func prepare(ms []*Message, raw bool, dir string) {
 		}
 		verify(m)
 		m.Sig = ""
+	}
+}
+
+// letterOf is a short fingerprint of what every copy of a letter shares.
+func letterOf(m *Message) string {
+	h := sha256.Sum256([]byte(sentKey(m)))
+	return hex.EncodeToString(h[:8])
+}
+
+// storeIndex maps every id in the store, in every box and pigeonhole, to its
+// letter: built once per command, and only when a thread needs it.
+var storeIndex map[string]string
+
+// fingerprint sets each message's letter, and the letter its thread names,
+// wherever in the store that copy is. Bodies are needed for unsigned mail.
+func fingerprint(dir string, ms []*Message) {
+	need := false
+	for _, m := range ms {
+		if m.Body != "" || m.Sig != "" {
+			m.Letter = letterOf(m)
+		}
+		need = need || m.Thread != ""
+	}
+	if !need {
+		return
+	}
+	if storeIndex == nil {
+		storeIndex = map[string]string{}
+		for _, box := range boxes(dir) {
+			for _, x := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
+				storeIndex[x.ID] = letterOf(x)
+			}
+		}
+	}
+	for _, m := range ms {
+		if m.Thread != "" {
+			m.ThreadLetter = storeIndex[m.Thread]
+		}
 	}
 }
 

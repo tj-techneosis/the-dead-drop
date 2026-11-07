@@ -231,7 +231,11 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
 **Every thread at a glance.** `deaddrop threads` lists them, newest activity
 first: subject, when it started and last moved, how many letters, how many
 unread, every tag, and who's in it (box, persona, helper, and the least
-trusted of their signatures). `--letters` (and `--bodies`) adds the letters,
+trusted of their signatures). A reply names the copy its sender read, whose
+id differs in every box, so the store also hands out each letter's
+fingerprint (`letter`, and `thread_letter` for what it answers), and
+threads join on those: every recipient sees the same thread. `--letters`
+(and `--bodies`) adds the letters,
 `--since` and `--limit` page it, `--json` for a front end.
 
 ## One store, many machines

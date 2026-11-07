@@ -150,6 +150,21 @@ func sortLetters(ls []*Letter) {
 	})
 }
 
+// joinLetters ties a letter into its thread: by the id it answers, and by
+// the letters (every copy's fingerprint) it is and answers, so copies with
+// different ids in different boxes still meet.
+func joinLetters(l *Letter, id string, union func(a, b string)) {
+	if l.Thread != "" {
+		union(id, l.Thread)
+	}
+	if l.Letter != "" {
+		union(id, "letter:"+l.Letter)
+	}
+	if l.ThreadLetter != "" {
+		union(id, "letter:"+l.ThreadLetter)
+	}
+}
+
 // ids are every id a letter goes by: one per copy, for what you sent.
 func (l *Letter) ids() []string {
 	if !l.Mine {
@@ -185,9 +200,7 @@ func threadOf(ls []*Letter, id string) ([]*Letter, error) {
 			found = found || x == id
 			union(x, ids[0])
 		}
-		if l.Thread != "" {
-			union(ids[0], l.Thread)
-		}
+		joinLetters(l, ids[0], union)
 	}
 	if !found {
 		return nil, fmt.Errorf("no letter %s in your box or among what you sent", id)
@@ -377,9 +390,7 @@ func groups(ls []*Letter) [][]*Letter {
 		for _, x := range ids {
 			union(x, ids[0])
 		}
-		if l.Thread != "" {
-			union(ids[0], l.Thread)
-		}
+		joinLetters(l, ids[0], union)
 	}
 	byRoot := map[string][]*Letter{}
 	var order []string

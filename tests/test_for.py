@@ -173,3 +173,16 @@ class Topics(DeadDrop):
         out = self.dd("threads").stdout
         self.assertIn("bob as Planner", out)
         self.dd("threads", "--bodies", ok=False)
+
+    def test_a_reply_joins_the_thread_in_every_box(self):
+        # alice writes to bob and carol; bob answers both from his own copy,
+        # whose id carol's box doesn't have. carol still sees one topic.
+        self.send("# Council\n\nvote please\n", "--to", "bob,carol", "--tag", "council")
+        bobs = self.inbox(DEADDROP_FROM="bob")[0]["id"]
+        self.clock = at(1)
+        self.send("# Yes\n\nmy vote\n", "--to", "alice,carol", "--reply-to", bobs, "--tag", "vote", DEADDROP_FROM="bob")
+        for who in ("carol", "alice", "bob"):
+            topics = json.loads(self.dd("threads", "--json", DEADDROP_FROM=who).stdout)["topics"]
+            self.assertEqual([(t["subject"], t["count"]) for t in topics], [("Council", 2)], who)
+        carols = [m for m in self.inbox(DEADDROP_FROM="carol") if m["subject"] == "Council"][0]["id"]
+        self.assertEqual(len(json.loads(self.dd("thread", carols, "--json", DEADDROP_FROM="carol").stdout)["letters"]), 2)

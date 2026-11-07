@@ -323,3 +323,10 @@ exec {BIN} "$@"
         self.assertEqual([(m["subject"], m["signature"], m["pigeonhole"]) for m in ms], [("Lock", "verified", "planner")])
         t = json.loads(self.rdd("threads", "--json", env=self.signed_env("alice")).stdout)
         self.assertEqual(t["topics"][0]["participants"][0]["for"], "planner")
+
+    def test_a_reply_joins_the_thread_in_every_box_over_ssh(self):
+        self.rdd("send", "--to", "bob,carol", input="# Council\n\nx\n", env=self.signed_env("alice"))
+        bobs = json.loads(self.rdd("inbox", "--json", env=self.signed_env("bob")).stdout)[0]["id"]
+        self.rdd("send", "--to", "alice,carol", "--reply-to", bobs, input="# Yes\n\nx\n", env=self.signed_env("bob"))
+        t = json.loads(self.rdd("threads", "--json", env=dict(DEADDROP_FROM="carol")).stdout)["topics"]
+        self.assertEqual([(x["subject"], x["count"]) for x in t], [("Council", 2)])
