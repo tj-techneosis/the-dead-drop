@@ -390,3 +390,23 @@ class Signed(DeadDrop):
         self.assertEqual(p.returncode, 0)
         self.dd("send", "--to", "bob", "--follow-up", at(-24 * 60), input="# Long ago\n\nx\n", DEADDROP_FROM="alice", ok=False)
 
+
+    def test_checks_are_cached_and_a_changed_letter_is_checked_again(self):
+        state = self.tmp / "state"
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        env = dict(DEADDROP_FROM="bob", DEADDROP_STATE=str(state))
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")
+        self.assertTrue((state / "verified.json").exists())
+        # A second read comes from the cache: a broken ssh-keygen isn't run.
+        broken = self.tmp / "no-keygen"
+        broken.write_text("#!/bin/sh\nexit 1\n")
+        broken.chmod(0o755)
+        self.assertEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), **env)[0]["signature"], "verified")
+        # A changed letter isn't the cached one.
+        path = self.path()
+        path.write_text(path.read_text().replace("x\n", "y\n"))
+        self.assertEqual(self.inbox(**env)[0]["signature"], "bad")
+        # Nor is a changed list of signers.
+        signers(self.signers, "bob")  # alice's key gone
+        path.write_text(path.read_text().replace("y\n", "x\n"))
+        self.assertNotEqual(self.inbox(**env)[0]["signature"], "verified")

@@ -144,6 +144,7 @@ func main() {
 
 func dispatch(cmd string, args []string) error {
 	defer saveLedger()
+	defer saveVCache()
 	switch cmd {
 	case "version", "--version", "-v":
 		fmt.Println(versionString())

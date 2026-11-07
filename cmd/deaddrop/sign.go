@@ -369,9 +369,12 @@ func verifyState(m *Message) (string, string) {
 	}
 	for _, t := range tries {
 		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, t.followUp, m.Recipients, m.Subject, m.Tags, t.urgency, m.Thread, sumsOf(m), m.SignedAt, m.Body)
-		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
-		c.Stdin = bytes.NewReader(payload)
-		if c.Run() == nil {
+		ok := cachedCheck(signers, m.SignedBy, m.Sig, payload, func() bool {
+			c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
+			c.Stdin = bytes.NewReader(payload)
+			return c.Run() == nil
+		})
+		if ok {
 			if t.followUp == "" && m.FollowUp != "" {
 				// Not in what was signed (a letter from before 0.6.4, or one
 				// written onto it since): not shown as the sender's.
@@ -401,9 +404,10 @@ func verifyState(m *Message) (string, string) {
 	}
 	// Whose key it is, by this machine's list: someone else's is a forgery;
 	// nobody's is a key this machine can't vouch for.
-	c := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", path)
-	out, _ := c.Output()
-	owners := strings.Fields(string(out))
+	owners := cachedOwners(signers, m.Sig, func() []string {
+		out, _ := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", path).Output()
+		return strings.Fields(string(out))
+	})
 	switch {
 	case len(owners) == 0 && listsPrincipal(signers, m.SignedBy):
 		return sigBad, fmt.Sprintf("it says %s signed it, but that isn't %s's key", m.SignedBy, m.SignedBy)

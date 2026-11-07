@@ -44,7 +44,8 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
     def near_files(self):
         """What reading left on this side: nothing but the reader's own
         ledger of seals (hashes and ids, never a letter's text)."""
-        ledger = {".local", ".local/state", ".local/state/deaddrop", ".local/state/deaddrop/seals.json", ".local/state/deaddrop/.seals.lock"}
+        ledger = {".local", ".local/state", ".local/state/deaddrop", ".local/state/deaddrop/seals.json", ".local/state/deaddrop/.seals.lock",
+                  ".local/state/deaddrop/verified.json", ".local/state/deaddrop/.verified.lock"}
         return sorted(str(p.relative_to(self.near)) for p in self.near.rglob("*") if str(p.relative_to(self.near)) not in ledger)
 
     def test_send_pull_mark_with_nothing_written_here(self):

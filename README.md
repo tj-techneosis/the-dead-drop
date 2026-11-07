@@ -336,7 +336,8 @@ go over ssh's stdin; nothing is written on the
 calling machine except what `pull` prints, the ssh connection's socket in
 `~/.ssh` (while it's open), the reader's ledger of seals it
 has seen (hashes and ids, so a signed letter copied under a new id reads as
-delivered again), and, if you run `deaddrop watch`, the inbox file. Never a
+delivered again), a cache of signature checks already made (so reading
+doesn't run ssh-keygen once per letter every time), and, if you run `deaddrop watch`, the inbox file. Never a
 letter's text. Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run
