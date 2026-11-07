@@ -418,8 +418,9 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   list (they record nothing outside the key's boxes).
 
 What that costs the key's holder, by design: `sent` lists only letters with
-a copy in a box the key reads, and a letter whose thread starts in a box it
-can't read shows no thread link.
+a copy in a box the key reads (each marked `"copies_partial": true` in
+`--json`, and said on the holder's machine), and a letter whose thread starts
+in a box it can't read shows no thread link.
 
 It runs only on the store's own machine (never one that passes commands on).
 Use the full path in `command=` (the gate refuses to run otherwise), and

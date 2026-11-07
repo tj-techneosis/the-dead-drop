@@ -21,6 +21,9 @@ import (
 type SentMessage struct {
 	*Message
 	Copies []SentCopy `json:"copies"`
+	// CopiesPartial: the store looked only in some boxes (a gated key's), so
+	// copies in others aren't listed, and a letter with none there is missing.
+	CopiesPartial bool `json:"copies_partial,omitempty"`
 }
 
 // SentCopy is one recipient's copy, and whether they've read it.
@@ -279,9 +282,15 @@ func cmdSent(args []string) error {
 			s.Box = ""
 		}
 	}
-	if gateRead != nil {
-		// Behind the gate, only the boxes this key reads are looked in. (On
-		// stderr for --json, whose shape is a contract; said in the text.)
+	partial := gateRead != nil
+	for _, s := range ss {
+		if gateRead != nil {
+			s.CopiesPartial = true // said in the answer, for the reader's machine
+		}
+		partial = partial || s.CopiesPartial
+	}
+	if partial {
+		// Behind the gate, only the boxes this key reads are looked in.
 		fmt.Fprintln(os.Stderr, "deaddrop: (only letters with a copy in a box this key reads)")
 	}
 	if f.has("json") {

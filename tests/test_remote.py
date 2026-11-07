@@ -550,6 +550,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         rows = json.loads(self.rdd("sent", "--json").stdout)
         boxes = {c["box"] for r in rows for c in r.get("copies", [])}
         self.assertEqual(boxes, {"alice-helper"})  # the readable copy, and only it
+        self.assertEqual([r.get("copies_partial") for r in rows], [True])  # said in the answer
+        p = self.rdd("sent")
+        self.assertIn("only letters with a copy in a box this key reads", p.stderr)  # said on the reader's machine
         p = self.gate("deaddrop sent --raw --json")
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)
 
