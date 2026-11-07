@@ -33,8 +33,11 @@ type Config struct {
 	// through the agent), who signs automation mail sent from here, and
 	// the list of who holds which key, for checking what arrives.
 	SignKey string `toml:"sign_key"`
-	SignAs  string `toml:"sign_as"`
-	Signers string `toml:"signers"`
+	// SSHReuse: keep one ssh connection to the store open for a minute
+	// (default true).
+	SSHReuse *bool  `toml:"ssh_reuse"`
+	SignAs   string `toml:"sign_as"`
+	Signers  string `toml:"signers"`
 
 	path string
 }

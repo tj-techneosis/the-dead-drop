@@ -8,6 +8,11 @@ me = "alice"
 # `me` (which is then required). Leave it out on the store's machine itself.
 host = "store-box"
 
+# Remote mode keeps one ssh connection open for a minute and runs each
+# command over it (ControlMaster), so a click costs a round trip, not a
+# handshake. Turn it off if your ssh setup objects:
+# ssh_reuse = false
+
 # deaddrop on that machine, if it isn't ~/.local/bin/deaddrop or on PATH.
 # remote_bin = "/usr/local/bin/deaddrop"
 

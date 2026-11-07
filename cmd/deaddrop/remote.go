@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -59,6 +60,28 @@ func remoteHost() (string, error) {
 		return h, nil
 	}
 	return c.Host, nil
+}
+
+// reuseArgs keep one ssh connection to the store open for a minute and run
+// each command over it, so a click costs a round trip, not a handshake.
+// Off with ssh_reuse = false in the config, or when $DEADDROP_SSH names a
+// command of its own.
+func reuseArgs() []string {
+	if os.Getenv("DEADDROP_SSH") != "" {
+		return nil
+	}
+	if c, err := loadConfig(); err == nil && c.SSHReuse != nil && !*c.SSHReuse {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Join(home, ".ssh")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil
+	}
+	return []string{"-o", "ControlMaster=auto", "-o", "ControlPath=" + filepath.Join(dir, "deaddrop-%C"), "-o", "ControlPersist=60"}
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -188,6 +211,7 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 		ssh = "ssh"
 	}
 	sshArgs := []string{"-T", "-o", "BatchMode=yes"}
+	sshArgs = append(sshArgs, reuseArgs()...)
 	if stdin == nil {
 		sshArgs = append(sshArgs, "-n")
 	}

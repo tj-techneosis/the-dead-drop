@@ -77,3 +77,29 @@ func TestAPinnedListWins(t *testing.T) {
 		t.Fatal("a pinned list must win over DEADDROP_SIGNERS and the config")
 	}
 }
+
+func TestSSHReuse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEADDROP_SSH", "")
+	t.Setenv("DEADDROP_CONFIG", home+"/none.toml")
+	cachedConfig = nil
+	defer func() { cachedConfig = nil }()
+	if got := reuseArgs(); got != nil {
+		t.Fatalf("no ~/.ssh, no reuse: %v", got)
+	}
+	os.Mkdir(home+"/.ssh", 0o700)
+	if got := strings.Join(reuseArgs(), " "); !strings.Contains(got, "ControlMaster=auto") || !strings.Contains(got, home+"/.ssh/deaddrop-%C") {
+		t.Fatalf("reuse: %q", got)
+	}
+	os.WriteFile(home+"/none.toml", []byte("ssh_reuse = false\n"), 0o600)
+	cachedConfig = nil
+	if got := reuseArgs(); got != nil {
+		t.Fatalf("ssh_reuse = false: %v", got)
+	}
+	t.Setenv("DEADDROP_SSH", "/bin/true")
+	cachedConfig = nil
+	if got := reuseArgs(); got != nil {
+		t.Fatalf("a command of its own: %v", got)
+	}
+}
