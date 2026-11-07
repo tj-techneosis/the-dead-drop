@@ -161,9 +161,9 @@ class Persona(DeadDrop):
 
 class ReplyTags(DeadDrop):
     def test_a_reply_keeps_the_topic_not_the_speaker(self):
-        id = self.send("# Plan\n\nx\n", "--to", "bob", "--tag", "city-hall", "--tag", "proposal", "--tag", "persona-harbormaster")
-        self.dd("reply", id, "--tag", "persona-keeper", "--tag", "status", "--untag", "proposal", input="Ok.\n", DEADDROP_FROM="bob")
-        self.assertEqual(self.inbox()[0]["tags"], ["city-hall", "persona-keeper", "status"])
+        id = self.send("# Plan\n\nx\n", "--to", "bob", "--tag", "tool-x", "--tag", "proposal", "--tag", "persona-planner")
+        self.dd("reply", id, "--tag", "persona-reviewer", "--tag", "status", "--untag", "proposal", input="Ok.\n", DEADDROP_FROM="bob")
+        self.assertEqual(self.inbox()[0]["tags"], ["tool-x", "persona-reviewer", "status"])
 
     def test_the_same_when_signed(self):
         signers(self.tmp / "s", "alice", "bob")
