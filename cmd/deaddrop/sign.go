@@ -325,7 +325,7 @@ func withPersona(cmd string, args []string) []string {
 
 // readsFor are the commands $DEADDROP_FOR points at a helper's pigeonhole.
 var readsFor = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "file": true,
-	"mark": true, "watch": true, "bar": true, "thread": true, "with": true, "threads": true}
+	"mark": true, "watch": true, "bar": true, "thread": true, "with": true, "threads": true, "open": true}
 
 // withFor adds $DEADDROP_FOR to a reading command that doesn't name a
 // pigeonhole, so a helper's session can set it once. It's added here, on the

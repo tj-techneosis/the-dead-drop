@@ -386,7 +386,11 @@ the system's own.
 - Omarchy: [`examples/omarchy/deaddrop/`](examples/omarchy/deaddrop/), a bar
   widget. Click for your inbox, click a message to read it in the panel
   (that marks it read), archive it or put it back from there, or open its
-  thread or the whole conversation in the browser. Copy the folder
+  thread or the whole conversation in the browser. A switch at the top
+  turns it to **Threads**: every conversation, newest first, with chips to
+  show only the ones a given speaker was in (a letter's persona, else its
+  `persona-<name>` tag, else its box), and chips for each helper's
+  pigeonhole once mail comes `--for` them. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
   `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on
   the focused monitor: the plugin's service answers once for every bar.

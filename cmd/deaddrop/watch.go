@@ -513,8 +513,8 @@ func cleanOpened() {
 }
 
 func cmdOpen(args []string) error {
-	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO"
-	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true})
+	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO  [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -530,14 +530,14 @@ func cmdOpen(args []string) error {
 			if err := checkID(f.get("thread")); err != nil {
 				return bad(u, err)
 			}
-			page, err = self("thread", f.get("thread"), "--html")
+			page, err = self(append([]string{"thread", f.get("thread"), "--html"}, forArgs(f)...)...)
 			name = "thread-" + f.get("thread")
 		} else {
 			who := strings.ToLower(f.get("with"))
 			if err := checkBox("--with", who); err != nil {
 				return bad(u, err)
 			}
-			page, err = self("with", who, "--html")
+			page, err = self(append([]string{"with", who, "--html"}, forArgs(f)...)...)
 			name = "with-" + who
 		}
 		if err != nil {

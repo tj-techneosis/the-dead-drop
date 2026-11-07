@@ -195,3 +195,11 @@ class Topics(DeadDrop):
         # bob asks by alice's copy's id, which isn't in his box.
         self.assertEqual(len(json.loads(self.dd("thread", mine, "--json", DEADDROP_FROM="bob").stdout)["letters"]), 1)
         self.dd("thread", "2026-11-02T153000-alice-ffff", DEADDROP_FROM="bob", ok=False)
+
+    def test_open_a_helpers_thread(self):
+        self.send("# For the planner\n\nx\n", "--to", "bob", "--for", "planner")
+        id = self.inbox("--for", "planner", DEADDROP_FROM="bob")[0]["id"]
+        opened = self.tmp / "opened"
+        opener = script(self.tmp / "opener", f'cp "$1" "{opened}"\n')
+        self.dd("open", "--thread", id, "--for", "planner", DEADDROP_FROM="bob", DEADDROP_OPENER=str(opener))
+        self.assertIn("For the planner", opened.read_text())

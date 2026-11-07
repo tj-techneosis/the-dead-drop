@@ -20,6 +20,12 @@ import qs.Ui
 // Service.qml answers `omarchy-shell deaddrop open|close|toggle|check` once,
 // for every bar, and the copy on the focused monitor opens.
 //
+// Two views, switched at the top of the panel: Inbox (the person's mail, or
+// one helper's pigeonhole) and Threads (`deaddrop threads`: every
+// conversation, newest first, narrowed to one speaker with a chip; a row
+// opens the whole thread in the browser). A speaker is a letter's sealed
+// persona, else its persona-<name> tag, else its box.
+//
 // Something has to run `deaddrop watch` (Crontinental, a systemd timer, or
 // `deaddrop watch --every 1m` as a service): see the Dead Drop's README.
 //
@@ -91,6 +97,18 @@ Panel {
   property string readingNote: ""
   property string actionNote: ""
 
+  // Views: "inbox" or "threads"; the pigeonhole shown ("" is the person's).
+  property string view: "inbox"
+  property string hole: ""
+  property var holes: []          // helpers with mail in this box
+  property var holeMessages: []   // a helper's pigeonhole, fetched (no inbox file for it)
+  property var topics: []         // threads, each with .speakers
+  property var speakers: []       // every speaker in them, busiest first
+  property string who: ""         // threads: only those this speaker is in
+  property string threadsNote: ""
+  readonly property var shown: hole === "" ? messages : holeMessages
+  readonly property var shownTopics: who === "" ? topics : topics.filter(function(t) { return t.speakers.indexOf(root.who) >= 0 })
+
   property int cursor: 0
   property bool cursorActive: false
   property int tick: 0  // a minute passing: ages are worked out again
@@ -131,6 +149,85 @@ Panel {
     if (m.signature !== "verified") return s + " · unsigned"
     return s
   }
+
+  // Who spoke a letter: its sealed persona, else a persona-<name> tag, else
+  // its box. ("persona-release-manager" reads "Release manager".)
+  function speakerOf(l, box) {
+    if (l.persona) return String(l.persona)
+    var tags = l.tags || []
+    for (var i = 0; i < tags.length; i++) {
+      var t = String(tags[i])
+      if (t.indexOf("persona-") === 0 && t.length > 8) {
+        var w = t.slice(8).replace(/-/g, " ")
+        return w.charAt(0).toUpperCase() + w.slice(1)
+      }
+    }
+    return l.mine ? box : String(l.from || "")
+  }
+
+  function loadTopics(raw) {
+    var data
+    try { data = JSON.parse(raw) } catch (e) { root.threadsNote = "Couldn't read the threads."; return }
+    root.threadsNote = data.sent_missing ? String(data.sent_missing) : ""
+    var count = {}
+    var list = data.topics || []
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i]
+      var seen = []
+      var letters = t.letters || []
+      for (var j = 0; j < letters.length; j++) {
+        var s = root.speakerOf(letters[j], String(data.box || ""))
+        if (s && seen.indexOf(s) < 0) seen.push(s)
+      }
+      t.speakers = seen
+      for (var k = 0; k < seen.length; k++) count[seen[k]] = (count[seen[k]] || 0) + 1
+    }
+    var names = Object.keys(count)
+    names.sort(function(a, b) { return count[b] - count[a] || a.localeCompare(b) })
+    root.speakers = names
+    if (root.who !== "" && names.indexOf(root.who) < 0) root.who = ""
+    root.topics = list
+  }
+
+  function loadHoles(raw) {
+    var list
+    try { list = JSON.parse(raw) } catch (e) { return }
+    var hs = []
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i].pigeonhole
+      if (h && hs.indexOf(String(h)) < 0) hs.push(String(h))
+    }
+    hs.sort()
+    root.holes = hs
+    if (root.hole !== "" && hs.indexOf(root.hole) < 0) root.pickHole("")
+  }
+
+  function loadHole(raw) {
+    var list
+    try { list = JSON.parse(raw) } catch (e) { return }
+    // Unread first (urgent on top), then read, newest first: as the inbox file.
+    function rank(m) { return m.state === "unread" ? (m.urgency === "urgent" ? 0 : 1) : 2 }
+    list.sort(function(a, b) { return rank(a) - rank(b) || String(b.sent).localeCompare(String(a.sent)) })
+    root.holeMessages = list
+  }
+
+  function forArgs() { return root.hole === "" ? [] : ["--for", root.hole] }
+
+  function refreshViews() {
+    if (!holeLister.running) holeLister.running = true
+    if (root.hole !== "" && !holeReader.running) {
+      holeReader.command = [root.deaddrop, "inbox", "--read", "--json"].concat(root.forArgs())
+      holeReader.running = true
+    }
+    if (root.view === "threads" && !threadLister.running) {
+      threadLister.command = [root.deaddrop, "threads", "--json", "--letters", "--limit", "80"].concat(root.forArgs())
+      threadLister.running = true
+    }
+  }
+
+  function pickView(v) { root.view = v; root.cursor = 0; root.refreshViews() }
+  function pickHole(h) { root.hole = h; root.holeMessages = []; root.cursor = 0; root.refreshViews() }
+  function openTopic(t) { root.runAction(["open", "--thread", String(t.root)].concat(root.forArgs()), "Thread") }
 
   function headline() {
     if (!root.watched) return "Not watching yet"
@@ -211,13 +308,15 @@ Panel {
   }
 
   function moveCursor(dy) {
-    root.cursor = Math.max(0, Math.min(root.messages.length - 1, root.cursor + dy))
+    var n = root.view === "threads" ? root.shownTopics.length : root.shown.length
+    root.cursor = Math.max(0, Math.min(n - 1, root.cursor + dy))
   }
 
   onOpenedChanged: if (opened) {
     cursorActive = false
     cursor = 0
     closeMessage()
+    refreshViews()
   }
 
   FileView {
@@ -284,14 +383,35 @@ Panel {
   }
 
   Process {
+    id: holeLister
+    command: [root.deaddrop, "inbox", "--for", "*", "--read", "--json"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHoles(text) }
+  }
+
+  Process {
+    id: holeReader
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHole(text) }
+  }
+
+  Process {
+    id: threadLister
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadTopics(text) }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (text.trim() !== "") root.threadsNote = text.trim().replace(/^deaddrop: /, "")
+    }
+  }
+
+  Process {
     id: actor
     property string label: ""
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: if (text.trim() !== "") root.actionNote = actor.label + " didn't work: " + text.trim().replace(/^deaddrop: /, "")
     }
-    // mark and watch rewrite the inbox file; the FileView picks that up.
-    onExited: function(exitCode) { inboxFile.reload() }
+    // mark and watch rewrite the inbox file; the FileView picks that up. A
+    // helper's pigeonhole and the threads are fetched again.
+    onExited: function(exitCode) { inboxFile.reload(); root.refreshViews() }
   }
 
   // Ages on screen move on even when the file doesn't.
@@ -369,13 +489,18 @@ Panel {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dy)
       }
-      onActivateRequested: if (!root.reading && root.cursorActive && root.messages[root.cursor]) root.openMessage(root.messages[root.cursor])
+      onActivateRequested: {
+        if (root.reading || !root.cursorActive) return
+        if (root.view === "threads") { if (root.shownTopics[root.cursor]) root.openTopic(root.shownTopics[root.cursor]) }
+        else if (root.shown[root.cursor]) root.openMessage(root.shown[root.cursor])
+      }
       onCloseRequested: if (root.reading) root.closeMessage(); else root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var k = String(t).toLowerCase()
-        var m = root.reading || (root.cursorActive ? root.messages[root.cursor] : null)
-        if (k === "r") root.checkNow()
+        var m = root.reading || (root.cursorActive && root.view === "inbox" ? root.shown[root.cursor] : null)
+        if (k === "v" && !root.reading) root.pickView(root.view === "inbox" ? "threads" : "inbox")
+        else if (k === "r") { root.checkNow(); root.refreshViews() }
         else if (k === "a" && m) root.archiveMessage(m)
         else if (k === "u" && m) root.putBackMessage(m)
         else if (k === "b" && root.reading) root.closeMessage()
@@ -434,16 +559,103 @@ Panel {
             font.pixelSize: Style.font.caption
           }
 
+          // ---- what's shown: inbox or threads, whose pigeonhole, which speaker ----
+
+          Flow {
+            visible: !root.reading
+            width: parent.width
+            leftPadding: Style.space(10)
+            rightPadding: Style.space(10)
+            spacing: Style.space(6)
+
+            Chip { label: "Inbox"; on: root.view === "inbox"; onPicked: root.pickView("inbox") }
+            Chip { label: "Threads"; on: root.view === "threads"; onPicked: root.pickView("threads") }
+            Item { visible: root.holes.length > 0; width: Style.space(8); height: 1 }
+            Chip { visible: root.holes.length > 0; label: "Mine"; on: root.hole === ""; onPicked: root.pickHole("") }
+            Repeater {
+              model: root.holes
+              Chip {
+                required property string modelData
+                label: "for " + modelData
+                on: root.hole === modelData
+                onPicked: root.pickHole(modelData)
+              }
+            }
+          }
+
+          Flow {
+            visible: !root.reading && root.view === "threads" && root.speakers.length > 1
+            width: parent.width
+            leftPadding: Style.space(10)
+            rightPadding: Style.space(10)
+            spacing: Style.space(6)
+
+            Chip { label: "Everyone"; on: root.who === ""; onPicked: { root.who = ""; root.cursor = 0 } }
+            Repeater {
+              model: root.speakers
+              Chip {
+                required property string modelData
+                label: modelData
+                on: root.who === modelData
+                onPicked: { root.who = (root.who === modelData ? "" : modelData); root.cursor = 0 }
+              }
+            }
+          }
+
+          // ---- the threads ----
+
+          Column {
+            id: topicColumn
+            visible: !root.reading && root.view === "threads"
+            width: parent.width
+            spacing: Style.space(4)
+
+            Text {
+              visible: root.threadsNote !== ""
+              width: parent.width
+              leftPadding: Style.space(10)
+              rightPadding: Style.space(10)
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              text: root.threadsNote
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.shownTopics
+              TopicRow {
+                required property var modelData
+                required property int index
+                width: topicColumn.width
+                topic: modelData
+                rowIndex: index
+              }
+            }
+
+            Text {
+              visible: root.shownTopics.length === 0 && !threadLister.running
+              width: parent.width
+              leftPadding: Style.space(10)
+              textFormat: Text.PlainText
+              text: root.who !== "" ? "No threads with " + root.who + "." : "No threads yet."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
           // ---- the list ----
 
           Column {
             id: listColumn
-            visible: !root.reading
+            visible: !root.reading && root.view === "inbox"
             width: parent.width
             spacing: Style.space(4)
 
             Repeater {
-              model: root.messages
+              model: root.shown
               MessageRow {
                 required property var modelData
                 required property int index
@@ -454,7 +666,7 @@ Panel {
             }
 
             Text {
-              visible: root.watched && root.messages.length === 0
+              visible: root.watched && root.shown.length === 0
               width: parent.width
               leftPadding: Style.space(10)
               textFormat: Text.PlainText
@@ -592,6 +804,104 @@ Panel {
     }
   }
 
+  component Chip: Rectangle {
+    id: chip
+    property string label: ""
+    property bool on: false
+    signal picked()
+    radius: height / 2
+    implicitHeight: chipText.implicitHeight + Style.space(6)
+    implicitWidth: chipText.implicitWidth + Style.space(16)
+    color: on ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14) : "transparent"
+    border.width: 1
+    border.color: on ? root.foreground : root.dim
+
+    Text {
+      id: chipText
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: chip.label
+      color: chip.on ? root.foreground : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: chip.picked()
+    }
+  }
+
+  // A thread: its subject, who's in it, how many letters, how long ago.
+  // Opens the whole thread in the browser.
+  component TopicRow: CursorSurface {
+    id: trow
+    property var topic: ({})
+    property int rowIndex: 0
+    readonly property bool hasUnread: (topic.unread || 0) > 0
+
+    hasCursor: root.cursorActive && root.view === "threads" && root.cursor === rowIndex
+    foreground: root.foreground
+    implicitHeight: tcontent.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: { root.cursorActive = true; root.cursor = trow.rowIndex }
+      onClicked: root.openTopic(trow.topic)
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      Rectangle {
+        Layout.alignment: Qt.AlignTop
+        Layout.topMargin: Style.space(6)
+        implicitWidth: Style.space(8)
+        implicitHeight: Style.space(8)
+        radius: width / 2
+        color: trow.hasUnread ? root.unreadColor : "transparent"
+        border.width: trow.hasUnread ? 0 : 1
+        border.color: root.dim
+      }
+
+      ColumnLayout {
+        id: tcontent
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: String(trow.topic.subject || "")
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: trow.hasUnread
+          elide: Text.ElideRight
+        }
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: (trow.topic.speakers || []).join(", ") + " · " + trow.topic.count + (trow.topic.count === 1 ? " letter" : " letters")
+            + (trow.hasUnread ? " · " + trow.topic.unread + " new" : "") + " · " + root.ago(trow.topic.last)
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+    }
+  }
+
   component MessageRow: CursorSurface {
     id: row
     property var message: ({})
@@ -599,7 +909,7 @@ Panel {
     readonly property bool isUnread: message.state === "unread"
     readonly property bool isUrgent: isUnread && message.urgency === "urgent"
 
-    hasCursor: root.cursorActive && root.cursor === rowIndex
+    hasCursor: root.cursorActive && root.view === "inbox" && root.cursor === rowIndex
     foreground: root.foreground
     implicitHeight: content.implicitHeight + Style.spacing.rowPaddingX
 
