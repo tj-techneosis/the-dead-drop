@@ -64,11 +64,11 @@ deaddrop send --to me --from automation --tag tool-y --tag report --attach run.c
 
 | flag | |
 |---|---|
-| `--to WHO` | a box: any lowercase name, or `me`. Repeat it (or `--to a,b`) for copies to several |
+| `--to WHO` | a box: any lowercase name, or `me`. Repeat it (or `--to a,b`) for copies to several: up to 32 copies a send, counting each `--for` |
 | `--subject "…"` | without it, the document's first heading (or its first line) |
 | `--tag T` | repeatable; lowercase. The tool or project first, then the kind of document |
 | `--urgent`, `--fyi` | the urgency; normal without either |
-| `--attach FILE` | repeatable; fetched later with `deaddrop file ID NAME` |
+| `--attach FILE` | repeatable; fetched later with `deaddrop file ID NAME`. Up to 16 files a send, 64 MB each and 256 MB in all, and 1 GB once stored in every copy |
 | `--reply-to ID` | what it answers (`deaddrop reply ID` does this for you, back to the sender) |
 
 `deaddrop reply ID` sends back to the sender with "Re: " and the original's
@@ -428,6 +428,15 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   isn't told (a broken config) goes in `gate.log` at the store's top;
 - `file` and `reply` check signatures on the store, against the store's own
   list (they record nothing outside the key's boxes).
+
+Every send and reply has the same limits behind the gate as anywhere: a
+document of 8 MB, 16 attachments of 64 MB each and 256 MB in all, 32 copies
+(each recipient times each `--for` helper, which is also the most follow-up jobs one send can
+book), and 1 GB written in all once each copy holds its attachments. The
+sender's machine checks the files (how many, their names and sizes) before
+it connects; the store checks everything again as the stream arrives, and
+the 1 GB once it knows the copies. A send it refuses partway leaves nothing
+behind: the files it had taken in are removed, and no box is touched.
 
 What that costs the key's holder, by design: `sent` lists only letters with
 a copy in a box the key reads (each marked `"copies_partial": true` in

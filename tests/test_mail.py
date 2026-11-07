@@ -74,6 +74,33 @@ The body.
             self.assertIn("no box carol", p.stderr)
         self.assertNotEqual(self.dd("inbox", "--json", "--nosuchflag", ok=False).returncode, 4)  # other failures keep theirs
 
+    def test_a_send_has_at_most_32_copies_and_16_attachments(self):
+        many = [w for i in range(17) for w in ("--to", f"box{i:02d}")]
+        p = self.dd("send", *many, "--for", "h1", "--for", "h2", ok=False, input="hi\n")
+        self.assertIn("34 copies", p.stderr)
+        self.assertFalse((self.dir / "box00").exists())
+        files = []
+        for i in range(17):
+            f = self.tmp / f"f{i:02d}.txt"
+            f.write_text("x\n")
+            files += ["--attach", str(f)]
+        p = self.dd("send", "--to", "bob", *files, ok=False, input="hi\n")
+        self.assertIn("at most 16", p.stderr)
+        self.send("hi\n", "--to", "bob", *files[:32])  # 16 is fine
+
+    def test_reply_has_the_copy_cap_and_attachments_count_once_per_copy(self):
+        id = self.send("# Q\n\nx\n", "--to", "bob")
+        helpers = [w for i in range(33) for w in ("--for", f"h{i:02d}")]
+        p = self.dd("reply", id, *helpers, ok=False, input="a\n", DEADDROP_FROM="bob")
+        self.assertIn("33 copies", p.stderr)
+        big = self.tmp / "big.bin"
+        with open(big, "wb") as f:
+            f.truncate(60 << 20)  # 60 MB, sparse
+        many = [w for i in range(18) for w in ("--to", f"box{i:02d}")]
+        p = self.dd("send", *many, "--attach", str(big), ok=False, input="hi\n")
+        self.assertIn("once per copy, come to 1080 MB", p.stderr)
+        self.assertFalse((self.dir / "box00").exists())
+
     def test_subject_from_the_document(self):
         self.send("Just a first line here\nand more\n", "--to", "bob")
         self.send("---\ntitle: x\n---\n\nintro\n\n## The heading\n", "--to", "bob")

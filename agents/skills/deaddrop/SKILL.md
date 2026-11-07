@@ -63,11 +63,15 @@ EOF
   on (most automated reports). `--urgent` only when the person says it's
   urgent or it blocks someone.
 - **Files:** `--attach FILE` (repeatable) for logs, CSVs, screenshots. The
-  reader fetches them with `deaddrop file ID NAME`.
+  reader fetches them with `deaddrop file ID NAME`. Up to 16 files, 64 MB
+  each, 256 MB in all; more than that goes in one archive. Each copy stores
+  its own, and one send writes at most 1 GB in all: to many people, send a
+  big file once and tell the others where it is.
 - **Follow-up:** `--follow-up 2d` (or a time) raises the message to urgent
   if it's still unread by then. Use it when the person asks for a nudge
   ("make sure Bob sees this by Thursday").
-- **Several people:** `--to bob --to carol` (each gets a copy).
+- **Several people:** `--to bob --to carol` (each gets a copy; up to 32
+  copies a send, counting each helper named with `--for`).
 - **You have a box of your own** (an assistant with its own box, like
   `alice-helper`): send with `--reply-box <your box>` (or set
   `DEADDROP_REPLY_BOX` for the session: then `inbox`, `pull`, `show`,

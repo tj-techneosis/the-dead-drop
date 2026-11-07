@@ -223,12 +223,9 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 			if err != nil {
 				return err
 			}
-			for _, p := range attach {
-				if info, err := os.Stat(p); err != nil {
-					return fmt.Errorf("--attach %s: %v", p, err)
-				} else if !info.Mode().IsRegular() {
-					return fmt.Errorf("--attach %s: not a file", p)
-				}
+			// Refused here, before connecting, rather than partway up.
+			if err := checkAttachSet(attach); err != nil {
+				return err
 			}
 			pr, pw := io.Pipe()
 			go func() { pw.CloseWithError(bundle(pw, body, attach)) }()

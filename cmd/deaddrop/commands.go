@@ -18,6 +18,14 @@ import (
 const (
 	maxBody       = 8 << 20  // a document, not a dump
 	maxAttachment = 64 << 20 // per file
+	// Per send, so no one send (a gated key's included) can fill the
+	// store's disk or book jobs without end: files, their bytes in all, and
+	// copies (--to times --for), which is also how many follow-ups it books.
+	maxAttachments = 16
+	maxSendBytes   = 256 << 20
+	maxCopies      = 32
+	// Attachments are stored once per copy: what one send writes in all.
+	maxWritten = 1 << 30
 )
 
 // ---- send and reply ----
@@ -213,6 +221,12 @@ func draftOf(f flags) (draft, error) {
 				d.to = append(d.to, who)
 			}
 		}
+	}
+	if n := len(d.to) * max(1, len(d.helpers)); n > maxCopies {
+		return d, badf(u, "that's %d copies (--to times --for); at most %d a send", n, maxCopies)
+	}
+	if len(d.attach) > maxAttachments {
+		return d, badf(u, "%d attachments; at most %d a send (put them in one archive)", len(d.attach), maxAttachments)
 	}
 	if d.tags, err = tagsOf(f); err != nil {
 		return d, bad(u, err)
@@ -521,6 +535,9 @@ func deliver(dir string, d draft) error {
 		return err
 	}
 	// Check every attachment before anything is written.
+	if err := checkAttachSet(d.attach); err != nil {
+		return err
+	}
 	names := map[string]bool{}
 	var attached, sums []string
 	for _, p := range d.attach {
@@ -580,6 +597,15 @@ func deliver(dir string, d draft) error {
 		for _, h := range d.helpers {
 			copies = append(copies, copyAt{to, h})
 		}
+	}
+	// Here, where every send and reply ends up, before anything is written:
+	// how many copies (and so follow-ups), and what they write in all.
+	if len(copies) > maxCopies {
+		return fmt.Errorf("that's %d copies (each recipient times each helper named with --for); at most %d a send", len(copies), maxCopies)
+	}
+	if n := attachBytes(d.attach) * int64(len(copies)); n > maxWritten {
+		// Rounded up, so a send just over never reads as "1024 MB of 1024".
+		return fmt.Errorf("the attachments, once per copy, come to %d MB; at most %d MB a send (fewer copies, or send the file once and say where it is)", (n+(1<<20)-1)>>20, maxWritten>>20)
 	}
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
@@ -677,10 +703,57 @@ func deliver(dir string, d draft) error {
 	return nil
 }
 
+// checkAttachSet is the per-send limits on attachments: how many, each
+// file's size, and their size in all. The sender's machine checks it before
+// it connects; the store checks again as they arrive.
+func checkAttachSet(paths []string) error {
+	if len(paths) > maxAttachments {
+		return fmt.Errorf("%d attachments; at most %d a send (put them in one archive)", len(paths), maxAttachments)
+	}
+	var total int64
+	names := map[string]bool{}
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("--attach %s: %v", p, err)
+		}
+		name := filepath.Base(p)
+		if !fileRE.MatchString(name) {
+			return fmt.Errorf("--attach %s: rename it to plain letters, digits, ., _, - and spaces first", p)
+		}
+		if names[name] {
+			return fmt.Errorf("--attach: two files named %s", name)
+		}
+		names[name] = true
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("--attach %s: not a file", p)
+		}
+		if info.Size() > maxAttachment {
+			return fmt.Errorf("--attach %s: over %d MB", p, maxAttachment>>20)
+		}
+		if total += info.Size(); total > maxSendBytes {
+			return fmt.Errorf("the attachments are over %d MB in all", maxSendBytes>>20)
+		}
+	}
+	return nil
+}
+
+// attachBytes is the attachments' size in all (checked already).
+func attachBytes(paths []string) int64 {
+	var total int64
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
+}
+
 // bundle and unbundle carry a send's body and attachments over ssh as one
 // stream: body.md, then files/<name>.
 func bundle(w io.Writer, body string, attach []string) error {
 	tw := tar.NewWriter(w)
+	var total int64
 	if err := tw.WriteHeader(&tar.Header{Name: "body.md", Mode: 0o600, Size: int64(len(body))}); err != nil {
 		return err
 	}
@@ -701,6 +774,10 @@ func bundle(w io.Writer, body string, attach []string) error {
 			f.Close()
 			return fmt.Errorf("--attach %s: over %d MB", p, maxAttachment>>20)
 		}
+		if total += info.Size(); total > maxSendBytes {
+			f.Close()
+			return fmt.Errorf("the attachments are over %d MB in all", maxSendBytes>>20)
+		}
 		err = tw.WriteHeader(&tar.Header{Name: "files/" + filepath.Base(p), Mode: 0o600, Size: info.Size()})
 		if err == nil {
 			_, err = io.Copy(tw, f)
@@ -717,6 +794,7 @@ func unbundle(r io.Reader, into string) (string, []string, error) {
 	tr := tar.NewReader(r)
 	body, gotBody := "", false
 	var files []string
+	var total int64
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -742,6 +820,14 @@ func unbundle(r io.Reader, into string) (string, []string, error) {
 			}
 			if h.Size > maxAttachment {
 				return "", nil, fmt.Errorf("--attach %s: over %d MB", name, maxAttachment>>20)
+			}
+			// Counted before a byte is written: the caps hold on the store
+			// whatever the sender's own deaddrop checked.
+			if len(files) >= maxAttachments {
+				return "", nil, fmt.Errorf("more than %d attachments in one send (put them in one archive)", maxAttachments)
+			}
+			if total += h.Size; total > maxSendBytes {
+				return "", nil, fmt.Errorf("the attachments are over %d MB in all", maxSendBytes>>20)
 			}
 			p := filepath.Join(into, name)
 			if _, err := copyAtomic(p, io.LimitReader(tr, maxAttachment)); err != nil {

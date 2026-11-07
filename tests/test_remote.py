@@ -423,6 +423,31 @@ class RemoteWait(RemoteBase):
         self.assertEqual(p.returncode, 1)
 
 
+class RemoteCaps(RemoteBase):
+    def test_too_many_attachments_are_refused_before_connecting(self):
+        self.rdd("send", "--to", "bob", input="# First\n\nx\n")
+        files = []
+        for i in range(17):
+            f = self.tmp / f"f{i:02d}.txt"
+            f.write_text("x\n")
+            files += ["--attach", str(f)]
+        before = self.ssh_log.read_text()
+        p = self.rdd("send", "--to", "bob", *files, input="hi\n", ok=False)
+        self.assertIn("at most 16", p.stderr)
+        self.assertIn("one archive", p.stderr)
+        self.assertEqual(self.ssh_log.read_text(), before)  # never connected
+        (self.tmp / "a").mkdir()
+        (self.tmp / "b").mkdir()
+        (self.tmp / "a" / "log.txt").write_text("1\n")
+        (self.tmp / "b" / "log.txt").write_text("2\n")
+        odd = self.tmp / "report (1).pdf"
+        odd.write_text("x\n")
+        for files, said in (([self.tmp / "a" / "log.txt", self.tmp / "b" / "log.txt"], "two files named"), ([odd], "rename it")):
+            p = self.rdd("send", "--to", "bob", *[w for f in files for w in ("--attach", str(f))], input="hi\n", ok=False)
+            self.assertIn(said, p.stderr)
+            self.assertEqual(self.ssh_log.read_text(), before)
+
+
 class Mirror(RemoteBase):
     """--cached: the store's answers kept on the reader's machine, checked
     here on every read, refreshed by watch --mirror, dropped by a write."""
@@ -658,6 +683,26 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("this key reads only", p.stderr)
         self.assertEqual(p.returncode, 5)
         self.assertNotIn("still waiting", p.stderr)
+
+    def test_a_bundle_over_the_caps_writes_nothing(self):
+        # A key that builds its own stream: the store counts before writing.
+        import io, tarfile
+        self.far_send("alice", "# First\n\nx\n")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            body = b"# Many\n\nx\n"
+            ti = tarfile.TarInfo("body.md"); ti.size = len(body); t.addfile(ti, io.BytesIO(body))
+            for i in range(17):
+                ti = tarfile.TarInfo(f"files/f{i:02d}.txt"); ti.size = 2; t.addfile(ti, io.BytesIO(b"x\n"))
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "DEADDROP_NOW": self.clock,
+               "SSH_ORIGINAL_COMMAND": "deaddrop send --to alice --subject many --bundle"}
+        p = subprocess.run([str(self.far / ".local" / "bin" / "deaddrop"), "gate", "--as", "alice", "--read", "alice",
+                            "--dir", str(self.far_store), "--config", str(self.far / ".config" / "deaddrop" / "config.toml")],
+                           input=buf.getvalue(), capture_output=True, env=env)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"more than 16 attachments", p.stderr)
+        self.assertEqual(list(self.far_store.glob(".incoming-*")), [])
+        self.assertEqual(len(list((self.far_store / "alice" / "new").glob("*.md"))), 1)
 
     def test_attach_never_reads_the_stores_files(self):
         secret = self.far / "secret.txt"
