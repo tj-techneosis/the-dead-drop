@@ -10,6 +10,8 @@ title="Dead Drop: $DEADDROP_MSG_SENDER"
 [ -n "$DEADDROP_MSG_PERSONA" ] && title="$title, as $DEADDROP_MSG_PERSONA"
 # A watch for one of your helpers (watch --for): say whose letter it is.
 [ -n "$DEADDROP_MSG_FOR" ] && title="$title (for $DEADDROP_MSG_FOR)"
+# A watch on a side box (watch --box): say which box it came to.
+[ -n "$DEADDROP_MSG_SIDE_BOX" ] && title="$title (to $DEADDROP_MSG_BOX)"
 case "$DEADDROP_MSG_SIGNATURE" in
   verified) ;;
   bad) title="$title (forged or changed!)" ;;

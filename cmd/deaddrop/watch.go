@@ -355,6 +355,7 @@ func runHooks(box string, e InboxEntry) {
 			"DEADDROP_MSG_SIGNED_BY="+e.SignedBy,
 			"DEADDROP_MSG_PERSONA="+e.Persona,
 			"DEADDROP_MSG_FOR="+watchFor,
+			"DEADDROP_MSG_SIDE_BOX="+watchBox, // set when the watch is on a box not the caller's (--box)
 		)
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: hook %s, for %s: %v\n", name, e.ID, err)
@@ -405,6 +406,9 @@ func cmdWatch(args []string) error {
 		return badf(u, "watch takes no words of its own")
 	}
 	hooks := !f.has("no-hooks")
+	// A watch looks at the store itself: --cached is for the readers of what
+	// it keeps, never for its own look.
+	os.Unsetenv("DEADDROP_CACHED")
 	mirror := func() {
 		if f.has("mirror") {
 			if _, err := refreshMirror(); err != nil {
@@ -543,7 +547,12 @@ func showFingerprint(f flags) error {
 		return err
 	}
 	if viaHost != "" {
-		return runRemote(viaHost, "show", []string{f.pos[0], "--fingerprint"})
+		out, err := mirroredBytes(viaHost, "show", []string{f.pos[0], "--fingerprint"})
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(out)
+		return err
 	}
 	dir, err := storeDir()
 	if err != nil {
@@ -574,13 +583,18 @@ func cleanOpened() {
 }
 
 func cmdOpen(args []string) error {
-	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO | open --threads  [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "threads": false, "for": true})
+	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO | open --threads  [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "threads": false, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if err := setWatchFor(f); err != nil {
 		return bad(u, err) // one pigeonhole, never '*': open marks what it shows
+	}
+	if watchBox != "" {
+		// What it shows and marks is in that box: the commands it runs read
+		// there by default (defaultBox).
+		os.Setenv("DEADDROP_BOX", watchBox)
 	}
 	var page []byte
 	var name, id string
@@ -691,10 +705,14 @@ func cmdBar(args []string) error {
 
 // watchArgs is the --for a helper's bar passes on to what it runs.
 func watchArgs() []string {
-	if watchFor != "" {
-		return []string{"--for", watchFor}
+	var a []string
+	if watchBox != "" {
+		a = append(a, "--box", watchBox)
 	}
-	return nil
+	if watchFor != "" {
+		a = append(a, "--for", watchFor)
+	}
+	return a
 }
 
 // staleAfter is how old a check can be before the bar says so.
@@ -719,6 +737,9 @@ func barText(in *InboxFile) string {
 	}
 	if in.For != "" {
 		s = "for " + in.For + ": " + s
+	}
+	if watchBox != "" {
+		s = in.Box + ": " + s
 	}
 	if !in.OK {
 		s += " (can't reach the store)"
@@ -806,11 +827,11 @@ func swiftbar(in *InboxFile, bin string) string {
 		act("--", "Read", append([]string{"open", e.ID}, watchArgs()...)...)
 		act("--", "Thread", append([]string{"open", "--thread", e.ID}, watchArgs()...)...)
 		if e.State == "unread" {
-			act("--", "Mark read", "mark", "read", e.ID)
+			act("--", "Mark read", append([]string{"mark", "read", e.ID}, watchArgs()...)...)
 		} else {
-			act("--", "Mark unread", "mark", "unread", e.ID)
+			act("--", "Mark unread", append([]string{"mark", "unread", e.ID}, watchArgs()...)...)
 		}
-		act("--", "Archive", "mark", "archive", e.ID)
+		act("--", "Archive", append([]string{"mark", "archive", e.ID}, watchArgs()...)...)
 	}
 	if len(in.Messages) == 0 {
 		b.WriteString("No mail" + plain + "\n")
@@ -826,7 +847,7 @@ func swiftbar(in *InboxFile, bin string) string {
 		b.WriteString("---\nConversations" + plain + "\n")
 		sort.Strings(people)
 		for _, p := range people {
-			act("--", "With "+menuText(p, 32), "open", "--with", p)
+			act("--", "With "+menuText(p, 32), append([]string{"open", "--with", p}, watchArgs()...)...)
 		}
 	}
 	b.WriteString("---\n")

@@ -4,19 +4,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
 // The verification cache: ssh-keygen once per letter, every time, is most of
-// what reading costs (seconds, for a few hundred letters). A check's answer
-// depends only on the list of signers, the signer named, the seal and the
-// exact text signed, so it's kept under a hash of all four, on the reader's
-// machine beside the seal ledger. A changed list, a changed letter, or a
-// different signer is a different key, and is checked afresh. Like the
-// ledger, it's the reader's: an account that can write the reader's state
-// could poison it (the shared-login limit in design.md).
+// what reading costs (seconds, for a few hundred letters). A check that
+// passed is kept under a hash of everything its answer depends on: the list
+// of signers (path and bytes), the ssh-keygen that checked it, the signer
+// named, the seal and the exact text signed. Only passes are kept, never
+// failures, so a passing check can't be talked out of, nor a failure into.
+//
+// A kept "verified" is only as trustworthy as whoever can write the cache.
+// So it's used only where that's already the person who controls the list:
+// the list is their own file, the state folder is theirs and private, and
+// neither is writable by anyone else. Under a pinned list (a shared login,
+// where the login can write the state folder but not the list) there is no
+// cache. Nor when the list has keys that expire (valid-before, valid-after)
+// or a certificate authority, whose answers change with the clock.
 
 type verifyCache struct {
 	Checks map[string]bool     `json:"checks"` // list, signer, seal, text -> it verified
@@ -43,6 +52,60 @@ func signersHash(path string) string {
 	h := hex.EncodeToString(sum[:])
 	signersHashMemo[path] = h
 	return h
+}
+
+// vcacheOK says the cache may be used with this list (see above).
+var vcacheOKMemo = map[string]bool{}
+
+func vcacheOK(signers string) bool {
+	if ok, seen := vcacheOKMemo[signers]; seen {
+		return ok
+	}
+	ok := vcacheAllowed(signers)
+	vcacheOKMemo[signers] = ok
+	return ok
+}
+
+func vcacheAllowed(signers string) bool {
+	if os.Getenv("DEADDROP_NO_VCACHE") != "" || pinnedSigners() {
+		return false
+	}
+	mine := func(path string) bool {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		return ok && int(st.Uid) == os.Getuid()
+	}
+	os.MkdirAll(stateDir(), 0o700)
+	if !mine(signers) || !mine(filepath.Dir(signers)) || !mine(stateDir()) {
+		return false
+	}
+	b, err := os.ReadFile(signers)
+	if err != nil {
+		return false
+	}
+	low := strings.ToLower(string(b))
+	return !strings.Contains(low, "valid-before") && !strings.Contains(low, "valid-after") && !strings.Contains(low, "cert-authority")
+}
+
+// keygenID is the ssh-keygen that checks: its path and its file's size and
+// time, so a different one is a different key.
+var keygenIDMemo string
+
+func keygenID() string {
+	if keygenIDMemo == "" {
+		p := sshKeygen()
+		if lp, err := exec.LookPath(p); err == nil {
+			p = lp
+		}
+		keygenIDMemo = p
+		if info, err := os.Stat(p); err == nil {
+			keygenIDMemo = fmt.Sprintf("%s\x00%d\x00%d", p, info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	return keygenIDMemo
 }
 
 func loadVCache() *verifyCache {
@@ -76,35 +139,36 @@ func vkey(parts ...string) string {
 // checked before.
 func cachedCheck(signers, signer, sig string, payload []byte, check func() bool) bool {
 	sh := signersHash(signers)
-	if sh == "" {
+	if sh == "" || !vcacheOK(signers) {
 		return check()
 	}
 	c := loadVCache()
-	k := vkey(sh, signer, sig, string(payload))
-	if ok, seen := c.Checks[k]; seen {
-		return ok
+	k := vkey(sh, keygenID(), signer, sig, string(payload))
+	if c.Checks[k] {
+		return true
 	}
 	ok := check()
-	c.Checks[k], c.dirty = ok, true
+	if ok {
+		c.Checks[k], c.dirty = true, true
+	}
 	return ok
 }
 
 // cachedOwners is find-principals, cached the same way.
 func cachedOwners(signers, sig string, find func() []string) []string {
 	sh := signersHash(signers)
-	if sh == "" {
+	if sh == "" || !vcacheOK(signers) {
 		return find()
 	}
 	c := loadVCache()
-	k := vkey(sh, sig)
-	if o, seen := c.Owners[k]; seen {
+	k := vkey(sh, keygenID(), sig)
+	if o := c.Owners[k]; len(o) > 0 {
 		return o
 	}
 	o := find()
-	if o == nil {
-		o = []string{}
+	if len(o) > 0 {
+		c.Owners[k], c.dirty = o, true
 	}
-	c.Owners[k], c.dirty = o, true
 	return o
 }
 
@@ -129,13 +193,14 @@ func saveVCache() {
 	if b, err := os.ReadFile(vcachePath()); err == nil {
 		json.Unmarshal(b, &onDisk)
 	}
+	// Only passes are ever kept, so merging is a union.
 	for k, v := range onDisk.Checks {
-		if _, mine := vcache.Checks[k]; !mine {
-			vcache.Checks[k] = v
+		if v {
+			vcache.Checks[k] = true
 		}
 	}
 	for k, v := range onDisk.Owners {
-		if _, mine := vcache.Owners[k]; !mine {
+		if _, mine := vcache.Owners[k]; !mine && len(v) > 0 {
 			vcache.Owners[k] = v
 		}
 	}

@@ -187,7 +187,9 @@ func dispatch(cmd string, args []string) error {
 	}
 	if host != "" {
 		err = runRemote(host, cmd, args)
-		mirrorChanged() // whatever it did, kept answers may be out of date now
+		if changesStore[cmd] {
+			mirrorChanged() // kept answers may be out of date now
+		}
 	} else if err = arrivedHere(cmd); err == nil {
 		err = run(args)
 	}
@@ -232,11 +234,23 @@ func refreshInbox(args []string) {
 	if os.Getenv("DEADDROP_LOCAL") == "1" || hops() > 0 {
 		return
 	}
-	// Every inbox file watched here, the person's and each helper's: a mark
-	// by id may have moved a letter in any of them.
+	// The inbox files watched here for the box marked in (the person's own,
+	// each helper's in it): a mark by id may have moved a letter in any of
+	// them. Other boxes' files are left to their watches.
 	me, err := whoAmI()
 	if err != nil {
 		return
+	}
+	marked := me
+	for i, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--box" && i+1 < len(args) {
+			marked = strings.ToLower(args[i+1])
+		} else if strings.HasPrefix(a, "--box=") {
+			marked = strings.ToLower(strings.TrimPrefix(a, "--box="))
+		}
 	}
 	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
 	for _, path := range files {
@@ -247,13 +261,16 @@ func refreshInbox(args []string) {
 			watchBox, watchFor, _ = strings.Cut(name[1:], "@")
 		}
 		in := readInbox()
-		if in == nil || in.For != watchFor || (watchBox == "" && in.Box != me) || (watchBox != "" && in.Box != watchBox) {
+		if in == nil || in.For != watchFor || in.Box != marked || (watchBox == "" && in.Box != me) || (watchBox != "" && in.Box != watchBox) {
 			continue
 		}
 		watchPass(false)
 	}
 	watchBox, watchFor = "", ""
 }
+
+// changesStore are the commands that change what's in the store.
+var changesStore = map[string]bool{"send": true, "reply": true, "mark": true, "gc": true, "follow-up": true}
 
 // readsHere are the commands whose messages are checked on the reader's
 // machine when the store is elsewhere.

@@ -429,8 +429,12 @@ func parseSpan(s string) (time.Duration, bool) {
 	if m == nil {
 		return 0, false
 	}
-	n, _ := strconv.Atoi(m[1])
+	n, err := strconv.Atoi(m[1])
 	unit := map[byte]time.Duration{'s': time.Second, 'm': time.Minute, 'h': time.Hour, 'd': 24 * time.Hour, 'w': 7 * 24 * time.Hour}[m[2][0]]
+	// Ten years at most: past that a span is a typo, and it would wrap.
+	if err != nil || n < 0 || time.Duration(n) > 10*365*24*time.Hour/unit {
+		return 0, false
+	}
 	return time.Duration(n) * unit, true
 }
 

@@ -397,11 +397,21 @@ class Signed(DeadDrop):
         env = dict(DEADDROP_FROM="bob", DEADDROP_STATE=str(state))
         self.assertEqual(self.inbox(**env)[0]["signature"], "verified")
         self.assertTrue((state / "verified.json").exists())
-        # A second read comes from the cache: a broken ssh-keygen isn't run.
+        kept = json.loads((state / "verified.json").read_text())
+        self.assertEqual(len(kept["checks"]), 1)
+        self.assertTrue(all(kept["checks"].values()))  # only passes are kept
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")
+        # A different ssh-keygen is a different check: never the cached one.
         broken = self.tmp / "no-keygen"
         broken.write_text("#!/bin/sh\nexit 1\n")
         broken.chmod(0o755)
-        self.assertEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), **env)[0]["signature"], "verified")
+        self.assertNotEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), **env)[0]["signature"], "verified")
+        # A forged "verified" in a cache the list's owner doesn't control: a
+        # list others can write turns the cache off.
+        os.chmod(self.signers, 0o666)
+        kept["checks"] = {k: True for k in kept["checks"]}
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")  # checked, not cached
+        os.chmod(self.signers, 0o644)
         # A changed letter isn't the cached one.
         path = self.path()
         path.write_text(path.read_text().replace("x\n", "y\n"))

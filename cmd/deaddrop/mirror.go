@@ -107,8 +107,10 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 	if b, err := os.ReadFile(path); err == nil {
 		var e mirrorEntry
 		at := time.Now()
-		if json.Unmarshal(b, &e) == nil && e.Host == host && e.Cmd == cmd && e.Me == me &&
-			at.Sub(e.FetchedAt) < mirrorFresh && e.FetchedAt.After(staleBefore()) {
+		// Fresh: fetched in the last mirrorFresh, not "in the future", and
+		// after this machine last changed the store.
+		if json.Unmarshal(b, &e) == nil && e.Host == host && e.Cmd == cmd && e.Me == me && equalArgs(e.Args, args) &&
+			!e.FetchedAt.After(at) && at.Sub(e.FetchedAt) < mirrorFresh && e.FetchedAt.After(staleBefore()) {
 			os.Chtimes(path, at, at) // read lately: the watch keeps it fresh
 			return e.Answer, nil
 		}
@@ -116,7 +118,22 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 	return fetchIntoMirror(path, host, cmd, args, me, false)
 }
 
+func equalArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func fetchIntoMirror(path, host, cmd string, args []string, me string, refresh bool) ([]byte, error) {
+	// Stamped when the fetch starts: a write from here while it's in flight
+	// is later than this, so the answer reads as stale.
+	started := time.Now()
 	var out []byte
 	var err error
 	if refresh && (cmd == "pull" || cmd == "show") {
@@ -133,21 +150,28 @@ func fetchIntoMirror(path, host, cmd string, args []string, me string, refresh b
 	}
 	if os.MkdirAll(mirrorDir(), 0o700) == nil {
 		os.Chmod(mirrorDir(), 0o700)
-		e := mirrorEntry{Host: host, Cmd: cmd, Args: args, Me: me, FetchedAt: time.Now(), Answer: out}
+		e := mirrorEntry{Host: host, Cmd: cmd, Args: args, Me: me, FetchedAt: started, Answer: out}
 		if b, err := json.Marshal(e); err == nil {
 			writeAtomic(path, b, 0o600)
+		}
+		if !refresh {
+			pruneMirror()
 		}
 	}
 	return out, nil
 }
 
-// refreshMirror asks the store again for every answer read in the last day,
-// as the person this watch runs as, and lets go of the rest. It says how many
-// it refreshed and the first error.
-func refreshMirror() (int, error) {
-	me, err := explicitMe()
-	if err != nil || me == "" {
-		return 0, err
+// pruneMirror lets go of what's past mirrorKeep, the least lately read past
+// mirrorMax, and any half-written file a crash left (letter text included).
+// It returns what's kept, most lately read first.
+func pruneMirror() []string {
+	at := time.Now()
+	if tmps, _ := filepath.Glob(filepath.Join(mirrorDir(), ".tmp-*")); len(tmps) > 0 {
+		for _, t := range tmps {
+			if info, err := os.Stat(t); err == nil && at.Sub(info.ModTime()) > time.Minute {
+				os.Remove(t)
+			}
+		}
 	}
 	paths, _ := filepath.Glob(filepath.Join(mirrorDir(), "*.json"))
 	type kept struct {
@@ -155,7 +179,6 @@ func refreshMirror() (int, error) {
 		used time.Time
 	}
 	var ks []kept
-	at := time.Now()
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -168,30 +191,53 @@ func refreshMirror() (int, error) {
 		ks = append(ks, kept{p, info.ModTime()})
 	}
 	sort.Slice(ks, func(i, j int) bool { return ks[i].used.After(ks[j].used) })
-	for _, k := range ks[min(len(ks), mirrorMax):] {
-		os.Remove(k.path)
-	}
-	ks = ks[:min(len(ks), mirrorMax)]
-	n := 0
-	var first error
-	for _, k := range ks {
-		b, err := os.ReadFile(k.path)
-		var e mirrorEntry
-		if err != nil || json.Unmarshal(b, &e) != nil {
+	var out []string
+	for i, k := range ks {
+		if i >= mirrorMax {
 			os.Remove(k.path)
 			continue
 		}
-		if e.Me != me || !mirrored[e.Cmd] {
-			continue // someone else's on this machine, or not ours to ask
-		}
-		if _, err := fetchIntoMirror(k.path, e.Host, e.Cmd, e.Args, e.Me, true); err != nil {
-			if first == nil {
-				first = err
-			}
+		out = append(out, k.path)
+	}
+	return out
+}
+
+// refreshMirror asks the store again for every answer read in the last day,
+// as the person this watch runs as, and lets go of the rest. It says how many
+// it refreshed and the first error.
+func refreshMirror() (int, error) {
+	me, err := explicitMe()
+	if err != nil || me == "" {
+		return 0, err
+	}
+	// Only answers from the store this machine reaches now: an entry naming
+	// another host (planted, or from an old config) is never asked again.
+	host, err := remoteHost()
+	if err != nil || host == "" {
+		return 0, err
+	}
+	n := 0
+	for _, path := range pruneMirror() {
+		info, err := os.Stat(path)
+		if err != nil {
 			continue
 		}
-		os.Chtimes(k.path, k.used, k.used) // a refresh isn't a read
+		used := info.ModTime()
+		b, err := os.ReadFile(path)
+		var e mirrorEntry
+		if err != nil || json.Unmarshal(b, &e) != nil || e.Host != host || !mirrored[e.Cmd] ||
+			filepath.Base(path) != mirrorKey(e.Host, e.Cmd, e.Args, e.Me)+".json" {
+			os.Remove(path)
+			continue
+		}
+		if e.Me != me {
+			continue // someone else's on this machine
+		}
+		if _, err := fetchIntoMirror(path, e.Host, e.Cmd, e.Args, e.Me, true); err != nil {
+			return n, err // the store isn't answering: one try a pass, not 64
+		}
+		os.Chtimes(path, used, used) // a refresh isn't a read
 		n++
 	}
-	return n, first
+	return n, nil
 }

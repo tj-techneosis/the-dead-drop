@@ -835,6 +835,16 @@ func cmdInbox(args []string) error {
 	case f.has("read"):
 		states = []string{"unread", "read"}
 	}
+	// Someone else's box that isn't there is a typo, not an empty inbox
+	// (a watch on it would otherwise sit at "no mail" for good). Your own
+	// is just empty until mail comes.
+	if viaHost == "" {
+		if me, _ := whoAmI(); box != me {
+			if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+				return fmt.Errorf("there's no box %s", box)
+			}
+		}
+	}
 	var ms []*Message
 	if viaHost != "" {
 		if ms, err = fetchRemote("inbox", boxAcross(f, box, args)); err != nil {

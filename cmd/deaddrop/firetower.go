@@ -85,20 +85,23 @@ func cmdFiretower(args []string) error {
 			}
 		case s.Unread > 0:
 			status, msg = "yellow", fmt.Sprintf("%d unread", s.Unread)
-			if smokeAfter > 0 || fireAfter > 0 {
-				// By what's unheard: mail that's arrived since anyone last read
-				// the box. Readers who pull and don't mark stay clear; a box
-				// nobody reads goes to fire on its own.
-				unheard, waited := unheardWait(dir, box)
-				switch {
-				case unheard == 0, smokeAfter > 0 && waited < smokeAfter:
-					status = "green"
-				case fireAfter > 0 && waited >= fireAfter:
-					status = "red"
-				}
-				if unheard > 0 {
-					msg += fmt.Sprintf(", %d unheard, the oldest %s", unheard, spanWords(waited))
-				}
+		}
+		if s.Unread > 0 && (smokeAfter > 0 || fireAfter > 0) {
+			// By what's unheard: mail that's arrived since anyone last read
+			// the box. Readers who pull and don't mark stay clear; a box
+			// nobody reads goes to fire on its own.
+			unheard, waited := unheardWait(dir, box)
+			switch {
+			case s.Urgent > 0:
+				// Urgent is fire either way; the line still says how
+				// long the rest has waited.
+			case unheard == 0, smokeAfter > 0 && waited < smokeAfter:
+				status = "green"
+			case fireAfter > 0 && waited >= fireAfter:
+				status = "red"
+			}
+			if unheard > 0 {
+				msg += fmt.Sprintf(", %d unheard, the oldest %s", unheard, spanWords(waited))
 			}
 		}
 		if s.Newest != nil {
@@ -138,7 +141,7 @@ func unheardWait(dir, box string) (int, time.Duration) {
 	var most time.Duration
 	for _, m := range loadBox(dir, box, []string{"unread"}, false) {
 		arrived := m.Sent
-		if info, err := os.Stat(m.path); err == nil && info.ModTime().Before(arrived) {
+		if info, err := os.Stat(m.path); err == nil && (arrived.IsZero() || info.ModTime().Before(arrived)) {
 			arrived = info.ModTime()
 		}
 		if !arrived.After(heard) {

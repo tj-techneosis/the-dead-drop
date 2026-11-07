@@ -124,3 +124,32 @@ func TestOwnSharing(t *testing.T) {
 		t.Fatal("the person's own ControlMaster or ControlPath wins")
 	}
 }
+
+func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
+	d := t.TempDir()
+	t.Setenv("DEADDROP_STATE", d+"/state")
+	t.Setenv("DEADDROP_NO_VCACHE", "")
+	was := systemSigners
+	defer func() { systemSigners = was }()
+	systemSigners = d + "/no-pin"
+	list := d + "/allowed_signers"
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	if !vcacheAllowed(list) {
+		t.Fatal("your own private list: the cache is yours")
+	}
+	os.Chmod(list, 0o666)
+	if vcacheAllowed(list) {
+		t.Fatal("a list others can write: no cache")
+	}
+	os.Chmod(list, 0o644)
+	os.WriteFile(list, []byte(`alice valid-before="20300101" ssh-ed25519 AAAA`+"\n"), 0o644)
+	if vcacheAllowed(list) {
+		t.Fatal("keys that expire: no cache")
+	}
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	os.WriteFile(d+"/pin", []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	systemSigners = d + "/pin"
+	if vcacheAllowed(list) {
+		t.Fatal("a pinned list (a shared login): no cache")
+	}
+}

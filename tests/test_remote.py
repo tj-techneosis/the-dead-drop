@@ -394,6 +394,26 @@ class Mirror(RemoteBase):
         self.rdd("watch", "--no-hooks", env=self.bob())
         self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())
 
+    def test_a_planted_or_future_answer_is_never_used(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        self.ids("--cached")
+        mirror = self.near / ".local" / "state" / "deaddrop" / "mirror"
+        (entry,) = mirror.glob("*.json")
+        e = json.loads(entry.read_text())
+        # Dated ahead: not fresh, so the store is asked.
+        e["fetched_at"] = "2099-01-01T00:00:00Z"
+        entry.write_text(json.dumps(e))
+        before = self.ssh_log.read_text()
+        self.ids("--cached")
+        self.assertNotEqual(self.ssh_log.read_text(), before)
+        # Naming another store: a refresh never asks it, and lets it go.
+        e = json.loads(entry.read_text())
+        e["host"] = "elsewhere"
+        entry.write_text(json.dumps(e))
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())
+        self.assertNotIn("elsewhere", self.ssh_log.read_text())
+        self.assertFalse(entry.exists())
+
 
 class DefaultBox(RemoteBase):
     """A session with a box of its own ($DEADDROP_BOX, or the reply box it
@@ -418,3 +438,4 @@ class DefaultBox(RemoteBase):
         self.rdd("send", "--to", "alice", input="# Mine\n\nx\n", env=dict(DEADDROP_FROM="bob"))
         p = self.rdd("mark", "read", a, ok=False)
         self.assertIn("--box alice-helper", p.stderr)
+

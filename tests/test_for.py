@@ -281,7 +281,7 @@ class PigeonholeReview(DeadDrop):
         self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["signature"], "bad")
         p = self.dd("reply", id, input="Again.\n", DEADDROP_FROM="bob")
         self.assertIn("isn't verified", p.stderr)
-        self.assertEqual(self.inbox("mallory", DEADDROP_FROM="carol"), [])
+        self.assertIn("no box mallory", self.dd("inbox", "mallory", "--json", DEADDROP_FROM="carol", ok=False).stderr)
         self.assertEqual([x["subject"] for x in self.inbox(DEADDROP_FROM="alice")], ["Re: A question"])
 
     def test_a_reply_box_set_once(self):

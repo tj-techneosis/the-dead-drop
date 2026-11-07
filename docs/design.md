@@ -228,9 +228,10 @@ bob`). That covers story 4 in one command.
 The store lives on one machine. Everywhere else, every command runs there
 over ssh (`host` in the config): bodies and attachments go over stdin (a
 send with attachments sends one tar stream: the body, then the files), and
-output comes back on stdout. Nothing is written on the caller's side: not a
-cache, not a temp file. The one exception is the person's own choice: the
-inbox file `deaddrop watch` keeps (below), which holds no message text. ssh runs in batch mode, so a missing key fails
+output comes back on stdout. What the caller's side keeps is the reader's
+own: the seal ledger, the cache of passed signature checks (below), the
+ssh connection's socket while it's open, the inbox file `deaddrop watch`
+keeps (no message text), and, only when asked for, the mirror. ssh runs in batch mode, so a missing key fails
 instead of waiting for a password a session can't type.
 
 The mirror (`--cached`, `watch --mirror`) is the one place letter text is
@@ -238,8 +239,16 @@ kept on a reader's machine, and only when the reader asks. It keeps the
 store's raw answers, exactly as `--raw` hands them over, keyed on the host,
 the command, its flags and the caller. So a kept answer is checked like a
 fresh one: signatures here, against this machine's list, and through the
-seal ledger. A cache of verdicts would have to be trusted, but a cache of
-raw answers doesn't. An answer is used for 10 minutes at most, never after a
+seal ledger: nothing in it is believed, only re-checked.
+
+The cache of signature checks is different: it does say "verified", so it
+is only as good as whoever can write it. It's kept only where that's the
+person who already controls the list: their own list, their own private
+state folder, neither writable by anyone else, and no pinned list (a pin
+means a shared login, which can write the state folder but not the list).
+It keeps only passes, keyed on the list's bytes, the ssh-keygen that
+checked, the signer, the seal and the signed text, and it steps aside for
+keys that expire (`valid-before`, `valid-after`) or a certificate authority. An answer is used for 10 minutes at most, never after a
 write from this machine (a `.changed` stamp), and `watch --mirror` asks
 again for whatever was read in the last day; 64 answers at most, the least
 lately read let go first. `file` is never kept: attachments' bytes are
