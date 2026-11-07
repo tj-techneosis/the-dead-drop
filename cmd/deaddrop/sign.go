@@ -144,8 +144,25 @@ func signKey() (string, error) {
 	return expandHome(c.SignKey), nil
 }
 
-// signersPath is this machine's list of who holds which key.
+// systemSigners is a machine's pinned list of who holds which key, put
+// there by its administrator. When it's there it's the only list checked:
+// on a machine many people (or agents) share one login, that login can
+// change its own config and environment, but not a root-owned file.
+var systemSigners = "/etc/deaddrop/allowed_signers"
+
+// pinnedSigners says the machine's administrator has pinned the list.
+func pinnedSigners() bool {
+	info, err := os.Stat(systemSigners)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// signersPath is this machine's list of who holds which key: the pinned
+// one if there is one, else $DEADDROP_SIGNERS, signers in the config, or
+// allowed_signers beside the config.
 func signersPath() string {
+	if pinnedSigners() {
+		return systemSigners
+	}
 	if p := os.Getenv("DEADDROP_SIGNERS"); p != "" {
 		return expandHome(p)
 	}
@@ -657,5 +674,8 @@ func cmdKey(args []string) error {
 		return fmt.Errorf("%s isn't an ssh public key", pub)
 	}
 	fmt.Printf("%s namespaces=\"%s\" %s %s\n", who, signNamespace, fields[0], fields[1])
+	if pinnedSigners() {
+		fmt.Fprintf(os.Stderr, "deaddrop: this machine checks signatures only against %s (pinned by its administrator)\n", systemSigners)
+	}
 	return nil
 }

@@ -148,7 +148,9 @@ and checked where the reader is:
   message, so an older store never strips a signature.
 
 The list of keys is the trust: keep it where the store's login can't write,
-in each person's own dotfiles.
+in each person's own dotfiles. On a machine many share one login on, that
+login can change its own config and environment, so a root-owned list at
+`/etc/deaddrop/allowed_signers` wins over both when it's there.
 
 There are no permissions per box in this version. Anyone who can read the
 store can read every box. That's why **secrets never go in a message**: the

@@ -167,6 +167,13 @@ Everyone keeps the same list, `~/.config/deaddrop/allowed_signers` (or
 `signers = "…"` in the config): one line per person, from `deaddrop key`.
 Keep it somewhere the store's login can't change, such as your own dotfiles.
 
+**On a shared machine, pin it.** Where many people or agents share one
+login, that login can change its own config and environment, so it could
+point the Dead Drop at a list of its own. An administrator can put the list
+at `/etc/deaddrop/allowed_signers`, owned by root: when that file is there,
+it's the only list the machine checks, whatever the config,
+`DEADDROP_SIGNERS` or the user's copy say.
+
 Every message you read then says who sent it, as far as your machine can
 tell:
 

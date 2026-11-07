@@ -69,7 +69,9 @@ Crontinental job that raises the message to urgent if it's still unread then.
 
 Messages are signed with your ssh key (sign_key in the config) and checked
 against your own allowed_signers: inbox, pull and show say whether each one
-is verified, unsigned, can't be checked, or BAD (forged or changed).
+is verified, unsigned, can't be checked, or BAD (forged or changed). On a
+machine whose administrator put a list at /etc/deaddrop/allowed_signers,
+that's the only one checked.
 
 Never put a secret in a message: name where it lives instead.
 
