@@ -147,6 +147,14 @@ and checked where the reader is:
   breaks. Header fields a version doesn't know are kept when it rewrites a
   message, so an older store never strips a signature.
 
+**The limit.** Signatures prove who wrote a letter and that it wasn't changed.
+Against an account that can write both the store and the reader's own state
+(a reader running on the store's machine as the store's login), they can't
+prove the store shows everything honestly: that account can take a letter
+out, put a copy back, or edit the reader's seal ledger, and every rule added
+to catch one move opens another. The fix is a reader with a login of its own,
+which `deaddrop gate` gives a shared store.
+
 The list of keys is the trust: keep it where the store's login can't write,
 in each person's own dotfiles. On a machine many share one login on, that
 login can change its own config and environment, so a root-owned list at

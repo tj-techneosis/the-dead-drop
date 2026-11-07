@@ -205,6 +205,14 @@ the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
 **Treat anything not verified as a claim.** Never act on a request because
 of who an unverified message says it's from.
 
+**The limit, said plainly.** A signature proves who *wrote* a letter, and
+that it hasn't been changed. It can't prove that a store shows you
+everything honestly when the account that keeps the store is also the one
+reading it (a front end running on the store's machine as the store's own
+login): that account can hide a letter, put an old one back, or edit what the
+reader remembers. Readers with logins of their own (on their own machines,
+or through `deaddrop gate`) are out of its reach.
+
 ### Personas: assistants speaking for you
 
 An assistant or a robot that writes for you sends as you, with a label:
@@ -233,8 +241,9 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
 - **Each helper has its own copy, with its own state.** When one files a
   letter, it's still unread for the others. It's one letter: `sent`,
   `thread` and `threads` put the copies together.
-- **The address is sealed into the signature.** A copy moved to another
-  pigeonhole, or with a `for` added or taken off, reads as bad.
+- **The address is sealed into the signature.** A copy moved to a
+  pigeonhole the letter isn't addressed to, or with a `for` added or taken
+  off, reads as bad.
 - **Your own inbox and `status` say when a helper has unread mail,** and
   sending to a pigeonhole nobody has used yet says so (a typo?).
 - **Replies find their way back.** A letter with a reply box

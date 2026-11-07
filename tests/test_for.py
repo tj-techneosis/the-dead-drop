@@ -294,3 +294,12 @@ class PigeonholeReview(DeadDrop):
         self.assertIn("no box alice-helpr yet", p.stderr)
         p = self.dd("send", "--to", "bob", input="# Q\n\nx\n", DEADDROP_REPLY_BOX="Not A Box", ok=False)
         self.assertIn("$DEADDROP_REPLY_BOX", p.stderr)
+
+    def test_an_answer_counts_in_the_helpers_view(self):
+        bob = dict(DEADDROP_FROM="bob")
+        self.dd("send", "--to", "bob", "--for", "planner", "--ask", input="# Which?\n\nThis or that?\n")
+        ask = json.loads(self.dd("asks", "--for", "planner", "--json", **bob).stdout)[0]
+        self.dd("reply", ask["id"], input="This.\n", **bob)  # bob answers as himself
+        self.assertEqual(json.loads(self.dd("asks", "--for", "planner", "--json", **bob).stdout), [])
+        letters = json.loads(self.dd("thread", ask["id"], "--for", "planner", "--json", **bob).stdout)["letters"]
+        self.assertEqual([l["mine"] for l in letters], [False, True])

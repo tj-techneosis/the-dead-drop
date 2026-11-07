@@ -16,7 +16,11 @@ import (
 // write to the store can copy a signed letter under a new id, with its own
 // sent line, and it would verify again as new: a replay. The store can't be
 // trusted to remember, since that same someone could edit what it remembers.
-// The reader can: its ledger lives on its own machine, with the inbox file.
+// The reader can, when the reader is someone else: its ledger lives in its
+// own state folder, with the inbox file. Where the store's login and the
+// reader are one account (a front end on the store's machine), that account
+// can edit the ledger too, and nothing here can stop it: a reader with its
+// own login (deaddrop gate) is what closes that.
 //
 // The first copy a reader sees stands. A copy with the same seal in the same
 // place under another id is "delivered again". Two copies seen for the first

@@ -26,8 +26,11 @@ import (
 // What's signed is a canonical text of everything the sender chose: who
 // from, the recipients, subject, tags, urgency, thread, the attachments'
 // names and sha256s, when it was signed, and the body. The id and the sent
-// time are the store's, so they aren't signed; a copy delivered again later,
-// or to another box, fails the recipients or the time check.
+// time are the store's, so they aren't signed; a copy moved to a box or
+// pigeonhole the letter doesn't name fails the recipients check, and the
+// reader's seal ledger (ledger.go) catches a copy that turns up again under
+// another id. Neither holds against someone who can write both the store and
+// the reader's own state (see the limit in design.md).
 
 const signNamespace = "deaddrop"
 
@@ -51,8 +54,8 @@ type attachSum struct{ name, sum string }
 // verify; v2 adds the persona. Taking a persona off, or putting one on,
 // changes which is checked, and the signature fails.
 //
-// v3 (0.6) adds the helpers it's addressed to, v4 (0.6.4) a reply box, and
-// v5 (0.6.4) a follow-up time. Each is used only when the letter has that
+// v3 (0.6) adds the helpers it's addressed to, v4 (0.7.0) a reply box, and
+// v5 (0.7.0) a follow-up time. Each is used only when the letter has that
 // field, so a letter verifies as the version it was signed as.
 func signedPayload(from, persona string, helpers []string, replyBox, followUp string, recipients []string, subject string, tags []string, urgency, thread string,
 	sums []attachSum, signedAt string, body string) []byte {
@@ -61,7 +64,7 @@ func signedPayload(from, persona string, helpers []string, replyBox, followUp st
 	p, _ := json.Marshal(persona)
 	switch {
 	case followUp != "":
-		// v5 (0.6.4) seals the follow-up time: only a letter its sender gave
+		// v5 (0.7.0) seals the follow-up time: only a letter its sender gave
 		// a follow-up can be raised to urgent and still verify.
 		fmt.Fprintf(&b, "deaddrop signed message v5\n")
 		fmt.Fprintf(&b, "from: %s\n", from)
@@ -70,7 +73,7 @@ func signedPayload(from, persona string, helpers []string, replyBox, followUp st
 		fmt.Fprintf(&b, "reply_box: %s\n", replyBox)
 		fmt.Fprintf(&b, "follow_up: %s\n", followUp)
 	case replyBox != "":
-		// v4 (0.6.4) adds the reply box; only for letters that name one.
+		// v4 (0.7.0) adds the reply box; only for letters that name one.
 		fmt.Fprintf(&b, "deaddrop signed message v4\n")
 		fmt.Fprintf(&b, "from: %s\n", from)
 		fmt.Fprintf(&b, "persona: %s\n", p)

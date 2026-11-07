@@ -108,14 +108,23 @@ func letters() (string, []*Letter, string, error) {
 		if len(lettersFor) == 2 && lettersFor[1] != "*" {
 			helper = lettersFor[1]
 		}
+		// What's in this view already, so the person's answers to it count.
+		inView := map[string]bool{}
+		for _, l := range ls {
+			inView[l.ID] = true
+			if l.Letter != "" {
+				inView["letter:"+l.Letter] = true
+			}
+		}
 		for _, s := range ss {
 			if len(s.Copies) == 0 {
 				continue
 			}
-			// A helper's view: what that helper wrote (as its persona), and
-			// notes the person wrote to that helper.
+			// A helper's view: what that helper wrote (as its persona), notes
+			// the person wrote to that helper, and the person's answers to
+			// letters in the helper's pigeonhole.
 			if helper != "" && helperSlug(s.Persona) != helper {
-				toIt := false
+				toIt := inView[s.Thread] || (s.ThreadLetter != "" && inView["letter:"+s.ThreadLetter])
 				for _, c := range s.Copies {
 					toIt = toIt || (c.Box == me && c.For == helper)
 				}
