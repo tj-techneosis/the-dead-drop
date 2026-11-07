@@ -462,7 +462,8 @@ takes the next due time from `$CRONTINENTAL_NEXT`, so the board shows "no
 word" if the job stops.
 
 `deaddrop status` shows the same per box in the terminal, with the newest
-unread subject.
+unread subject. `--box WHO` (repeatable) shows only those boxes, so a front
+end can ask for the boxes its viewer may see and nothing else.
 
 ## Follow-ups and rings
 
@@ -501,7 +502,7 @@ deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
-deaddrop status [--json]
+deaddrop status [--box WHO]... [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--for H]

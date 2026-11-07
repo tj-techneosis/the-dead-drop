@@ -1319,20 +1319,37 @@ func countFiles(dir string) int {
 }
 
 func cmdStatus(args []string) error {
-	const u = "status [--json]"
-	f, err := parseFlags(args, map[string]bool{"json": false})
+	const u = "status [--box WHO]... [--json]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "box": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) > 0 {
-		return badf(u, "status takes nothing but --json")
+		return badf(u, "status takes --box and --json, nothing else")
 	}
 	dir, err := storeDir()
 	if err != nil {
 		return err
 	}
+	// Every box, or only those named: a front end asks for the viewer's own
+	// and never holds anyone else's counts.
+	list := boxes(dir)
+	if f.has("box") {
+		list = nil
+		for _, raw := range f.all("box") {
+			for _, w := range strings.Split(raw, ",") {
+				b, err := resolveBox("--box", strings.TrimSpace(w))
+				if err != nil {
+					return bad(u, err)
+				}
+				if !contains(list, b) {
+					list = append(list, b)
+				}
+			}
+		}
+	}
 	out := []boxStatus{}
-	for _, b := range boxes(dir) {
+	for _, b := range list {
 		out = append(out, statusOf(dir, b))
 	}
 	if f.has("json") {

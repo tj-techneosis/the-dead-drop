@@ -246,7 +246,7 @@ deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
 deaddrop threads [--for H] [--json]                # every thread, newest activity first
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
-deaddrop status [--json]                 # per box, with helpers' unread
+deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
 deaddrop watch [--every 1m] [--for H]    # on the person's own machine
 deaddrop open ID [--for H]               # read it in the browser, mark it read
 # --for H: a helper's pigeonhole ('*': every one); DEADDROP_FOR sets it for a session

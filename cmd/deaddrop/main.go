@@ -43,7 +43,7 @@ On your own machine:
   deaddrop key                     your line for everyone's allowed_signers
 
 Look after it:
-  deaddrop status [--json]         per box: unread, urgent, helpers' unread, newest subject
+  deaddrop status [--box WHO]... [--json]   per box: unread, urgent, helpers' unread, newest subject
   deaddrop firetower [--next 6m|TIME|none] [--box WHO]...   one lookout per box, mail/<who>/inbox
   deaddrop gc [--days 30]          archived mail older than that goes
 

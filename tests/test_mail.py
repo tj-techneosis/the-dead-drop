@@ -332,3 +332,15 @@ def subprocess_bytes(case, *args):
     p = subprocess.run([BIN, *args], capture_output=True, env=case.env(DEADDROP_FROM=case.me), input=b"")
     case.assertEqual(p.returncode, 0, p.stderr)
     return p.stdout
+
+
+class StatusFor(DeadDrop):
+    def test_status_for_named_boxes_only(self):
+        self.send("x\n", "--to", "bob")
+        self.send("x\n", "--to", "carol", "--for", "planner", "--urgent")
+        st = json.loads(self.dd("status", "--box", "carol", "--json").stdout)
+        self.assertEqual([s["box"] for s in st], ["carol"])
+        self.assertEqual(st[0]["helpers_unread"], {"planner": 1})
+        st = json.loads(self.dd("status", "--box", "bob,dave", "--json").stdout)
+        self.assertEqual([(s["box"], s["unread"]) for s in st], [("bob", 1), ("dave", 0)])
+        self.dd("status", "--box", "automation", ok=False)
