@@ -252,7 +252,8 @@ deaddrop people [--for H] [--json]       # everyone in the person's mail, and th
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
-deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H]   # on the person's own machine
+deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   # on the person's own machine
+# --cached on any reading command reads the mirror watch --mirror keeps (letter text on disk: only if they ask)
 deaddrop bar [--format text|swiftbar] [--for H]
 deaddrop key                             # this machine's line for everyone's allowed_signers
 deaddrop send ... --ask                  # needs the recipient's decision (question first)

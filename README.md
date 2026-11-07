@@ -339,10 +339,23 @@ calling machine except what `pull` prints, the ssh connection's socket in
 has seen (hashes and ids, so a signed letter copied under a new id reads as
 delivered again), a cache of signature checks already made (so reading
 doesn't run ssh-keygen once per letter every time), and, if you run `deaddrop watch`, the inbox file. Never a
-letter's text. Everyone may log in to the
+letter's text, unless you ask for the mirror (below). Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run
 without one. `examples/config.toml` has every setting.
+
+**The mirror, for panels that read often.** `--cached` on any reading
+command (`inbox`, `pull`, `show`, `sent`, `thread`, `threads`, `with`,
+`asks`, `people`; or `DEADDROP_CACHED=1`) keeps the store's answer on your
+machine and reads it from there next time, with no ssh. A kept answer is
+used for up to 10 minutes, and not at all once you've changed anything on
+the store from this machine (a mark, a send, a reply). `deaddrop watch
+--mirror` asks the store again on every pass for everything read `--cached`
+in the last day, so a panel reading `--cached` is never more than a pass
+behind. Signatures are still checked on every read, here, against your own
+list, and the seal ledger still applies. This does put letter text on your
+disk (`mirror/` beside the inbox file, readable only by you), so it's off
+unless you ask for it.
 
 **Through another machine.** If you can only reach the store's machine
 through a second one, point your `host` at the second one, and put
@@ -548,7 +561,7 @@ deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since â€
 deaddrop status [--box WHO]... [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]
 deaddrop gc [--days 30]
-deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H]
+deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since â€¦] [--limit N] [--letters [--bodies]] [--json|--html]

@@ -393,8 +393,8 @@ func setWatchFor(f flags) error {
 const minEvery = 10 * time.Second
 
 func cmdWatch(args []string) error {
-	const u = "watch [--every 1m] [--no-hooks] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "box": true, "for": true})
+	const u = "watch [--every 1m] [--no-hooks] [--box WHO] [--for HELPER] [--mirror]"
+	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "box": true, "for": true, "mirror": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -405,7 +405,15 @@ func cmdWatch(args []string) error {
 		return badf(u, "watch takes no words of its own")
 	}
 	hooks := !f.has("no-hooks")
+	mirror := func() {
+		if f.has("mirror") {
+			if _, err := refreshMirror(); err != nil {
+				fmt.Fprintf(os.Stderr, "deaddrop: the mirror: %v\n", err)
+			}
+		}
+	}
 	if !f.has("every") {
+		mirror()
 		r, err := watchPass(hooks)
 		cleanOpened()
 		if err != nil {
@@ -426,6 +434,7 @@ func cmdWatch(args []string) error {
 	// reachability changes.
 	lastErr := ""
 	for {
+		mirror()
 		r, err := watchPass(hooks)
 		cleanOpened()
 		switch {

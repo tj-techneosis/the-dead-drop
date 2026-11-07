@@ -234,7 +234,7 @@ func cmdSent(args []string) error {
 
 	var ss []*SentMessage
 	if viaHost != "" {
-		out, err := remoteBytes(viaHost, "sent", append(append([]string{}, args...), "--json", "--raw"))
+		out, err := mirroredBytes(viaHost, "sent", append(append([]string{}, args...), "--json", "--raw"))
 		if err != nil {
 			return err
 		}

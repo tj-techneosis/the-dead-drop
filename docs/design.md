@@ -224,6 +224,18 @@ cache, not a temp file. The one exception is the person's own choice: the
 inbox file `deaddrop watch` keeps (below), which holds no message text. ssh runs in batch mode, so a missing key fails
 instead of waiting for a password a session can't type.
 
+The mirror (`--cached`, `watch --mirror`) is the one place letter text is
+kept on a reader's machine, and only when the reader asks. It keeps the
+store's raw answers, exactly as `--raw` hands them over, keyed on the host,
+the command, its flags and the caller. So a kept answer is checked like a
+fresh one: signatures here, against this machine's list, and through the
+seal ledger. A cache of verdicts would have to be trusted, but a cache of
+raw answers doesn't. An answer is used for 10 minutes at most, never after a
+write from this machine (a `.changed` stamp), and `watch --mirror` asks
+again for whatever was read in the last day; 64 answers at most, the least
+lately read let go first. `file` is never kept: attachments' bytes are
+fetched when asked for.
+
 The far side is told `DEADDROP_FROM` (the caller) and `DEADDROP_HOPS` (how
 many machines the command has come through). It never sends the command round again
 on its own: if its config has a `host` and no `relay = true`, it isn't the

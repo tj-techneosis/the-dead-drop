@@ -12,7 +12,7 @@ from pathlib import Path
 from _binary import BIN, DeadDrop, key, script, signers
 
 
-class Remote(DeadDrop):
+class RemoteBase(DeadDrop):
     def setUp(self):
         super().setUp()
         self.far = self.tmp / "far-home"
@@ -48,6 +48,8 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
                   ".local/state/deaddrop/verified.json", ".local/state/deaddrop/.verified.lock"}
         return sorted(str(p.relative_to(self.near)) for p in self.near.rglob("*") if str(p.relative_to(self.near)) not in ledger)
 
+
+class Remote(RemoteBase):
     def test_send_pull_mark_with_nothing_written_here(self):
         # Build order step 3.
         att = self.tmp / "outside" / "run.log"
@@ -339,3 +341,55 @@ exec {BIN} "$@"
         self.rdd("send", "--to", "bob", "--for", "planner", input="# For the planner\n\nx\n")
         out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
         self.assertIn("unread for helpers: planner 1", out)
+
+
+class Mirror(RemoteBase):
+    """--cached: the store's answers kept on the reader's machine, checked
+    here on every read, refreshed by watch --mirror, dropped by a write."""
+
+    def bob(self, **kw):
+        return dict(DEADDROP_FROM="bob", **kw)
+
+    def ids(self, *args, **env):
+        return [m["id"] for m in json.loads(self.rdd("inbox", "--json", *args, env=self.bob(**env)).stdout)]
+
+    def test_cached_reads_keep_the_answer_until_a_write_or_a_refresh(self):
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        self.assertEqual(self.ids("--cached"), [a])
+        mirror = self.near / ".local" / "state" / "deaddrop" / "mirror"
+        kept = [p for p in mirror.glob("*.json")]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(oct(kept[0].stat().st_mode & 0o777), "0o600")
+        self.assertEqual(oct(mirror.stat().st_mode & 0o777), "0o700")
+        # Something arrives that this machine didn't send: --cached still
+        # answers from the mirror, with no ssh; without it, the store.
+        b = self.dd("send", "--to", "bob", input="# B\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        before = self.ssh_log.read_text()
+        self.assertEqual(self.ids("--cached"), [a])
+        self.assertEqual(self.ssh_log.read_text(), before)
+        self.assertEqual(sorted(self.ids()), sorted([a, b]))
+        # watch --mirror asks again for what's been read.
+        c = self.dd("send", "--to", "bob", input="# C\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())
+        self.assertEqual(sorted(self.ids("--cached")), sorted([a, b, c]))
+        # A write from here: the next cached read asks the store.
+        self.rdd("mark", "read", a, env=self.bob())
+        got = json.loads(self.rdd("inbox", "--json", "--all", "--cached", env=self.bob()).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
+
+    def test_cached_reads_are_still_checked_here(self):
+        signers(self.tmp / "signers", "alice")
+        sk = dict(DEADDROP_SIGN_KEY=key("alice")[0], DEADDROP_SIGNERS=str(self.tmp / "signers"))
+        id = self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=sk).stdout.split()[1]
+        self.assertEqual(json.loads(self.rdd("show", id, "--json", "--cached", env=self.bob(DEADDROP_SIGNERS=str(self.tmp / "signers"))).stdout)["signature"], "verified")
+        # The same kept answer, read with a list that doesn't know alice.
+        empty = self.tmp / "empty-signers"
+        empty.write_text("")
+        m = json.loads(self.rdd("show", id, "--json", "--cached", env=self.bob(DEADDROP_SIGNERS=str(empty))).stdout)
+        self.assertNotEqual(m["signature"], "verified")
+
+    def test_nothing_is_kept_without_asking(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        self.ids()
+        self.rdd("watch", "--no-hooks", env=self.bob())
+        self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())

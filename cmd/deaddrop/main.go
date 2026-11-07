@@ -33,7 +33,7 @@ Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
   deaddrop mark read|unread|archive --tag T... [--from WHO]... [--since D] [--box WHO] [--for H]
 
 On your own machine:
-  deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H]   keep the inbox file current, run new.d hooks
+  deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   keep the inbox file current, run new.d hooks
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
@@ -122,7 +122,7 @@ func main() {
 			return
 		}
 	}
-	err := dispatch(cmd, args)
+	err := dispatch(cmd, takeCached(args))
 	if err == nil {
 		return
 	}
@@ -186,6 +186,7 @@ func dispatch(cmd string, args []string) error {
 	}
 	if host != "" {
 		err = runRemote(host, cmd, args)
+		mirrorChanged() // whatever it did, kept answers may be out of date now
 	} else if err = arrivedHere(cmd); err == nil {
 		err = run(args)
 	}
@@ -238,13 +239,19 @@ func refreshInbox(args []string) {
 	}
 	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
 	for _, path := range files {
-		base := strings.TrimSuffix(filepath.Base(path), ".json")
-		watchFor = strings.TrimPrefix(strings.TrimPrefix(base, "inbox"), "-")
-		if in := readInbox(); in != nil && in.Box == me && in.For == watchFor {
-			watchPass(false)
+		// inbox.json, inbox-<helper>.json, inbox@<box>.json, inbox@<box>@<helper>.json
+		name := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(path), ".json"), "inbox")
+		watchBox, watchFor = "", strings.TrimPrefix(name, "-")
+		if strings.HasPrefix(name, "@") {
+			watchBox, watchFor, _ = strings.Cut(name[1:], "@")
 		}
+		in := readInbox()
+		if in == nil || in.For != watchFor || (watchBox == "" && in.Box != me) || (watchBox != "" && in.Box != watchBox) {
+			continue
+		}
+		watchPass(false)
 	}
-	watchFor = ""
+	watchBox, watchFor = "", ""
 }
 
 // readsHere are the commands whose messages are checked on the reader's
