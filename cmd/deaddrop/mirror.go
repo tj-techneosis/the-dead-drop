@@ -177,7 +177,7 @@ func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, 
 	}
 	var out []byte
 	var err error
-	if !heardAt.IsZero() && (cmd == "pull" || cmd == "show") {
+	if !heardAt.IsZero() && cmd == "pull" {
 		// Read from the mirror: heard as of the answer the reader was shown.
 		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--heard-at", heardAt.UTC().Format(time.RFC3339Nano)))
 		if err != nil && strings.Contains(err.Error(), "--heard-at") {

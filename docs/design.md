@@ -201,10 +201,13 @@ sent to it, which isn't the tool's call to make for everyone.
 read each pigeonhole, in `.heard` beside `new/` (no contents, no reader's
 name). A board can then tell a box someone is reading but hasn't marked
 from a box nobody reads at all: unread says what's still to be dealt
-with, unheard says whether anyone is listening. `show` and `mark` stamp it
-too. `inbox` doesn't, because a watch lists the box every minute, and
+with, unheard says whether anyone is listening. Heard means shown, so only
+a `pull` of the whole box stamps it, as of just before it reads: a
+filtered pull, a `show` of one letter or a `mark` shows only part of the
+box. `inbox` doesn't, because a watch lists the box every minute, and
 neither does a mirror's copy (`--unheard`), because a watch that fetches
-a box isn't anyone reading it.
+a box isn't anyone reading it; a refresh after a cached pull stamps as of
+the answer the reader was shown.
 
 `pull` prints everything that matches, in full, in one go: unread first,
 oldest first within that, so a session reads mail in the order it arrived

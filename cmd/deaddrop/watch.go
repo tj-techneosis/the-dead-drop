@@ -515,18 +515,9 @@ func cmdShow(args []string) error {
 			return err
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
-		if !f.has("unheard") {
-			at := now()
-			if f.has("heard-at") {
-				// A mirror's refresh: heard as of the answer the reader saw.
-				t, err := time.Parse(time.RFC3339Nano, f.get("heard-at"))
-				if err != nil {
-					return badf(u, "--heard-at %s: a time (RFC 3339)", f.get("heard-at"))
-				}
-				at = t
-			}
-			hearAt(dir, m.Box, m.Pigeonhole, at)
-		}
+		// One letter shown isn't the box heard: only a pull of the whole
+		// box stamps it. (--unheard and --heard-at are still taken, from
+		// mirrors of 0.7.2 to 0.7.4, and change nothing.)
 	}
 	switch {
 	case f.has("json"):

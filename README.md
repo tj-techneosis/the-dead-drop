@@ -550,7 +550,7 @@ reports one lookout per box to the Firetower on the store's machine,
 
 With `--smoke-after 30m --fire-after 3h`, a box goes by its **unheard**
 mail instead: letters that arrived after anyone last read the box (a
-`pull` of the whole box, a `show`, a `mark`; a `pull` with `--tag`, `--from` or `--since` shows only some of it and doesn't count; the store keeps just the time, in `.heard`). It's
+`pull` of the whole box, which shows everything waiting; a `pull` with `--tag`, `--from` or `--since`, a `show` of one letter or a `mark` doesn't count; the store keeps just the time, in `.heard`). A letter whose date someone writing the store's files set before that time counts as heard: that's the shared-login limit, which a gated key can't reach. It's
 clear until the oldest unheard letter has waited 30 minutes, smoke after
 that, fire after 3 hours ("3 unread, 1 unheard, the oldest 45m"). So a reader
 who pulls and hasn't marked yet stays clear, and a box nobody reads goes to

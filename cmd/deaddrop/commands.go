@@ -1373,7 +1373,6 @@ func cmdMark(args []string) error {
 		if err := move(dir, m, target); err != nil {
 			return err
 		}
-		hear(dir, m.Box, m.Pigeonhole)
 		if was != target {
 			moved++
 			if was == "unread" {

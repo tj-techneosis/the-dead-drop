@@ -112,6 +112,7 @@ func cmdFiretower(args []string) error {
 			}
 		}
 	}
+	visited := map[string]bool{}
 	for _, sl := range slots {
 		box := sl.box
 		name, label := "mail/"+box+"/inbox", "Mail: "+box
@@ -119,6 +120,7 @@ func cmdFiretower(args []string) error {
 		if sl.helper != "" {
 			name, label, mark = "mail/"+box+"/for/"+sl.helper, "Mail: "+box+" (for "+sl.helper+")", box+"/for/"+sl.helper
 		}
+		visited[mark] = true
 		s := slotStatus(dir, box, sl.helper)
 		status, msg, value := "green", "No mail.", "none"
 		redByAge := false
@@ -202,11 +204,17 @@ func cmdFiretower(args []string) error {
 		// Boxes not reported this run because --box named others keep their
 		// mark. Without --box every box was reported, so a mark for a box
 		// that's gone goes with it (a new box of that name rings afresh).
-		if f.has("box") {
-			for b := range wasOnFire {
-				if owner, _, _ := strings.Cut(b, "/"); !contains(list, owner) {
-					onFire[b] = true
-				}
+		// A mark for a slot this run didn't look at (a box --box left out,
+		// a pigeonhole when this run had no --pigeonholes) stays, as long as
+		// that box or pigeonhole is still there; one that's gone goes, so a
+		// new one of that name rings afresh.
+		for b := range wasOnFire {
+			if visited[b] {
+				continue
+			}
+			owner, helper, _ := strings.Cut(b, "/for/")
+			if _, err := os.Stat(slotDir(dir, owner, helper)); err == nil {
+				onFire[b] = true
 			}
 		}
 		if err := writeFireList(onFire); err != nil {
