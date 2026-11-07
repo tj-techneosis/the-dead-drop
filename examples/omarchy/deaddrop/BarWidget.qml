@@ -162,16 +162,18 @@ Panel {
   // Who spoke a letter: its sealed persona, else a persona-<name> tag, else
   // its box. ("persona-release-manager" reads "Release manager".)
   // Only a verified letter's persona or tag says who spoke: anyone can write
-  // either onto a letter that doesn't verify.
+  // either onto a letter that doesn't verify, which is "<box> (unverified)",
+  // never the verified person it claims. Persona and box go together, so two
+  // boxes' personas with one name stay two. These names match `people`'s rows.
   function speakerOf(l, box) {
     var who = l.mine ? box : String(l.from || "")
-    if (l.signature !== "verified") return who
+    if (l.signature !== "verified") return who.slice(0, 40) + " (unverified)"
     if (l.persona) return String(l.persona) + " · " + who
     var tags = l.tags || []
     for (var i = 0; i < tags.length; i++) {
       var t = String(tags[i])
       if (t.indexOf("persona-") === 0) {
-        var w = t.slice(8).replace(/-/g, " ").trim()
+        var w = t.slice(8).replace(/-+/g, " ").trim()
         if (w !== "") return w.charAt(0).toUpperCase() + w.slice(1) + " · " + who
       }
     }
@@ -213,10 +215,9 @@ Panel {
     try { list = JSON.parse(raw) } catch (e) { root.threadsNote = "Couldn't list who's in your mail."; return }
     var names = []
     for (var i = 0; i < list.length; i++) {
-      // Verified senders only, by persona and box, so two boxes' personas
-      // with one name stay two.
-      if (!list[i].verified) continue
-      var n = list[i].persona ? String(list[i].persona) + " · " + String(list[i].box) : String(list[i].box)
+      // Persona and box, as speakerOf names them; unverified rows stay, marked.
+      var n = !list[i].verified ? String(list[i].box) + " (unverified)"
+        : list[i].persona ? String(list[i].persona) + " · " + String(list[i].box) : String(list[i].box)
       if (names.indexOf(n) < 0) names.push(n)
     }
     root.speakers = names

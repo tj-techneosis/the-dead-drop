@@ -90,9 +90,20 @@ func TestSSHReuse(t *testing.T) {
 	}
 	os.Mkdir(home+"/.ssh", 0o700)
 	got := strings.Join(reuseArgs(""), " ")
-	if len(home)+50 <= 100 && (!strings.Contains(got, "ControlMaster=auto") || !strings.Contains(got, "ConnectTimeout=10")) {
+	if len(home)+66 < 104 && (!strings.Contains(got, "ControlMaster=auto") || !strings.Contains(got, "ConnectTimeout=10")) {
 		t.Fatalf("reuse: %q", got)
 	}
+	t.Setenv("HOME", home+"/a%b")
+	os.MkdirAll(home+"/a%b/.ssh", 0o700)
+	if got := reuseArgs(""); got != nil {
+		t.Fatalf("a %% in HOME: %v", got)
+	}
+	t.Setenv("HOME", home+"/"+strings.Repeat("x", 60))
+	os.MkdirAll(home+"/"+strings.Repeat("x", 60)+"/.ssh", 0o700)
+	if got := reuseArgs(""); got != nil {
+		t.Fatalf("a socket path too long once ssh adds its suffix: %v", got)
+	}
+	t.Setenv("HOME", home)
 	os.Chmod(home+"/.ssh", 0o777)
 	if got := reuseArgs(""); got != nil {
 		t.Fatalf("a ~/.ssh others can write: %v", got)

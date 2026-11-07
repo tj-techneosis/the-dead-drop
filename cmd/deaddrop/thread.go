@@ -746,7 +746,9 @@ func personaTag(l *Letter) string {
 		if !strings.HasPrefix(t, "persona-") {
 			continue
 		}
-		if w := strings.TrimSpace(strings.ReplaceAll(t[8:], "-", " ")); w != "" {
+		// Runs of dashes are one space, so persona-a--b and persona-a-b
+		// are one persona, not two that look alike.
+		if w := strings.Join(strings.Fields(strings.ReplaceAll(t[8:], "-", " ")), " "); w != "" {
 			return strings.ToUpper(w[:1]) + w[1:]
 		}
 	}
@@ -778,6 +780,15 @@ func cmdPeople(args []string) error {
 			box = me
 		}
 		ok := l.Signature == sigVerified
+		when := l.Sent
+		if !ok {
+			// Nothing an unverified letter says is taken as given: its box is
+			// cleaned and cut, and its date can't put it ahead of now.
+			box = cleanLine(box, 40)
+			if at := now(); when.After(at) {
+				when = at
+			}
+		}
 		p := Person{Box: box, Verified: ok}
 		sealed := false
 		if ok {
@@ -801,8 +812,8 @@ func cmdPeople(args []string) error {
 		if !l.Mine && l.State == "unread" {
 			e.Unread++
 		}
-		if l.Sent.After(e.Last) {
-			e.Last = l.Sent
+		if when.After(e.Last) {
+			e.Last = when
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })

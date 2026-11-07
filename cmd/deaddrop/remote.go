@@ -90,8 +90,13 @@ func reuseArgs(host string) []string {
 		return nil
 	}
 	path := filepath.Join(dir, "dd-%C") // %C is a 40-character hash
-	if len(dir)+44 > 100 {
-		return nil // past what a unix socket's path can hold
+	// ssh first binds the master at the path plus "." and 16 random
+	// characters; 104 bytes is the smallest a unix socket's path may be.
+	if len(dir)+len("/dd-")+40+17 >= 104 {
+		return nil
+	}
+	if strings.ContainsAny(dir, "% \t\"'\\") {
+		return nil // ssh would read these in ControlPath as its own
 	}
 	if host != "" && sshSpeaksFor(host) {
 		return nil

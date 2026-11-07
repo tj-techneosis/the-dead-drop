@@ -196,3 +196,14 @@ class Threads(DeadDrop):
         self.assertFalse(rows[0]["verified"])
         self.assertNotIn("persona", rows[0])
         self.assertIn("carol (unverified)", self.dd("people").stdout)
+
+    def test_people_never_lets_an_unverified_letter_date_itself_ahead(self):
+        self.send("# Old\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        # Dated a year ahead, unsigned: it may not sort above bob or say "in a year".
+        self.send("# Ahead\n\nx\n", "--to", "alice", DEADDROP_FROM="mallory", DEADDROP_NOW=at(60 * 24 * 365))
+        rows = json.loads(self.dd("people", "--json").stdout)
+        last = {p["box"]: p["last"] for p in rows}
+        from datetime import datetime
+        when = lambda v: datetime.fromisoformat(v.replace("Z", "+00:00"))
+        self.assertLessEqual(when(last["mallory"]), when(last["bob"]))
+        self.assertNotIn("in ", self.dd("people").stdout.split("mallory", 1)[1].splitlines()[0])

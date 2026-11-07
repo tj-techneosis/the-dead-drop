@@ -266,9 +266,10 @@ reply never carries `ask` back.
 
 **Everyone in your mail.** `deaddrop people` lists every sender and
 persona across your box and what you sent, newest first, with how many
-letters and how many unread: a persona counts where it's trustworthy (the
-sealed one, or a `persona-<name>` tag on a letter that verifies), and is its
-box otherwise. `--json` for a panel's "who" list.
+letters and how many unread. A sender is who a verified letter says (its
+box, and its sealed persona or `persona-<name>` tag); a letter that doesn't
+verify is counted under the box it claims, in a row of its own marked
+unverified, with no persona. `--json` for a panel's "who" list.
 
 **Every thread at a glance.** `deaddrop threads` lists them, newest activity
 first: subject, when it started and last moved, how many letters, how many
@@ -327,8 +328,10 @@ host = "store-box"
 Remote mode keeps one ssh connection open for a minute and runs each
 command over it (ssh's ControlMaster, its socket in `~/.ssh/dd-…`), so a
 command costs a round trip, not a new connection. It steps aside when your
-own ssh config shares connections for that host, and `ssh_reuse = false`
-turns it off. Bodies and attachments
+own ssh config shares connections for that host, when `~/.ssh` isn't a
+private folder of yours, when its path is too long for a socket or holds a
+`%` or a space, on a relay hop, and when `DEADDROP_SSH` is set;
+`ssh_reuse = false` turns it off. Bodies and attachments
 go over ssh's stdin; nothing is written on the
 calling machine except what `pull` prints, the ssh connection's socket in
 `~/.ssh` (while it's open), the reader's ledger of seals it
@@ -441,8 +444,8 @@ the system's own.
   thread or the whole conversation in the browser. A switch at the top
   turns it to **Threads**: every conversation, newest first, with chips to
   show only the ones a given speaker was in, picked from a dropdown of everyone
-  in your mail (`deaddrop people`: a letter's persona, else its
-  `persona-<name>` tag, on letters that verify; else its box), and chips for each helper's
+  in your mail (`deaddrop people`: persona and box from letters that
+  verify; a box marked unverified otherwise), and chips for each helper's
   pigeonhole once mail comes `--for` them. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
   `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on
