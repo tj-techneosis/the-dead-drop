@@ -254,6 +254,9 @@ deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
 deaddrop watch [--every 1m] [--no-hooks] [--for H]   # on the person's own machine
 deaddrop bar [--format text|swiftbar] [--for H]
 deaddrop key                             # this machine's line for everyone's allowed_signers
+deaddrop send ... --ask                  # needs the recipient's decision (question first)
+deaddrop asks [--json]                   # what's waiting on the person's decision
+deaddrop open --threads                  # every thread on one page, in the browser
 deaddrop open ID [--for H]               # read it in the browser, mark it read
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with, threads and asks:
 # every one; watch, bar and open take one); DEADDROP_FOR sets it for a session

@@ -180,6 +180,7 @@ Panel {
     if (threadLister.askedFor !== root.hole) { root.threadsStale = true; return } // for another pigeonhole: asked again on exit
     var data
     try { data = JSON.parse(raw) } catch (e) { root.topics = []; root.speakers = []; root.who = ""; root.threadsNote = "Couldn't read the threads."; return }
+    root.threadsErr = ""
     var notes = []
     if (data.sent_missing) notes.push(String(data.sent_missing))
     if ((data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads, and the speakers in them.")
@@ -471,7 +472,10 @@ Panel {
   Process {
     id: holeReader
     property string askedFor: ""
-    onExited: function(exitCode) { if (root.holeStale || holeReader.askedFor !== root.hole) { root.holeStale = false; Qt.callLater(root.refreshViews) } }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && holeReader.askedFor === root.hole && root.holeNote.indexOf("Looking") === 0) root.holeNote = "Couldn't read " + root.hole + "'s pigeonhole."
+      if (root.holeStale || holeReader.askedFor !== root.hole) { root.holeStale = false; Qt.callLater(root.refreshViews) }
+    }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHole(text) }
     stderr: StdioCollector {
       waitForEnd: true

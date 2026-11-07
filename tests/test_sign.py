@@ -254,10 +254,12 @@ class Signed(DeadDrop):
         m = self.one()
         self.assertEqual(m["signature"], "bad")
         self.assertIn("never asked for", m["signature_note"])
-        # A follow-up line and a raise added by hand: never presented as the
-        # sender's urgency. It says the seal doesn't cover the raise.
+        # A follow-up line and a raise added by hand: the raise isn't shown;
+        # it stays the urgency its sender signed.
         path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-01-01T00:00:00Z\nraised: 2026-01-02T00:00:00Z\nurgency_was: normal"))
-        self.assertIn("seal doesn't cover", self.one()["signature_note"])
+        m = self.one()
+        self.assertEqual(m["urgency"], "normal")
+        self.assertIn("urgency its sender signed", m["signature_note"])
 
     def test_a_copy_delivered_again_says_so(self):
         self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
@@ -304,11 +306,11 @@ class Signed(DeadDrop):
         path.write_text(good.replace("urgency: normal", "urgency: normal\nfollow_up: 2026-11-02T16:00:00Z"))
         self.assertEqual(self.one()["signature"], "verified")
         path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-11-02T16:00:00Z\nraised: 2026-11-02T17:00:00Z\nurgency_was: normal"))
-        # Raised by the store's follow-up: the old seal can't vouch for it,
-        # and the letter says so rather than reading bad.
+        # A raise the seal doesn't cover isn't shown: the letter keeps the
+        # urgency its sender signed, and says why.
         m = self.one(DEADDROP_NOW=at(60 * 5))
-        self.assertEqual(m["signature"], "verified")
-        self.assertIn("seal doesn't cover", m["signature_note"])
+        self.assertEqual((m["signature"], m["urgency"]), ("verified", "normal"))
+        self.assertIn("urgency its sender signed", m["signature_note"])
 
     def test_a_replay_is_caught_however_the_seal_is_written_and_wherever_its_read(self):
         id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))

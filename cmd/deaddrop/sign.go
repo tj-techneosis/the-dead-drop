@@ -379,7 +379,11 @@ func verifyState(m *Message) (string, string) {
 			case t.raise && t.followUp != "":
 				raised = "; raised to urgent by its follow-up, not by the sender"
 			case t.raise:
-				raised = "; raised to urgent by the store's follow-up, which this letter's seal doesn't cover (signed before 0.6.4)"
+				// A raise the seal doesn't cover isn't shown: anyone could
+				// have written it. The letter keeps the urgency its sender
+				// signed, and says why.
+				m.Urgency, m.Raised = m.UrgencyWas, ""
+				raised = "; marked raised, but its seal covers no follow-up, so it shows the urgency its sender signed"
 			}
 			// When it was signed, too: a letter delivered again shows its age.
 			when := ""

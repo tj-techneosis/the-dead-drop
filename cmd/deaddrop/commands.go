@@ -92,8 +92,8 @@ func loadFor(dir, box, helper string, all bool, states []string, withBody bool) 
 
 // forArgs passes a reading command's --for on, to the store's machine.
 func forArgs(f flags) []string {
-	if f.has("for") {
-		return []string{"--for", strings.ToLower(strings.TrimSpace(f.get("for")))}
+	if h := strings.ToLower(strings.TrimSpace(f.get("for"))); f.has("for") && h != "" {
+		return []string{"--for", h}
 	}
 	return nil
 }
@@ -391,7 +391,7 @@ func replyTags(orig, untag []string) ([]string, error) {
 	out := []string{}
 	for _, t := range orig {
 		// Who spoke, and "needs your decision", stay with the original.
-		if !drop[t] && !strings.HasPrefix(t, "persona-") && t != askTag {
+		if !drop[t] && !strings.HasPrefix(t, "persona-") && t != askTag && !strings.HasPrefix(t, "ask-") {
 			out = append(out, t)
 		}
 	}

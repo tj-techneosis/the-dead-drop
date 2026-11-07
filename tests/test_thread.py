@@ -144,3 +144,23 @@ class Threads(DeadDrop):
         # The answer doesn't carry the ask back.
         self.assertNotIn("ask", self.inbox(DEADDROP_FROM="bob")[0]["tags"])
         self.dd("send", "--to", "alice", "--ask", input="# Only a heading\n", DEADDROP_FROM="bob", ok=False)
+
+    def test_an_ask_closes_only_on_a_real_answer(self):
+        signers(self.tmp / "s3", "alice", "bob")
+        env = dict(DEADDROP_SIGNERS=str(self.tmp / "s3"))
+        mine = dict(DEADDROP_SIGN_KEY=key("alice")[0], **env)
+        self.send("# Earlier\n\nx\n", "--to", "bob", **mine)  # alice signs
+        self.dd("send", "--to", "alice", "--ask", input="# Q\n\nWhich one?\n", DEADDROP_FROM="bob", DEADDROP_SIGN_KEY=key("bob")[0], **env)
+        ask = json.loads(self.dd("asks", "--json", **mine).stdout)[0]
+        # A forged "answer" in alice's name doesn't close it.
+        self.send("# Re: Q\n\nForged.\n", "--to", "bob", "--reply-to", ask["id"])  # unsigned, as alice
+        self.assertEqual(len(json.loads(self.dd("asks", "--json", **mine).stdout)), 1)
+        self.dd("reply", ask["id"], input="This one.\n", **mine)
+        self.assertEqual(json.loads(self.dd("asks", "--json", **mine).stdout), [])
+        # The answer carries neither ask nor ask-<box>.
+        self.dd("send", "--to", "alice", "--tag", "ask-alice", input="# Q2\n\nAnd this?\n", DEADDROP_FROM="bob")
+        q2 = [a for a in json.loads(self.dd("asks", "--json", **mine).stdout)][0]
+        self.dd("reply", q2["id"], input="Yes.\n", **mine)
+        back = [m for m in self.inbox(DEADDROP_FROM="bob", **env) if m["subject"] == "Re: Q2"][0]
+        self.assertNotIn("ask-alice", back["tags"])
+

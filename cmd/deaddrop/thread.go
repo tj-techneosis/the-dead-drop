@@ -575,7 +575,7 @@ func cmdThreads(args []string) error {
 	if err != nil {
 		return err
 	}
-	out := &Topics{Box: me, For: f.get("for"), Topics: []*Topic{}, SentMissing: missing}
+	out := &Topics{Box: me, For: strings.ToLower(strings.TrimSpace(f.get("for"))), Topics: []*Topic{}, SentMissing: missing}
 	for _, g := range groups(ls) {
 		t := topicOf(me, g)
 		if !fl.since.IsZero() && t.Last.Before(fl.since) {
@@ -656,10 +656,16 @@ func isAsk(l *Letter, box string) bool {
 	return l.hasTag(askTag) || l.hasTag("ask-"+box)
 }
 
-// answered says the recipient has replied in the ask's thread.
+// answered says the recipient has replied in the ask's thread. Someone who
+// signs is taken to have answered only by a letter that verifies, so a copy
+// planted in their name can't close an ask.
 func answered(ask *Letter, ls []*Letter) bool {
+	signs := false
 	for _, l := range ls {
-		if !l.Mine {
+		signs = signs || (l.Mine && l.Signature == sigVerified)
+	}
+	for _, l := range ls {
+		if !l.Mine || (signs && l.Signature != sigVerified) {
 			continue
 		}
 		if l.Thread == ask.ID || (ask.Letter != "" && l.ThreadLetter == ask.Letter) {
