@@ -176,6 +176,11 @@ func draftOf(f flags) (draft, error) {
 			return d, badf(u, "--reply-box: a box, like alice-helper")
 		}
 	}
+	// Behind the gate, anyone but the key's own name is a refusal (exit 5),
+	// whoever it names, before senderOf's own rules.
+	if gateRead != nil && f.has("from") && strings.ToLower(strings.TrimSpace(f.get("from"))) != gateAs {
+		return d, refused("this key sends only as %s", gateAs)
+	}
 	if d.from, err = senderOf(f); err != nil {
 		return d, bad(u, err)
 	}
@@ -184,13 +189,13 @@ func draftOf(f flags) (draft, error) {
 	// file on the store (attachments come as remote mode sends them).
 	if gateRead != nil {
 		if d.from != gateAs {
-			return d, fmt.Errorf("this key sends only as %s", gateAs)
+			return d, refused("this key sends only as %s", gateAs)
 		}
 		if d.signedBy != "" && strings.ToLower(d.signedBy) != gateAs {
-			return d, fmt.Errorf("this key signs only as %s", gateAs)
+			return d, refused("this key signs only as %s", gateAs)
 		}
 		if len(d.attach) > 0 {
-			return d, fmt.Errorf("this key sends attachments the way remote mode does (--bundle), never --attach")
+			return d, refused("this key sends attachments the way remote mode does (--bundle), never --attach")
 		}
 	}
 	for _, w := range f.all("to") {

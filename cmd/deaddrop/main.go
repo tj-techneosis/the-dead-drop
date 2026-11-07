@@ -34,6 +34,7 @@ Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
 
 On your own machine:
   deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   keep the inbox file current, run new.d hooks
+  deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]   block until mail not yet reported, then print a line per letter
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
@@ -95,7 +96,15 @@ func (e usageError) Error() string {
 	return "usage: deaddrop " + e.msg
 }
 
-func bad(usage string, err error) error { return usageError{usage, err.Error()} }
+// bad is a usage error, unless err already has a code of its own (a
+// refusal, exit 5), which it keeps: being refused isn't using it wrong.
+func bad(usage string, err error) error {
+	var ee exitError
+	if errors.As(err, &ee) {
+		return err
+	}
+	return usageError{usage, err.Error()}
+}
 
 func badf(usage, format string, a ...any) error {
 	return usageError{usage, fmt.Sprintf(format, a...)}
@@ -112,6 +121,14 @@ func (e exitError) Error() string { return e.msg }
 // exitNoBox is the exit code for a box nothing was ever sent to, so a job
 // can tell "no such box yet" from a failure without reading the words.
 const exitNoBox = 4
+
+// exitRefused is a refusal that won't change by trying again: a key that may
+// not read the box, or no name to ask the store as.
+const exitRefused = 5
+
+// exitUnreachable is ssh's own code for a store it couldn't reach, kept as
+// it comes back so a program can tell "try later" from "won't work".
+const exitUnreachable = 255
 
 func noBox(box string) error {
 	return exitError{exitNoBox, fmt.Sprintf("there's no box %s", box)}
@@ -303,6 +320,7 @@ var here = map[string]func([]string) error{
 	"people":  cmdPeople,
 	"with":    cmdWith,
 	"watch":   cmdWatch,
+	"wait":    cmdWait,
 	"open":    cmdOpen,
 	"bar":     cmdBar,
 }

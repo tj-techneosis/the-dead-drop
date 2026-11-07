@@ -17,6 +17,7 @@ Claude Code setup.
 | `cmd/deaddrop/followup.go` | follow-ups (Crontinental jobs), the ring |
 | `cmd/deaddrop/firetower.go` | `deaddrop firetower`: one lookout per box |
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
+| `cmd/deaddrop/wait.go` | `deaddrop wait`: block until mail no wait has reported (`waited@<box>[@<helper>].json`, locked), a line per letter, `--alive`; retries only an unreachable store (255) or an unreadable answer, ends on everything else; never prunes from a fetch older than the state |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
 | `cmd/deaddrop/vcache.go` | the reader's cache of passed signature checks (`verified.json`), keyed on the list, ssh-keygen, signer, seal and text; only where the list is the reader's own and the state folder, resolved, is inside home with every folder up to home theirs |
@@ -50,7 +51,8 @@ Claude Code setup.
   in the background.
 - **No clock.** The Dead Drop schedules nothing: follow-ups are Crontinental
   jobs, the board is kept current by a scheduled `deaddrop firetower`. The
-  one loop is `watch --every`, for machines with no scheduler.
+  loops are `watch --every`, for machines with no scheduler, and `wait`,
+  which ends when mail comes; both run only while someone runs them.
 - **The JSON of `pull`, `inbox` and `show` is a contract.** People's own
   panels read it directly: fields are added, never renamed or repurposed.
 - **The inbox file is a contract.** Viewers read it: fields are added, never

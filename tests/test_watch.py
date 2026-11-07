@@ -105,7 +105,9 @@ class Watch(DeadDrop):
         self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
         self.dd("watch")
         # A box that isn't there is a typo, said, not an empty inbox.
-        self.assertIn("no box alice-helper", self.dd("watch", "--box", "alice-helper", ok=False).stderr)
+        p = self.dd("watch", "--box", "alice-helper", ok=False)
+        self.assertIn("no box alice-helper", p.stderr)
+        self.assertEqual(p.returncode, 4)  # its own code, as inbox and wait
         self.send("# Before\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")
         self.assertIn("first look", self.dd("watch", "--box", "alice-helper").stdout)
         side = self.send("# For the side box\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")

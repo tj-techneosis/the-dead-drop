@@ -327,9 +327,14 @@ than Qt's own Markdown, which would render raw HTML and fetch images.
 
 ## No clock
 
-The Dead Drop runs nothing by itself, like its siblings, with one exception
-for people with no scheduler: `deaddrop watch --every 1m` loops (a pass,
-then sleep, no faster than every 10 seconds). Everyone with a scheduler
+The Dead Drop runs nothing by itself, like its siblings, with two loops
+that run only while someone runs them: `deaddrop watch --every 1m`, for
+people with no scheduler (a pass, then sleep, no faster than every 10
+seconds), and `deaddrop wait`, which ends as soon as there's mail to report.
+`wait` is for a program or an agent that should be woken by mail rather than
+poll for it: started in the background, its exit is the wake. What it has
+reported is state of its own, per box, so a letter landing between two
+waits is never lost to a snapshot taken at the start. Everyone with a scheduler
 books `deaddrop watch` with it instead; `examples/watch/` has Crontinental,
 launchd, systemd and cron.
 

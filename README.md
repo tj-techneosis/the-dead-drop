@@ -109,10 +109,17 @@ When the work is done, `mark` files it: `read` (dealt with; still pulled),
 `archive` (filed; out of the way, gone after 30 days) or `unread` (put
 back). `mark` takes ids, or `--tag` and `--from` to pick by those.
 
-**A box nothing was ever sent to** is a typo until mail arrives: `inbox`
-or `mark` on someone else's box that isn't there says "there's no box
-…" and **exits 4**, over ssh too, so a job can treat that as empty without
-reading the words. Your own box is just empty.
+**A box nothing was ever sent to** is a typo until mail arrives: `inbox`,
+`mark`, `watch` or `wait` on someone else's box that isn't there says
+"there's no box …" and **exits 4**, over ssh too, so a job can treat that as
+empty without reading the words. Your own box is just empty. A command that
+goes to the store over ssh exits 255 when it can't reach it, as ssh does
+(`watch`, `thread`, `with`, `threads` and the pages, which run deaddrop
+again for themselves, exit 1), and a refusal
+that trying again won't change (every refusal of a gated key's, such as a
+box it may not read, and no name to ask a shared store as) exits 5, so a job
+can tell "try later" from "won't work". A store from before 0.7.8 refuses
+with exit 1: upgrade the store first.
 
 Several `--tag` all have to match; several `--from` match any of them. So
 "tool Y's automated reports and anything from Bob about tool Y" is
@@ -261,7 +268,7 @@ deaddrop watch --box bob-review       # a side box you read: inbox@bob-review.js
   unsigned letter) goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
   name, lowercase, with dashes), unless you say `--for`. What a letter was
   for is never copied back.
-- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `open`,
+- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `wait`, `bar`, `open`,
   `thread`, `with`, `threads` and `asks` take `--for`, or `$DEADDROP_FOR`
   for a helper's whole session.
 
@@ -465,6 +472,45 @@ Run `deaddrop watch` every minute or so with whatever your machine has:
 Crontinental, launchd, systemd, cron, or `--every` in a terminal or a
 service. [`examples/watch/`](examples/watch/) has each.
 
+**Waiting for mail.** `deaddrop wait` blocks until your box has unread mail
+it hasn't reported yet, prints a line per letter (id, urgency, sender,
+signature, tags, subject; never the text) and exits. It's for a script, or
+an agent's session, that should do nothing until mail comes: start it in the
+background, and it ends when there's something to read.
+
+```sh
+deaddrop wait                          # your box; --box WHO, --for HELPER for others
+deaddrop wait --alive ~/.cache/waiting # and rewrite that file after every look
+deaddrop wait --json                   # the letters as inbox --json gives them, without text
+```
+
+It looks every minute (`--every`, not more often than every 10 seconds). It
+retries only what can clear by itself: a store it can't reach (which is
+also how a key the store's machine turns away at ssh looks) and an answer
+it can't read, saying so once per new error, while its `--alive` file goes
+stale. Anything else ends it with the error: exit 4 for a box that isn't
+there, 5 for a refusal (a key that may not read the box, no name to ask
+as), 2 for bad flags, 1 for the rest, an older store's refusals included.
+
+What it has reported is kept per box and pigeonhole, in the state folder:
+`waited@<box>.json`, or `waited@<box>@<helper>.json` with `--for` (named by
+the box even for your own, so two people sharing a login and a state folder
+keep theirs apart), under a lock, so two waits on one box never both report
+a letter. It's never taken from what's unread when the wait starts: a letter
+that lands between one wait and the next is still reported, one already
+reported and left unread isn't again, and one read and then marked unread is
+new again. `--again` reports everything unread. A look whose fetch began
+before another wait last saved only adds to the state, never drops from
+it. If the state folder can't be made or locked, the wait ends with that
+error before printing anything; if a save after printing fails, it says so,
+and the next wait may report the same letters again.
+
+`--alive FILE` holds `BOX`, or `BOX HELPER` with `--for`, and is rewritten
+only after a look that worked, so its age says whether a wait is running and
+reaching the store. Where it's going is checked when the wait starts (the
+nearest folder that exists, since the rest is made); a path that can't be
+written fails then, with exit 2, never later.
+
 **The inbox file** is `~/.local/state/deaddrop/inbox.json`
 (`$XDG_STATE_HOME/deaddrop`, or `$DEADDROP_STATE`). It holds your unread
 and read mail, unread first (urgent on top) and newest first, **without the
@@ -654,6 +700,7 @@ deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # th
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
+deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]

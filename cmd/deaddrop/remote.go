@@ -171,8 +171,8 @@ func remoteBytes(host, cmd string, args []string) ([]byte, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		if errors.As(err, &ee) && ee.code == exitNoBox {
-			return nil, exitError{exitNoBox, msg} // a job tells "no box yet" by its code
+		if errors.As(err, &ee) && (ee.code == exitNoBox || ee.code == exitRefused || ee.code == exitUnreachable) {
+			return nil, exitError{ee.code, msg} // a job tells these apart by their code
 		}
 		return nil, errors.New(msg)
 	}
@@ -185,7 +185,7 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 	if me == "" {
-		return fmt.Errorf("the store is on %s, where everyone may be the same login, so say who you are: set DEADDROP_FROM, or me in %s", host, configPath())
+		return exitError{exitRefused, fmt.Sprintf("the store is on %s, where everyone may be the same login, so say who you are: set DEADDROP_FROM, or me in %s", host, configPath())}
 	}
 	if strings.HasPrefix(host, "-") {
 		return fmt.Errorf("host %q is not a host", host)
@@ -276,8 +276,8 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 	switch {
 	case err == nil:
 		return nil
-	case errors.As(err, &ee) && ee.ExitCode() == 255:
-		return exitError{255, "could not reach the store on " + host + " over ssh"}
+	case errors.As(err, &ee) && ee.ExitCode() == exitUnreachable:
+		return exitError{exitUnreachable, "could not reach the store on " + host + " over ssh"}
 	case errors.As(err, &ee) && ee.ExitCode() > 0:
 		// The far side said what was wrong.
 		return exitError{ee.ExitCode(), ""}

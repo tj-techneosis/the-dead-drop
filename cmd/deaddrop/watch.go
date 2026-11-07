@@ -106,6 +106,12 @@ func hooksDir() string      { return filepath.Join(filepath.Dir(configPath()), "
 // through the usual dispatch, so it reaches the store over ssh when the
 // store is elsewhere, exactly as the person's own command would.
 func self(args ...string) ([]byte, error) {
+	return selfKeeping(map[int]bool{exitNoBox: true}, args...)
+}
+
+// selfKeeping is self, handing back the inner command's exit codes in keeps
+// as they are (anything else is a plain error, exit 1).
+func selfKeeping(keeps map[int]bool, args ...string) ([]byte, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -124,6 +130,10 @@ func self(args ...string) ([]byte, error) {
 		msg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(errb.String()), "deaddrop: "))
 		if msg == "" {
 			msg = err.Error()
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && keeps[ee.ExitCode()] {
+			return nil, exitError{ee.ExitCode(), msg}
 		}
 		return nil, errors.New(msg)
 	}

@@ -8,6 +8,7 @@ the way sshd would."""
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from _binary import BIN, DeadDrop, at, key, script, signers
@@ -97,6 +98,8 @@ class Remote(RemoteBase):
         self.assertIn("no box alice", p.stderr)
         self.assertEqual(p.returncode, 4)  # no such box: its own code, across ssh
         unreachable = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
+        for cmd in (("inbox",), ("ls",), ("mark", "read", "--tag", "x"), ("sent",)):
+            self.assertEqual(self.rdd(*cmd, env=dict(DEADDROP_SSH=str(unreachable)), ok=False).returncode, 255, cmd)
         p = self.rdd("status", env=dict(DEADDROP_SSH=str(unreachable)), ok=False)
         self.assertIn("could not reach the store on store-box", p.stderr)
 
@@ -371,6 +374,55 @@ class RemoteDashes(RemoteBase):
             self.assertIn("no box carol", p.stderr)
 
 
+class RemoteWait(RemoteBase):
+    def test_wait_over_ssh_reports_and_keeps_its_state_here(self):
+        a = self.rdd("send", "--to", "bob", input="# A\n\nthe body\n").stdout.split()[1]
+        p = self.rdd("wait", env=dict(DEADDROP_FROM="bob"), timeout=10)
+        self.assertIn(a, p.stdout)
+        self.assertNotIn("the body", p.stdout)
+        self.assertTrue((self.near / ".local" / "state" / "deaddrop" / "waited@bob.json").exists())
+        b = self.rdd("send", "--to", "bob", input="# B\n\nx\n").stdout.split()[1]
+        p = self.rdd("wait", env=dict(DEADDROP_FROM="bob"), timeout=10)
+        self.assertIn(b, p.stdout)
+        self.assertNotIn(a, p.stdout)
+        p = self.rdd("wait", "--box", "carol", ok=False, env=dict(DEADDROP_FROM="bob"), timeout=10)
+        self.assertEqual(p.returncode, 4)
+
+
+    def test_a_store_it_cant_reach_is_waited_out_and_alive_goes_stale(self):
+        down = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
+        alive = self.tmp / "alive"
+        p = subprocess.Popen([BIN, "wait", "--alive", str(alive)], env=self.env(**{k: v for k, v in self.near_env(DEADDROP_FROM="bob", DEADDROP_SSH=str(down)).items()}),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(1.5)
+            self.assertIsNone(p.poll())  # still waiting
+        finally:
+            p.kill()
+            out, err = p.communicate()
+        self.assertIn("could not reach the store", err)
+        self.assertEqual(err.count("still waiting"), 1)  # said once
+        self.assertFalse(alive.exists())
+
+    def test_an_older_stores_refusal_still_ends_the_wait(self):
+        # A 0.7.7 store's gate refused with exit 1: waiting won't change it.
+        old = script(self.tmp / "store-077", 'echo "deaddrop: this key reads only bob, not carol" >&2; exit 1\n')
+        p = self.rdd("wait", "--box", "carol", ok=False, env=dict(DEADDROP_FROM="bob", DEADDROP_REMOTE_BIN=str(old)), timeout=10)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("reads only bob", p.stderr)
+        self.assertNotIn("still waiting", p.stderr)
+
+    def test_no_name_to_ask_as_ends_the_wait(self):
+        p = self.rdd("wait", ok=False, env=dict(DEADDROP_FROM=None), timeout=10)
+        self.assertIn("DEADDROP_FROM", p.stderr)
+        self.assertEqual(p.returncode, 5)
+
+    def test_other_commands_keep_exit_1_for_a_store_they_cant_reach_through_self(self):
+        down = script(self.tmp / "ssh-down2", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
+        p = self.rdd("watch", ok=False, env=dict(DEADDROP_FROM="bob", DEADDROP_SSH=str(down)))
+        self.assertEqual(p.returncode, 1)
+
+
 class Mirror(RemoteBase):
     """--cached: the store's answers kept on the reader's machine, checked
     here on every read, refreshed by watch --mirror, dropped by a write."""
@@ -547,17 +599,25 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
 
     def test_the_key_reads_nothing_else(self):
         self.far_send("bob", "# Bob's\\n\\nx\\n")
-        self.assertIn("reads only alice, alice-helper", self.rdd("inbox", "bob", "--json", ok=False).stderr)
-        self.assertIn("reads only", self.rdd("pull", "--json", env=dict(DEADDROP_BOX="bob"), ok=False).stderr)
-        self.assertIn("reads only", self.rdd("status", "--box", "bob", ok=False).stderr)
+        refused = [self.rdd("inbox", "bob", "--json", ok=False), self.rdd("pull", "--json", env=dict(DEADDROP_BOX="bob"), ok=False),
+                   self.rdd("status", "--box", "bob", ok=False)]
+        self.assertIn("reads only alice, alice-helper", refused[0].stderr)
         self.assertIn("names its boxes", self.rdd("status", ok=False).stderr)
         b = self.far_send("bob", "# Another\\n\\nx\\n")
-        self.assertIn("reads only", self.rdd("mark", "read", b, "--box", "bob", ok=False).stderr)
+        refused.append(self.rdd("mark", "read", b, "--box", "bob", ok=False))
+        for p in refused:
+            self.assertIn("reads only", p.stderr)
+            self.assertNotIn("usage:", p.stderr)  # refused, not used wrong
+            self.assertEqual(p.returncode, 5, p.stderr)
 
     def test_the_key_sends_only_as_itself_and_runs_only_the_store_commands(self):
-        self.assertIn("sends only as alice", self.rdd("send", "--to", "bob", "--from", "automation", input="x\\n", ok=False).stderr)
+        p = self.rdd("send", "--to", "bob", "--from", "automation", input="x\\n", ok=False)
+        self.assertIn("sends only as alice", p.stderr)
+        self.assertEqual(p.returncode, 5)
         for cmd in ("gc", "firetower", "follow-up"):
-            self.assertIn("can't run", self.rdd(cmd, ok=False).stderr)
+            p = self.rdd(cmd, ok=False)
+            self.assertIn("can't run", p.stderr)
+            self.assertEqual(p.returncode, 5)  # every gate refusal: one code
 
     def gate(self, line, argv0=None, input=None, extra_env=None, gate_args=()):
         """The gate run directly, as sshd would, with this line."""
@@ -591,6 +651,13 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("Nothing sent", p.stdout)
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)
         self.assertEqual(json.loads(self.rdd("sent", "--json").stdout), [])  # the list's shape is unchanged
+
+    def test_a_box_the_key_cant_read_ends_the_wait(self):
+        self.far_send("carol", "# Carol's\n\nx\n")
+        p = self.rdd("wait", "--box", "carol", ok=False, timeout=10)
+        self.assertIn("this key reads only", p.stderr)
+        self.assertEqual(p.returncode, 5)
+        self.assertNotIn("still waiting", p.stderr)
 
     def test_attach_never_reads_the_stores_files(self):
         secret = self.far / "secret.txt"
@@ -687,6 +754,40 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertNotIn("toml", p.stderr)
         log = (self.far_store / "gate.log").read_text()
         self.assertIn("config can't be read", log)
+
+    def test_every_gate_refusal_exits_5(self):
+        self.far_send("alice", "# Hi\n\nx\n")
+        self.far_send("carol", "# Carol's\n\nx\n")
+        secret = self.far / "secret.txt"
+        secret.write_text("x\n")
+        hops = """d="$HOME/.local/bin/deaddrop"; [ -x "$d" ] || d=deaddrop; DEADDROP_HOPS=7 DEADDROP_FROM='x' exec "$d" 'inbox' '--raw' '--json'"""
+        cases = {
+            "attach": dict(line=f"deaddrop send --to alice --subject x --attach {secret}", input="x\n"),
+            "a box": dict(line="deaddrop inbox carol --raw --json"),
+            "not raw": dict(line="deaddrop inbox --json"),
+            "no line": dict(line=None),
+            "no command": dict(line="deaddrop"),
+            "not a command": dict(line="deaddrop gc"),
+            "hops": dict(line=hops),
+            "relative path": dict(line="deaddrop inbox --raw --json", argv0="./deaddrop"),
+            "from another": dict(line="deaddrop send --to bob --subject x --from carol", input="x\n"),
+            "signed by another": dict(line="deaddrop send --to bob --subject x --signed-by carol --signed-at 2026-11-02T15:30:00Z --signature x", input="x\n"),
+            "status without a box": dict(line="deaddrop status"),
+        }
+        for name, c in cases.items():
+            line = c.pop("line")
+            p = self.gate(line, **c)
+            self.assertEqual(p.returncode, 5, (name, p.stderr))
+            self.assertNotIn("usage:", p.stderr, name)
+        # The config breaking is the owner's to fix: refused too.
+        cfg = self.far / ".config" / "deaddrop"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "config.toml").write_text('host = "elsewhere"\n')
+        p = self.gate("deaddrop inbox --raw --json")
+        self.assertIn("isn't the store", p.stderr)
+        self.assertEqual(p.returncode, 5)
+        (cfg / "config.toml").write_text("not = [toml\n")
+        self.assertEqual(self.gate("deaddrop inbox --raw --json").returncode, 5)
 
     def test_no_command_asks_for_one(self):
         self.assertIn("say which", self.gate("deaddrop").stderr)

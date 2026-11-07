@@ -58,13 +58,19 @@ var gateCommands = map[string]bool{
 // gateReadable says a gated caller may read box (always true ungated).
 func gateReadable(box string) bool { return gateRead == nil || gateRead[box] }
 
+// refused is a gate's refusal: exit 5, the same for every one, since none
+// changes by asking again.
+func refused(format string, a ...any) error {
+	return exitError{exitRefused, fmt.Sprintf(format, a...)}
+}
+
 func gateRefusal(box string) error {
 	var names []string
 	for b := range gateRead {
 		names = append(names, b)
 	}
 	sort.Strings(names)
-	return fmt.Errorf("this key reads only %s, not %s", strings.Join(names, ", "), box)
+	return exitError{exitRefused, fmt.Sprintf("this key reads only %s, not %s", strings.Join(names, ", "), box)}
 }
 
 func cmdGate(args []string) error {
@@ -121,7 +127,7 @@ func cmdGate(args []string) error {
 	// Started by its full path, as authorized_keys names it: never found
 	// through a PATH that someone else's setup decides.
 	if !filepath.IsAbs(os.Args[0]) {
-		return fmt.Errorf("the gate runs only by its full path (command=\"/home/…/.local/bin/deaddrop gate …\")")
+		return refused("the gate runs only by its full path (command=\"/home/…/.local/bin/deaddrop gate …\")")
 	}
 	// A store that passes commands on would hand the line to another machine
 	// before any check here ran, and one with a host of its own isn't the
@@ -129,34 +135,34 @@ func cmdGate(args []string) error {
 	// business who holds a key.)
 	if c, err := loadConfig(); err != nil {
 		gateLog("the config can't be read: %v", err) // the owner's to see, not the caller's
-		return fmt.Errorf("the store's config can't be read")
+		return refused("the store's config can't be read")
 	} else if c.Host != "" {
-		return fmt.Errorf("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
+		return refused("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
 	}
 	line, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND")
 	if !ok {
-		return fmt.Errorf("this key is for the Dead Drop's remote mode only: set host on your machine and run deaddrop there")
+		return refused("this key is for the Dead Drop's remote mode only: set host on your machine and run deaddrop there")
 	}
 	words, hops, err := gateWords(line)
 	if err != nil {
-		return fmt.Errorf("this key is for the Dead Drop's remote mode only (%v)", err)
+		return refused("this key is for the Dead Drop's remote mode only (%v)", err)
 	}
 	if len(words) == 0 {
-		return fmt.Errorf("this key runs one deaddrop command: say which (send, inbox, pull, …)")
+		return refused("this key runs one deaddrop command: say which (send, inbox, pull, …)")
 	}
 	if !gateCommands[words[0]] {
 		what := "nothing"
 		if len(words) > 0 {
 			what = cleanLine(words[0], 40)
 		}
-		return fmt.Errorf("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
+		return refused("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
 	}
 	cmd, rest := words[0], words[1:]
 	if err := gateCheck(cmd, rest, as); err != nil {
 		return err
 	}
 	if hops > maxHops {
-		return fmt.Errorf("this command has come through %d machines; %d is the limit", hops, maxHops)
+		return refused("this command has come through %d machines; %d is the limit", hops, maxHops)
 	}
 	os.Setenv("DEADDROP_FROM", as)
 	os.Setenv("DEADDROP_HOPS", fmt.Sprint(max(hops, 1)))
@@ -174,17 +180,17 @@ func gateCheck(cmd string, args []string, as string) error {
 	switch cmd {
 	case "status":
 		if !hasFlag(args, "box") {
-			return fmt.Errorf("this key's status names its boxes: status --box %s", as)
+			return refused("this key's status names its boxes: status --box %s", as)
 		}
 	case "inbox", "ls", "pull", "sent":
 		// Remote mode reads as stored and checks on the reader's machine; the
 		// store mustn't check, or keep a ledger, on a gated key's behalf.
 		if !hasFlag(args, "raw") {
-			return fmt.Errorf("this key reads as remote mode does (--raw)")
+			return refused("this key reads as remote mode does (--raw)")
 		}
 	case "show":
 		if !hasFlag(args, "raw") && !hasFlag(args, "fingerprint") {
-			return fmt.Errorf("this key reads as remote mode does (--raw)")
+			return refused("this key reads as remote mode does (--raw)")
 		}
 	}
 	return nil

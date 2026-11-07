@@ -81,7 +81,7 @@ EOF
 - **For one of their helpers:** `--for <helper>` puts it in that helper's
   own pigeonhole in the person's box (`--for planner`). A helper reads its
   own with `--for <helper>` on `inbox`, `pull`, `show`, `file`, `mark`,
-  `watch`, `bar`, `thread`, `with`, `threads` and `open`, or sets
+  `watch`, `wait`, `bar`, `thread`, `with`, `threads` and `open`, or sets
   `DEADDROP_FOR` once for the session. If you're a helper with a
   pigeonhole, read only yours. A person's own `inbox` and `status` say when
   helpers have unread mail.
@@ -229,6 +229,23 @@ unsigned. Setting it up (`sign_key` in the config, and their line in
 everyone's `allowed_signers`) is their machine's setup: offer it, don't do
 it unasked.
 
+## Waiting for mail in a session
+
+"Wait for mail", "tell me when Bob answers", or a session that should do
+nothing until mail comes: run `deaddrop wait` **in the background** (the
+session's background-task tool), not a loop of your own. It exits when the
+box has mail it hasn't reported, printing a line per letter (never the
+text); that exit wakes the session. Then `pull` what it named, act, `mark`
+what you handled, and start it again. A letter that lands while you work is
+still reported by the next wait, and one you left unread isn't reported
+twice (`--again` reports everything unread). `--box`/`--for` for a box or
+pigeonhole other than yours. `--alive FILE` rewrites FILE (with the box)
+after every look that reached the store, for a hook that checks a wait is
+running. It keeps waiting only through a store it can't reach (if that
+never clears, the key may be turned away at ssh: the `--alive` file goes
+stale); any other error ends it (no such box, exit 4; a key that can't
+read it or no name set, exit 5): read the error, don't just start it again.
+
 ## Seeing that mail is waiting
 
 On the store's machine, `deaddrop firetower` reports each box to the
@@ -255,6 +272,7 @@ deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
 deaddrop status --box WHO --count        # "3 1": unread and urgent, for scripts
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   # on the person's own machine
+deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]   # block until new mail, then a line per letter
 # --cached on any reading command reads the mirror watch --mirror keeps (letter text on disk: only if they ask)
 deaddrop bar [--format text|swiftbar] [--for H]
 deaddrop key                             # this machine's line for everyone's allowed_signers
@@ -263,5 +281,5 @@ deaddrop asks [--for H] [--json]         # what's waiting on the person's (or a 
 deaddrop open --threads                  # every thread on one page, in the browser
 deaddrop open ID [--for H]               # read it in the browser, mark it read
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with, threads and asks:
-# every one; watch, bar and open take one); DEADDROP_FOR sets it for a session
+# every one; watch, wait, bar and open take one); DEADDROP_FOR sets it for a session
 ```
