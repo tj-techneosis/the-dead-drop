@@ -478,7 +478,7 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false, "heard-at": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -516,7 +516,16 @@ func cmdShow(args []string) error {
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
 		if !f.has("unheard") {
-			hear(dir, m.Box, m.Pigeonhole)
+			at := now()
+			if f.has("heard-at") {
+				// A mirror's refresh: heard as of the answer the reader saw.
+				t, err := time.Parse(time.RFC3339Nano, f.get("heard-at"))
+				if err != nil {
+					return badf(u, "--heard-at %s: a time (RFC 3339)", f.get("heard-at"))
+				}
+				at = t
+			}
+			hearAt(dir, m.Box, m.Pigeonhole, at)
 		}
 	}
 	switch {

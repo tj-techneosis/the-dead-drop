@@ -132,6 +132,19 @@ class Firetower(DeadDrop):
         p = self.dd("firetower", "--box", "bob", "--ring", ok=False)
         self.assertIn("can't be read", p.stderr)
 
+    def test_heard_means_shown(self):
+        from datetime import datetime
+        heard = self.tmp / "home" / ".local" / "share" / "deaddrop"
+        id = self.send("a\n", "--to", "bob", "--tag", "x")
+        stamp = self.dir / "bob" / ".heard"
+        self.dd("pull", "bob", "--tag", "y")  # filtered: shows only some of the box
+        self.assertFalse(stamp.exists())
+        self.clock = at(5)
+        self.dd("show", id, "--box", "bob", "--heard-at", at(2))  # a mirror's refresh: as of what was shown
+        epoch = datetime.fromisoformat(at(2).replace("Z", "+00:00")).timestamp()
+        self.assertEqual(stamp.stat().st_mtime, epoch - 1)
+        self.dd("send", "--to", "bob,,carol", input="x\n", ok=False)  # a stray comma: said, not guessed
+
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
         self.dd("firetower")
