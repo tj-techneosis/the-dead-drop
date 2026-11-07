@@ -319,6 +319,28 @@ func correspondencePage(c *Correspondence) []byte {
 	} else if len(c.Letters) > 0 {
 		title = c.Letters[0].Subject
 	}
+	writePageHead(&b, title)
+	b.WriteString(e(title))
+	b.WriteString("</h1>\n<div class=\"meta\">")
+	fmt.Fprintf(&b, "<span>%s's mail</span><span>%d letters</span>", e(c.Box), len(c.Letters))
+	if c.SentMissing != "" {
+		fmt.Fprintf(&b, `<span class="note">%s</span>`, e(c.SentMissing))
+	}
+	b.WriteString("</div></header>\n<div class=\"letters\">\n")
+	if len(c.Letters) == 0 {
+		b.WriteString("<p class=\"meta\">Nothing yet.</p>\n")
+	}
+	for _, l := range c.Letters {
+		writeLetter(&b, l)
+	}
+	b.WriteString("</div>\n</main></body></html>\n")
+	return []byte(b.String())
+}
+
+// writePageHead starts a page of letters: the safe head, the shared look,
+// and the open <h1>, which the caller fills and closes.
+func writePageHead(b *strings.Builder, title string) {
+	e := html.EscapeString
 	b.WriteString(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
@@ -343,75 +365,136 @@ func correspondencePage(c *Correspondence) []byte {
 @media (max-width: 40rem) { .letter { max-width: 100%; } }
 </style></head><body><main>
 <header><h1>`)
-	b.WriteString(e(title))
-	b.WriteString("</h1>\n<div class=\"meta\">")
-	fmt.Fprintf(&b, "<span>%s's mail</span><span>%d letters</span>", e(c.Box), len(c.Letters))
-	if c.SentMissing != "" {
-		fmt.Fprintf(&b, `<span class="note">%s</span>`, e(c.SentMissing))
+}
+
+// writeLetter is one letter on a page: who, when, its seal, its gist, and
+// the whole of it opening beneath.
+func writeLetter(b *strings.Builder, l *Letter) {
+	e := html.EscapeString
+	class := "letter theirs"
+	if l.Mine {
+		class = "letter mine"
+	} else if l.State == "unread" {
+		class += " unread"
 	}
-	b.WriteString("</div></header>\n<div class=\"letters\">\n")
-	if len(c.Letters) == 0 {
-		b.WriteString("<p class=\"meta\">Nothing yet.</p>\n")
+	if l.Signature == sigBad {
+		class += " forged"
 	}
-	for _, l := range c.Letters {
-		class := "letter theirs"
-		if l.Mine {
-			class = "letter mine"
-		} else if l.State == "unread" {
-			class += " unread"
+	fmt.Fprintf(b, "<section class=\"%s\">\n<div class=\"meta\">", class)
+	if l.Mine {
+		fmt.Fprintf(b, "<span>You, to <strong>%s</strong></span>", e(strings.Join(l.Recipients, ", ")))
+		if l.Persona != "" {
+			fmt.Fprintf(b, "<span>as %s</span>", e(l.Persona))
 		}
-		if l.Signature == sigBad {
-			class += " forged"
+		fmt.Fprintf(b, "<span>%s</span>", e(seen(l)))
+	} else {
+		fmt.Fprintf(b, "<span>From <strong>%s</strong></span>", e(l.sender()))
+		if l.State == "unread" {
+			b.WriteString(`<span class="ok">new</span>`)
 		}
-		fmt.Fprintf(&b, "<section class=\"%s\">\n<div class=\"meta\">", class)
-		if l.Mine {
-			fmt.Fprintf(&b, "<span>You, to <strong>%s</strong></span>", e(strings.Join(l.Recipients, ", ")))
-			if l.Persona != "" {
-				fmt.Fprintf(&b, "<span>as %s</span>", e(l.Persona))
+	}
+	fmt.Fprintf(b, "<span>%s</span>", e(l.Sent.Local().Format("Mon 2 Jan, 15:04")))
+	switch l.Signature {
+	case sigVerified:
+		b.WriteString(`<span class="ok">✓</span>`)
+	case sigBad:
+		fmt.Fprintf(b, `<span class="urgent">✗ forged or changed: %s</span>`, e(l.SignatureNote))
+	default:
+		fmt.Fprintf(b, `<span class="warn">%s</span>`, e(map[string]string{sigUnsigned: "unsigned", sigUnknown: "can't check"}[l.Signature]))
+	}
+	if l.Urgency == urgent {
+		b.WriteString(`<span class="urgent">urgent</span>`)
+	}
+	for _, t := range l.Tags {
+		fmt.Fprintf(b, `<span class="tag">%s</span>`, e(t))
+	}
+	b.WriteString("</div>\n")
+	fmt.Fprintf(b, "<h2>%s</h2>\n", e(l.Subject))
+	if l.Gist != "" {
+		fmt.Fprintf(b, "<p class=\"gist\">%s</p>\n", e(l.Gist))
+	}
+	b.WriteString("<details><summary>The whole letter</summary><article>\n")
+	b.WriteString(renderMarkdown(l.Body))
+	if len(l.Attachments) > 0 {
+		// A letter you sent is in its recipient's box: say which.
+		where := ""
+		if l.Mine && len(l.Copies) > 0 {
+			where = " --box " + l.Copies[0].Box
+			if l.Copies[0].For != "" {
+				where += " --for " + l.Copies[0].For
 			}
-			fmt.Fprintf(&b, "<span>%s</span>", e(seen(l)))
-		} else {
-			fmt.Fprintf(&b, "<span>From <strong>%s</strong></span>", e(l.sender()))
-			if l.State == "unread" {
-				b.WriteString(`<span class="ok">new</span>`)
-			}
+			l.ID = l.Copies[0].ID
 		}
-		fmt.Fprintf(&b, "<span>%s</span>", e(l.Sent.Local().Format("Mon 2 Jan, 15:04")))
-		switch l.Signature {
-		case sigVerified:
-			b.WriteString(`<span class="ok">✓</span>`)
-		case sigBad:
-			fmt.Fprintf(&b, `<span class="urgent">✗ forged or changed: %s</span>`, e(l.SignatureNote))
-		default:
-			fmt.Fprintf(&b, `<span class="warn">%s</span>`, e(map[string]string{sigUnsigned: "unsigned", sigUnknown: "can't check"}[l.Signature]))
+		fmt.Fprintf(b, "<p class=\"meta\">Attached: %s. <code>deaddrop file %s NAME%s</code></p>\n", e(strings.Join(l.Attachments, ", ")), e(l.ID), e(where))
+	}
+	b.WriteString("</article></details>\n</section>\n")
+}
+
+// threadsPage is every thread on one page, newest activity first: each a
+// line (subject, who, how many, how many new) that opens in place into its
+// letters, so the browser is the whole reading view. No script needed.
+func threadsPage(t *Topics) []byte {
+	var b strings.Builder
+	e := html.EscapeString
+	writePageHead(&b, "Threads")
+	b.WriteString("Threads</h1>\n<div class=\"meta\">")
+	fmt.Fprintf(&b, "<span>%s's mail</span><span>%d threads</span>", e(t.Box), len(t.Topics))
+	if t.For != "" {
+		fmt.Fprintf(&b, "<span>for %s</span>", e(t.For))
+	}
+	if t.SentMissing != "" {
+		fmt.Fprintf(&b, `<span class="note">%s</span>`, e(t.SentMissing))
+	}
+	b.WriteString("</div></header>\n")
+	b.WriteString(`<style>
+details.topic { border-top: 1px solid var(--rule); padding: .6rem 0; }
+details.topic > summary { cursor: pointer; list-style: none; }
+details.topic > summary::-webkit-details-marker { display: none; }
+details.topic > summary .subject { font-weight: 600; }
+details.topic.new > summary .subject::before { content: "● "; color: var(--accent); }
+details.topic .letters { margin-top: .9rem; }
+</style>
+`)
+	if len(t.Topics) == 0 {
+		b.WriteString("<p class=\"meta\">No threads yet.</p>\n")
+	}
+	now0 := now()
+	for _, tp := range t.Topics {
+		class := "topic"
+		if tp.Unread > 0 {
+			class += " new"
 		}
-		if l.Urgency == urgent {
-			b.WriteString(`<span class="urgent">urgent</span>`)
-		}
-		for _, t := range l.Tags {
-			fmt.Fprintf(&b, `<span class="tag">%s</span>`, e(t))
-		}
-		b.WriteString("</div>\n")
-		fmt.Fprintf(&b, "<h2>%s</h2>\n", e(l.Subject))
-		if l.Gist != "" {
-			fmt.Fprintf(&b, "<p class=\"gist\">%s</p>\n", e(l.Gist))
-		}
-		b.WriteString("<details><summary>The whole letter</summary><article>\n")
-		b.WriteString(renderMarkdown(l.Body))
-		if len(l.Attachments) > 0 {
-			// A letter you sent is in its recipient's box: say which.
-			where := ""
-			if l.Mine && len(l.Copies) > 0 {
-				where = " --box " + l.Copies[0].Box
-				if l.Copies[0].For != "" {
-					where += " --for " + l.Copies[0].For
+		var who []string
+		for _, p := range tp.Participants {
+			w := p.Box
+			if p.Persona != "" {
+				w += ", as " + p.Persona
+				if p.Signature != sigVerified {
+					w += " (unverified)"
 				}
-				l.ID = l.Copies[0].ID
 			}
-			fmt.Fprintf(&b, "<p class=\"meta\">Attached: %s. <code>deaddrop file %s NAME%s</code></p>\n", e(strings.Join(l.Attachments, ", ")), e(l.ID), e(where))
+			if p.Signature == sigBad {
+				w += " ✗"
+			}
+			if !contains(who, w) {
+				who = append(who, w)
+			}
 		}
-		b.WriteString("</article></details>\n</section>\n")
+		fmt.Fprintf(&b, "<details class=\"%s\"><summary><span class=\"subject\">%s</span><div class=\"meta\">", class, e(tp.Subject))
+		fmt.Fprintf(&b, "<span>%s</span><span>%d letters</span>", e(strings.Join(who, " · ")), tp.Count)
+		if tp.Unread > 0 {
+			fmt.Fprintf(&b, `<span class="ok">%d new</span>`, tp.Unread)
+		}
+		fmt.Fprintf(&b, "<span>%s</span>", e(ago(tp.Last, now0)))
+		for _, tag := range tp.Tags {
+			fmt.Fprintf(&b, `<span class="tag">%s</span>`, e(tag))
+		}
+		b.WriteString("</div></summary>\n<div class=\"letters\">\n")
+		for _, l := range tp.Letters {
+			writeLetter(&b, l)
+		}
+		b.WriteString("</div></details>\n")
 	}
-	b.WriteString("</div>\n</main></body></html>\n")
+	b.WriteString("</main></body></html>\n")
 	return []byte(b.String())
 }

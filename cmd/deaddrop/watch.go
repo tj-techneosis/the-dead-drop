@@ -533,8 +533,8 @@ func cleanOpened() {
 }
 
 func cmdOpen(args []string) error {
-	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO  [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "for": true})
+	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO | open --threads  [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "threads": false, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -544,6 +544,16 @@ func cmdOpen(args []string) error {
 	var page []byte
 	var name, id string
 	switch {
+	case f.has("threads"):
+		// Every thread on one page: the whole reading view.
+		if len(f.pos) > 0 || f.has("thread") || f.has("with") {
+			return badf(u, "--threads on its own")
+		}
+		if page, err = self(append([]string{"threads", "--html"}, forArgs(f)...)...); err != nil {
+			return err
+		}
+		name = "threads"
+		f.vals["keep-unread"] = []string{""}
 	case f.has("thread") || f.has("with"):
 		// A thread or a conversation: shown, nothing marked.
 		if len(f.pos) > 0 || (f.has("thread") && f.has("with")) {

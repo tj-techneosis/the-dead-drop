@@ -38,7 +38,7 @@ On your own machine:
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json]
                                    every thread, newest activity first
-  deaddrop open --thread ID | --with WHO [--for H]   the same, in the browser
+  deaddrop open --thread ID | --with WHO | --threads [--for H]   the same, in the browser
   deaddrop bar [--format text|swiftbar] [--for H]   the inbox file as a line, or a menu
   deaddrop key                     your line for everyone's allowed_signers
 

@@ -538,8 +538,8 @@ func topicOf(me string, g []*Letter) *Topic {
 }
 
 func cmdThreads(args []string) error {
-	const u = "threads [--for HELPER|'*'] [--since 7d|DATE] [--limit N] [--letters [--bodies]] [--json]"
-	f, err := parseFlags(args, map[string]bool{"for": true, "since": true, "limit": true, "letters": false, "bodies": false, "json": false})
+	const u = "threads [--for HELPER|'*'] [--since 7d|DATE] [--limit N] [--letters [--bodies]] [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"for": true, "since": true, "limit": true, "letters": false, "bodies": false, "json": false, "html": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -548,6 +548,13 @@ func cmdThreads(args []string) error {
 	}
 	if f.has("bodies") && !f.has("letters") {
 		return badf(u, "--bodies goes with --letters")
+	}
+	if f.has("json") && f.has("html") {
+		return badf(u, "--json or --html, not both")
+	}
+	if f.has("html") {
+		// The page shows every letter, whole: it needs them all.
+		f.vals["letters"], f.vals["bodies"] = []string{""}, []string{""}
 	}
 	since := flags{vals: map[string][]string{}}
 	if f.has("since") {
@@ -592,6 +599,10 @@ func cmdThreads(args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
+	}
+	if f.has("html") {
+		_, err := os.Stdout.Write(threadsPage(out))
+		return err
 	}
 	if missing != "" {
 		fmt.Println("(" + missing + ")")

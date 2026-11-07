@@ -114,3 +114,18 @@ class Threads(DeadDrop):
         self.send("# Title\n\n```\ncode first\n```\n\n## Why\n\n> The real point,\n> on two lines.\n\nMore.\n", "--to", "bob")
         l = json.loads(self.dd("with", "bob", "--json").stdout)["letters"][0]
         self.assertEqual(l["gist"], "The real point, on two lines.")
+
+    def test_every_thread_on_one_page(self):
+        a, b = self.conversation()
+        page = self.dd("threads", "--html").stdout
+        self.assertIn("default-src 'none'", page)
+        self.assertEqual(page.count('<details class="topic'), 4)
+        self.assertIn("Requests for tool X</span>", page)
+        self.assertIn("The whole letter", page)  # the letters are inside
+        self.assertNotIn("<script", page)
+        opened = self.tmp / "opened"
+        opener = script(self.tmp / "opener", f'cp "$1" "{opened}"\n')
+        self.dd("open", "--threads", DEADDROP_OPENER=str(opener))
+        self.assertIn("Threads</h1>", opened.read_text())
+        self.assertEqual(len(self.ids(DEADDROP_FROM="alice")), 3)  # nothing marked
+        self.dd("threads", "--html", "--json", ok=False)

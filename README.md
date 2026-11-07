@@ -339,6 +339,7 @@ deaddrop thread ID             # the whole thread, both sides, in time order
 deaddrop with bob              # everything between you and bob
 deaddrop open --thread ID      # either one as a page in the browser
 deaddrop open --with bob
+deaddrop open --threads        # every thread on one page, each opening in place
 ```
 
 **Threads and conversations** put both sides together: what others sent
@@ -506,9 +507,9 @@ deaddrop status [--box WHO]... [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--for H]
-deaddrop open ID [--keep-unread] | --thread ID | --with WHO  [--for H]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
-deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json]
+deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
 deaddrop with WHO [--tag T]... [--for H] [--json|--html]
 deaddrop bar [--format text|swiftbar] [--for H]
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with and threads: every one)
