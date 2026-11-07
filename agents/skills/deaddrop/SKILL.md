@@ -84,6 +84,10 @@ EOF
   `DEADDROP_FOR` once for the session. If you're a helper with a
   pigeonhole, read only yours. A person's own `inbox` and `status` say when
   helpers have unread mail.
+- **It needs the person's decision** (a taste call, a choice only they can
+  make): `--ask`, with the question as the document's first paragraph.
+  `deaddrop asks` lists what's waiting on someone; it closes when they reply.
+  Only for what's really theirs.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
   the sender with its topic tags, "Re: " and a thread link (`persona-…`
   tags stay behind; `--untag T` drops another, `--tag T` adds yours). Or

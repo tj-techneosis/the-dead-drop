@@ -79,6 +79,7 @@ answered with a status: `--untag proposal --tag status`).
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 | `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
+| `--ask` | the letter needs its recipient's decision. Its first paragraph is the question. `deaddrop asks` lists the ones you haven't answered |
 | `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session |
 
 **Never put a secret in a message.** Everyone who can read the store can
@@ -245,6 +246,13 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
 - `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `thread`,
   `with` and `threads` take `--for`, or `$DEADDROP_FOR` for a helper's
   whole session.
+
+**What's waiting on you.** `deaddrop send --to bob --ask` marks a letter as
+needing bob's decision (a sealed `ask` tag; the first paragraph is the
+question, and one without a question is refused). `deaddrop asks` lists the
+asks in your box you haven't answered yet, oldest first: an ask closes when
+you reply in its thread, or file it. `--json` gives a panel the list. A
+reply never carries `ask` back.
 
 **Every thread at a glance.** `deaddrop threads` lists them, newest activity
 first: subject, when it started and last moved, how many letters, how many
@@ -494,7 +502,7 @@ What gets reported, and when, belongs to whoever books it.
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
-              [--reply-box BOX] < body.md
+              [--reply-box BOX] [--ask] < body.md
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--for H] [--json]
@@ -510,6 +518,7 @@ deaddrop watch [--every 1m] [--no-hooks] [--for H]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
+deaddrop asks [--for H] [--json]
 deaddrop with WHO [--tag T]... [--for H] [--json|--html]
 deaddrop bar [--format text|swiftbar] [--for H]
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with and threads: every one)

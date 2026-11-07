@@ -639,3 +639,74 @@ func cmdThreads(args []string) error {
 	}
 	return tw.Flush()
 }
+
+// ---- asks: letters that need their recipient's decision ----
+
+const askTag = "ask"
+
+// Ask is one open ask: what's asked, by whom, how long it has waited.
+type Ask struct {
+	*Letter
+	Question string `json:"question"`
+}
+
+// isAsk says a letter asks its recipient for a decision: --ask, or an
+// ask-<box> tag naming them.
+func isAsk(l *Letter, box string) bool {
+	return l.hasTag(askTag) || l.hasTag("ask-"+box)
+}
+
+// answered says the recipient has replied in the ask's thread.
+func answered(ask *Letter, ls []*Letter) bool {
+	for _, l := range ls {
+		if !l.Mine {
+			continue
+		}
+		if l.Thread == ask.ID || (ask.Letter != "" && l.ThreadLetter == ask.Letter) {
+			return true
+		}
+	}
+	return false
+}
+
+func cmdAsks(args []string) error {
+	const u = "asks [--for HELPER] [--json]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "for": true})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) > 0 {
+		return badf(u, "asks takes no words of its own: it lists your own")
+	}
+	lettersFor = forArgs(f)
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	out := []*Ask{}
+	for _, l := range ls {
+		// Open: to you, not filed, and not answered by you in its thread.
+		if l.Mine || l.State == "archived" || !isAsk(l, me) || answered(l, ls) {
+			continue
+		}
+		out = append(out, &Ask{Letter: l, Question: l.Gist})
+	}
+	if f.has("json") {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	if missing != "" {
+		fmt.Println("(" + missing + ")")
+	}
+	if len(out) == 0 {
+		fmt.Println("Nothing waiting on your decision.")
+		return nil
+	}
+	at := now()
+	for _, a := range out {
+		fmt.Printf("%s %s  %s, %s:\n  %s\n  (%s; answer with deaddrop reply %s)\n\n", sigMark(a.Message), cleanLine(a.Subject, 80),
+			cleanLine(a.sender(), 60), ago(a.Sent, at), cleanLine(a.Question, 300), a.ID, a.ID)
+	}
+	return nil
+}

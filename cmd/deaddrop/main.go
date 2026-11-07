@@ -18,7 +18,7 @@ const usage = `deaddrop: a shared, tagged inbox of documents
 Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
-                [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md
+                [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] [--ask] < body.md
   deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
                 [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 
@@ -36,7 +36,8 @@ On your own machine:
   deaddrop watch [--every 1m] [--no-hooks] [--for H]   keep the inbox file current, run new.d hooks
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
-  deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json]
+  deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
+  deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json|--html]
                                    every thread, newest activity first
   deaddrop open --thread ID | --with WHO | --threads [--for H]   the same, in the browser
   deaddrop bar [--format text|swiftbar] [--for H]   the inbox file as a line, or a menu
@@ -255,6 +256,7 @@ var here = map[string]func([]string) error{
 	"key":     cmdKey,
 	"thread":  cmdThread,
 	"threads": cmdThreads,
+	"asks":    cmdAsks,
 	"with":    cmdWith,
 	"watch":   cmdWatch,
 	"open":    cmdOpen,

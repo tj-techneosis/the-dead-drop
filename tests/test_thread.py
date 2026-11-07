@@ -129,3 +129,18 @@ class Threads(DeadDrop):
         self.assertIn("Threads</h1>", opened.read_text())
         self.assertEqual(len(self.ids(DEADDROP_FROM="alice")), 3)  # nothing marked
         self.dd("threads", "--html", "--json", ok=False)
+
+    def test_asks_wait_until_answered(self):
+        self.dd("send", "--to", "alice", "--ask", input="# Which name?\n\nWatches or Lookouts: which should the page say?\n\nDetail.\n", DEADDROP_FROM="bob")
+        self.dd("send", "--to", "alice", "--tag", "ask-alice", input="# Old style\n\nMerge the release tonight?\n", DEADDROP_FROM="carol")
+        self.send("# Just news\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        asks = json.loads(self.dd("asks", "--json").stdout)
+        self.assertEqual([a["question"] for a in asks], ["Watches or Lookouts: which should the page say?", "Merge the release tonight?"])
+        self.assertIn("answer with deaddrop reply", self.dd("asks").stdout)
+        self.dd("reply", asks[0]["id"], input="Lookouts.\n")
+        self.assertEqual([a["subject"] for a in json.loads(self.dd("asks", "--json").stdout)], ["Old style"])
+        self.dd("mark", "archive", asks[1]["id"])  # filed is closed too
+        self.assertIn("Nothing waiting on your decision", self.dd("asks").stdout)
+        # The answer doesn't carry the ask back.
+        self.assertNotIn("ask", self.inbox(DEADDROP_FROM="bob")[0]["tags"])
+        self.dd("send", "--to", "alice", "--ask", input="# Only a heading\n", DEADDROP_FROM="bob", ok=False)

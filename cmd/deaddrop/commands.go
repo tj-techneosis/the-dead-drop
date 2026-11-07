@@ -42,6 +42,7 @@ var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
 	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
 	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true, "reply-box": true,
+	"ask": false,
 }
 
 // helpersOf is a send's --for: the helpers it's addressed to.
@@ -193,6 +194,10 @@ func draftOf(f flags) (draft, error) {
 	if d.tags == nil {
 		d.tags = []string{}
 	}
+	// An ask needs its recipient's decision: a reserved tag, sealed like any.
+	if f.has("ask") && !contains(d.tags, askTag) {
+		d.tags = append(d.tags, askTag)
+	}
 	if d.thread != "" {
 		if err := checkID(d.thread); err != nil {
 			return d, bad(u, fmt.Errorf("--reply-to: %v", err))
@@ -209,6 +214,9 @@ func draftOf(f flags) (draft, error) {
 // settle finishes a draft once its body is known: the subject, and the
 // check for secrets.
 func (d *draft) settle() error {
+	if contains(d.tags, askTag) && gist(d.body) == "" {
+		return fmt.Errorf("an ask starts with the question: the document's first paragraph")
+	}
 	if d.subject == "" {
 		d.subject = subjectFrom(d.body)
 	}
@@ -382,7 +390,8 @@ func replyTags(orig, untag []string) ([]string, error) {
 	}
 	out := []string{}
 	for _, t := range orig {
-		if !drop[t] && !strings.HasPrefix(t, "persona-") {
+		// Who spoke, and "needs your decision", stay with the original.
+		if !drop[t] && !strings.HasPrefix(t, "persona-") && t != askTag {
 			out = append(out, t)
 		}
 	}
