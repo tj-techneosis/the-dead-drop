@@ -38,7 +38,11 @@ type verifyCache struct {
 
 var vcache *verifyCache
 
-func vcachePath() string { return filepath.Join(stateDir(), "verified.json") }
+// vcacheDir is the checked, resolved state folder (vcacheAllowed): the
+// cache is read and written there and nowhere else. "" until checked.
+var vcacheDir string
+
+func vcachePath() string { return filepath.Join(vcacheDir, "verified.json") }
 
 // signersHash is the list's identity: its path and every byte of it.
 var signersHashMemo = map[string]string{}
@@ -70,6 +74,7 @@ func vcacheOK(signers string) bool {
 }
 
 func vcacheAllowed(signers string) bool {
+	vcacheDir = ""
 	if os.Getenv("DEADDROP_NO_VCACHE") != "" || pinnedSigners() {
 		return false
 	}
@@ -81,50 +86,63 @@ func vcacheAllowed(signers string) bool {
 		st, ok := info.Sys().(*syscall.Stat_t)
 		return ok && int(st.Uid) == os.Getuid()
 	}
-	os.MkdirAll(stateDir(), 0o700)
-	if !mine(signers) || !mine(filepath.Dir(signers)) || !mine(stateDir()) {
-		return false
-	}
-	// The cache file itself, if it's there, and every folder above the state
-	// folder up to home: the person's (or root's), writable by nobody else.
-	if info, err := os.Lstat(vcachePath()); err == nil && (!info.Mode().IsRegular() || !mine(vcachePath())) {
-		return false // a link, or someone else's file
-	}
-	// Home and the state folder as they really are: no "..", no links, so a
-	// path can't look inside home and lead out of it.
-	resolve := func(p string) string {
-		if p == "" {
-			return ""
+	// A folder others can't write: the person's or root's, not group- or
+	// world-writable. Lstat: a link is judged by the folder it sits in.
+	sound := func(d string) bool {
+		info, err := os.Lstat(d)
+		if err != nil || info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSymlink == 0 {
+			return false
 		}
-		r, err := filepath.EvalSymlinks(filepath.Clean(p))
-		if err != nil {
-			return ""
+		st, ok := info.Sys().(*syscall.Stat_t)
+		return ok && (int(st.Uid) == os.Getuid() || st.Uid == 0)
+	}
+	// Every folder from below path up to home, home included.
+	chain := func(path, home string) bool {
+		for d := filepath.Dir(path); ; d = filepath.Dir(d) {
+			if !strings.HasPrefix(d+string(filepath.Separator), home+string(filepath.Separator)) || !sound(d) {
+				return false
+			}
+			if d == home {
+				return true
+			}
 		}
-		return r
 	}
 	home, _ := os.UserHomeDir()
-	home, state := resolve(home), resolve(stateDir())
-	if home == "" || state == "" || !strings.HasPrefix(state, home+string(filepath.Separator)) {
-		return false // a state folder outside home: nothing here vouches for its folders
+	home = filepath.Clean(home)
+	// The state folder as given, cleaned, must be under home literally, with
+	// every folder on the way (any link included) sound; and again as it
+	// really is (links and ".." resolved). Then the cache is read and written
+	// only through that resolved folder, so nothing can be swapped between
+	// this check and its use. Nothing outside home is ever created.
+	literal := filepath.Clean(stateDir())
+	if home == "." || !filepath.IsAbs(literal) || !strings.HasPrefix(literal, home+string(filepath.Separator)) {
+		return false
 	}
-	for d := filepath.Dir(state); strings.HasPrefix(d+string(filepath.Separator), home+string(filepath.Separator)); d = filepath.Dir(d) {
-		info, err := os.Stat(d)
-		if err != nil || info.Mode().Perm()&0o022 != 0 {
-			return false
-		}
-		if st, ok := info.Sys().(*syscall.Stat_t); !ok || (int(st.Uid) != os.Getuid() && st.Uid != 0) {
-			return false
-		}
-		if d == home {
-			break
-		}
+	if os.MkdirAll(literal, 0o700) != nil || !chain(literal, home) {
+		return false
+	}
+	realHome, err1 := filepath.EvalSymlinks(home)
+	state, err2 := filepath.EvalSymlinks(literal)
+	if err1 != nil || err2 != nil || !strings.HasPrefix(state, realHome+string(filepath.Separator)) || !chain(state, realHome) {
+		return false
+	}
+	if !mine(signers) || !mine(filepath.Dir(signers)) || !mine(state) {
+		return false
+	}
+	cache := filepath.Join(state, "verified.json")
+	if info, err := os.Lstat(cache); err == nil && (!info.Mode().IsRegular() || !mine(cache)) {
+		return false // a link, or someone else's file
 	}
 	b, err := os.ReadFile(signers)
 	if err != nil {
 		return false
 	}
 	low := strings.ToLower(string(b))
-	return !strings.Contains(low, "valid-before") && !strings.Contains(low, "valid-after") && !strings.Contains(low, "cert-authority")
+	if strings.Contains(low, "valid-before") || strings.Contains(low, "valid-after") || strings.Contains(low, "cert-authority") {
+		return false
+	}
+	vcacheDir = state
+	return true
 }
 
 // keygenID is the ssh-keygen that checks: its path and its file's size and
@@ -148,7 +166,7 @@ func keygenID() string {
 func loadVCache() *verifyCache {
 	if vcache == nil {
 		vcache = &verifyCache{Checks: map[string]bool{}, Owners: map[string][]string{}}
-		if os.Getenv("DEADDROP_NO_VCACHE") == "" {
+		if os.Getenv("DEADDROP_NO_VCACHE") == "" && vcacheDir != "" {
 			if b, err := os.ReadFile(vcachePath()); err == nil {
 				json.Unmarshal(b, vcache)
 			}
@@ -214,10 +232,15 @@ func saveVCache() {
 	if vcache == nil || !vcache.dirty || os.Getenv("DEADDROP_NO_VCACHE") != "" {
 		return
 	}
-	if os.MkdirAll(stateDir(), 0o700) != nil {
+	// Only into the folder that was checked, and only if the state folder
+	// still resolves to it.
+	if vcacheDir == "" {
 		return
 	}
-	lock, err := os.OpenFile(filepath.Join(stateDir(), ".verified.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if now, err := filepath.EvalSymlinks(filepath.Clean(stateDir())); err != nil || now != vcacheDir {
+		return
+	}
+	lock, err := os.OpenFile(filepath.Join(vcacheDir, ".verified.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return
 	}

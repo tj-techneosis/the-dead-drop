@@ -340,8 +340,10 @@ has seen (hashes and ids, so a signed letter copied under a new id reads as
 delivered again), a cache of signature checks that passed (so reading
 doesn't run ssh-keygen once per letter every time; only where the list of
 signers is your own private file, your state folder is inside your home
-with nothing on the way writable by others, and never under a pinned
-list), and, if you run `deaddrop watch`, the inbox file. Never a
+both as given and with links resolved, nothing on the way is writable by
+others, the cache file is a plain file of yours, and never under a pinned
+list; checked once each run, and the cache is read and written only in
+the folder that passed), and, if you run `deaddrop watch`, the inbox file. Never a
 letter's text, unless you ask for the mirror (below). Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run

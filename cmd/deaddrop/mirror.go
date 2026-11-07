@@ -51,6 +51,9 @@ type mirrorEntry struct {
 
 func mirrorDir() string { return filepath.Join(stateDir(), "mirror") }
 
+// saidNoMirror: the --cached warning is said once a run, not per read.
+var saidNoMirror bool
+
 func cachedMode() bool { return os.Getenv("DEADDROP_CACHED") == "1" }
 
 // readsCached are the commands --cached is a flag of: those that read.
@@ -123,7 +126,14 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 	}
 	me, err := explicitMe()
 	if err != nil || me == "" {
-		fmt.Fprintln(os.Stderr, "deaddrop: --cached needs to know who you are (DEADDROP_FROM, or me in the config): reading from the store")
+		if !saidNoMirror {
+			saidNoMirror = true
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "deaddrop: --cached not used: %v\n", err)
+			} else {
+				fmt.Fprintln(os.Stderr, "deaddrop: --cached not used: it needs your name (DEADDROP_FROM, or me in the config)")
+			}
+		}
 		return remoteBytes(host, cmd, args)
 	}
 	path := filepath.Join(mirrorDir(), mirrorKey(host, cmd, args, me)+".json")

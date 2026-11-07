@@ -153,11 +153,11 @@ func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 	}
 	// A cache file that's a link: no cache.
 	os.WriteFile(d+"/elsewhere.json", []byte("{}"), 0o600)
-	os.Symlink(d+"/elsewhere.json", vcachePath())
+	os.Symlink(d+"/elsewhere.json", state+"/verified.json")
 	if vcacheAllowed(list) {
 		t.Fatal("a linked cache file: no cache")
 	}
-	os.Remove(vcachePath())
+	os.Remove(state + "/verified.json")
 	// A state folder outside home, plainly, by "..", or through a link.
 	outside := t.TempDir()
 	os.Symlink(outside, d+"/.local/out")
@@ -167,7 +167,25 @@ func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 			t.Fatalf("state folder %s leads outside home: no cache", p)
 		}
 	}
+	// A link from a folder others can write, into the checked state folder:
+	// the folder holding the link is checked too, so no cache.
+	shared := t.TempDir()
+	os.Chmod(shared, 0o777)
+	os.Symlink(state, shared+"/ln")
+	t.Setenv("DEADDROP_STATE", shared+"/ln")
+	if vcacheAllowed(list) {
+		t.Fatal("a state folder reached through a shared folder: no cache")
+	}
+	// A refused path outside home is never created.
+	t.Setenv("DEADDROP_STATE", outside+"/never")
+	vcacheAllowed(list)
+	if _, err := os.Stat(outside + "/never"); err == nil {
+		t.Fatal("a refused state folder was created")
+	}
 	t.Setenv("DEADDROP_STATE", state)
+	if !vcacheAllowed(list) || vcacheDir == "" {
+		t.Fatal("back home: the cache, in the resolved folder")
+	}
 	os.WriteFile(list, []byte(`alice valid-before="20300101" ssh-ed25519 AAAA`+"\n"), 0o644)
 	if vcacheAllowed(list) {
 		t.Fatal("keys that expire: no cache")
@@ -217,8 +235,8 @@ func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
 		k := vkey(signersHash(list), keygenID(), "alice", "SIG", "TEXT")
 		b, _ := json.Marshal(map[string]any{"checks": map[string]bool{k: true}})
 		os.MkdirAll(d+"/state", 0o700)
-		os.WriteFile(vcachePath(), b, 0o600)
-		os.Chmod(vcachePath(), mode)
+		os.WriteFile(d+"/state/verified.json", b, 0o600)
+		os.Chmod(d+"/state/verified.json", mode)
 	}
 	checked := false
 	check := func() bool { checked = true; return false }
