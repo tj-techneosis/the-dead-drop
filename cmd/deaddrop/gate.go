@@ -59,14 +59,14 @@ func cmdGate(args []string) error {
 		return badf(u, "one --as and at least one --read, nothing else")
 	}
 	as := strings.ToLower(f.get("as"))
-	if err := checkBox("--as", as); err != nil || as == automation {
+	if err := checkBox("--as", as); err != nil || as == automation || as == "me" {
 		return badf(u, "--as %s: a name, like bob", f.get("as"))
 	}
 	read := map[string]bool{}
 	for _, raw := range f.all("read") {
 		for _, w := range strings.Split(raw, ",") {
 			b := strings.ToLower(strings.TrimSpace(w))
-			if err := checkBox("--read", b); err != nil || b == automation {
+			if err := checkBox("--read", b); err != nil || b == automation || b == "me" {
 				return badf(u, "--read %s: a box, like bob", w)
 			}
 			read[b] = true
@@ -77,11 +77,18 @@ func cmdGate(args []string) error {
 	if !filepath.IsAbs(os.Args[0]) {
 		return fmt.Errorf("the gate runs only by its full path (command=\"/home/…/.local/bin/deaddrop gate …\")")
 	}
+	// A store that passes commands on would hand the line to another machine
+	// before any check here ran: the gate runs only where the store is.
+	if c, err := loadConfig(); err != nil {
+		return err
+	} else if c.Host != "" {
+		return fmt.Errorf("the gate runs only on the store's own machine, and this one passes commands on to %s", c.Host)
+	}
 	line, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND")
 	if !ok {
 		return fmt.Errorf("this key is for the Dead Drop's remote mode only: set host on your machine and run deaddrop there")
 	}
-	words, err := gateWords(line)
+	words, hops, err := gateWords(line)
 	if err != nil {
 		return fmt.Errorf("this key is for the Dead Drop's remote mode only (%v)", err)
 	}
@@ -96,16 +103,17 @@ func cmdGate(args []string) error {
 	if err := gateCheck(cmd, rest, as); err != nil {
 		return err
 	}
-	// Nothing the caller's side or this login's own setup says about who's
-	// asking survives: the gate says it.
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "DEADDROP_") && k != "DEADDROP_DIR" && k != "DEADDROP_CONFIG" {
-			os.Unsetenv(k)
-		}
+	if hops > maxHops {
+		return fmt.Errorf("this command has come through %d machines; %d is the limit", hops, maxHops)
+	}
+	// Whatever said who's asking, or for whom, is replaced: the gate says
+	// it. The store's own settings (its folders, Crontinental, its list of
+	// signers) stay.
+	for _, k := range []string{"DEADDROP_FROM", "DEADDROP_AS", "DEADDROP_FOR", "DEADDROP_REPLY_BOX", "DEADDROP_BOX", "DEADDROP_HOPS", "DEADDROP_CACHED", "DEADDROP_SIGN_KEY"} {
+		os.Unsetenv(k)
 	}
 	os.Setenv("DEADDROP_FROM", as)
-	os.Setenv("DEADDROP_HOPS", "1")
+	os.Setenv("DEADDROP_HOPS", fmt.Sprint(max(hops, 1)))
 	gateAs, gateRead = as, read
 	return dispatch(cmd, rest)
 }
@@ -113,28 +121,47 @@ func cmdGate(args []string) error {
 // gateCheck is what a gated command line may not say, beyond the boxes
 // (which resolveBox checks): who it's from, and status of every box.
 func gateCheck(cmd string, args []string, as string) error {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
+	// Every word is looked at: remote mode never sends "--", so a "--" (as a
+	// word or a flag's value) is refused rather than reasoned about.
+	for i, a := range args {
 		if a == "--" {
-			break
+			return fmt.Errorf("this key's commands don't take \"--\"")
 		}
 		name, val, hasVal := strings.Cut(a, "=")
 		if !hasVal && i+1 < len(args) {
 			val = args[i+1]
 		}
+		who := strings.ToLower(val)
 		switch name {
 		case "--from":
-			if cmd == "send" && strings.ToLower(val) != as {
+			if who != as && who != "me" {
 				return fmt.Errorf("this key sends only as %s", as)
 			}
 		case "--signed-by":
-			if strings.ToLower(val) != as {
+			if who != as {
 				return fmt.Errorf("this key signs only as %s", as)
 			}
+		case "--attach":
+			// Paths here would be the store's files. Remote mode sends
+			// attachments as one stream (--bundle), never paths.
+			return fmt.Errorf("this key sends attachments the way remote mode does (--bundle), never --attach")
 		}
 	}
-	if cmd == "status" && !hasFlag(args, "box") {
-		return fmt.Errorf("this key's status names its boxes: status --box %s", as)
+	switch cmd {
+	case "status":
+		if !hasFlag(args, "box") {
+			return fmt.Errorf("this key's status names its boxes: status --box %s", as)
+		}
+	case "inbox", "ls", "pull", "sent":
+		// Remote mode reads as stored and checks on the reader's machine; the
+		// store mustn't check, or keep a ledger, on a gated key's behalf.
+		if !hasFlag(args, "raw") {
+			return fmt.Errorf("this key reads as remote mode does (--raw)")
+		}
+	case "show":
+		if !hasFlag(args, "raw") && !hasFlag(args, "fingerprint") {
+			return fmt.Errorf("this key reads as remote mode does (--raw)")
+		}
 	}
 	return nil
 }
@@ -147,21 +174,24 @@ var gateBare = regexp.MustCompile(`^[A-Za-z0-9_.,:@/=+-]+`)
 
 // The front of remote mode's line: which deaddrop to run, then who's asking
 // (ignored: the gate says who), then exec.
-var gatePrefix = regexp.MustCompile(`^(?:d="\$HOME/\.local/bin/deaddrop"; \[ -x "\$d" \] \|\| d=deaddrop; |d='[^']*'; )DEADDROP_HOPS=[0-9]+ DEADDROP_FROM='[^']*' exec "\$d" `)
+var gatePrefix = regexp.MustCompile(`^(?:d="\$HOME/\.local/bin/deaddrop"; \[ -x "\$d" \] \|\| d=deaddrop; |d='(?:[^']|'\\'')*'; )DEADDROP_HOPS=([0-9]{1,3}) DEADDROP_FROM='(?:[^']|'\\'')*' exec "\$d" `)
 
 // gateWords reads the command line remote mode sends, or a plain
 // "deaddrop <command> <words>" a person types, and nothing else.
-func gateWords(line string) ([]string, error) {
+func gateWords(line string) ([]string, int, error) {
 	if len(line) > 64*1024 {
-		return nil, fmt.Errorf("a command line that long isn't one")
+		return nil, 0, fmt.Errorf("a command line that long isn't one")
 	}
-	rest := line
-	if m := gatePrefix.FindString(rest); m != "" {
-		rest = rest[len(m):]
+	rest, hops := line, 0
+	if m := gatePrefix.FindStringSubmatch(rest); m != nil {
+		rest = rest[len(m[0]):]
+		fmt.Sscan(m[1], &hops)
+	} else if rest == "deaddrop" {
+		return nil, 0, nil
 	} else if strings.HasPrefix(rest, "deaddrop ") {
 		rest = strings.TrimPrefix(rest, "deaddrop ")
 	} else {
-		return nil, fmt.Errorf("not a deaddrop command")
+		return nil, 0, fmt.Errorf("not a deaddrop command")
 	}
 	var words []string
 	for rest != "" {
@@ -176,20 +206,20 @@ func gateWords(line string) ([]string, error) {
 			words = append(words, m)
 			rest = rest[len(m):]
 		} else {
-			return nil, fmt.Errorf("characters a shell would read")
+			return nil, 0, fmt.Errorf("characters a shell would read")
 		}
 		if rest == "" {
 			break
 		}
 		if rest[0] != ' ' {
-			return nil, fmt.Errorf("characters a shell would read")
+			return nil, 0, fmt.Errorf("characters a shell would read")
 		}
 		rest = rest[1:]
 	}
 	for _, w := range words {
-		if strings.ContainsAny(w, "\x00\n\r") {
-			return nil, fmt.Errorf("a control character in a word")
+		if strings.ContainsRune(w, 0) {
+			return nil, 0, fmt.Errorf("a NUL in a word")
 		}
 	}
-	return words, nil
+	return words, hops, nil
 }

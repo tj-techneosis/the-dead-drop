@@ -140,7 +140,10 @@ func boxes(dir string) []string {
 	var out []string
 	ents, _ := os.ReadDir(dir)
 	for _, e := range ents {
-		if e.IsDir() && boxRE.MatchString(e.Name()) && e.Name() != automation {
+		// Behind the gate, the store has only the boxes the key may read:
+		// every scan (sent, thread fingerprints, the "it's in another box"
+		// hint) sees nothing else, and says nothing about anything else.
+		if e.IsDir() && boxRE.MatchString(e.Name()) && e.Name() != automation && gateReadable(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}

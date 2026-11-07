@@ -391,16 +391,22 @@ Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
 special. The gate reads the command line remote mode sends (sshd hands it over
 as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 
-- it's exactly the shape remote mode writes, single-quoted words, with nothing
-  a shell would read, so a shell, `scp`, `sftp` or a pipe gets nothing;
+- it's exactly the shape remote mode writes (single-quoted words), or a plain
+  `deaddrop <command> <words>` a person types, with nothing a shell would
+  read, so a shell, `scp`, `sftp` or a pipe gets nothing;
+- reads are as stored (`--raw`, as remote mode always asks), so the store
+  never checks signatures or keeps a ledger on the key's behalf; files come
+  only as remote mode sends them (`--bundle`), never `--attach` paths;
 - it's one of the store's commands (`send`, `reply`, `inbox`, `pull`, `show`,
   `file`, `mark`, `status --box`, `sent`), not `gc`, `firetower` or a
   follow-up job;
-- every box it reads, named or by default, is in `--read`; where mail goes
-  (`--to`) is anyone;
+- every box it reads, named or by default, is in `--read`, and to the key
+  the store holds no other box: `sent`, thread fingerprints and every hint
+  or warning say nothing about the rest; where mail goes (`--to`) is anyone;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
   signs as no one else.
 
+It runs only on the store's own machine (never one that passes commands on).
 Use the full path in `command=` (the gate refuses to run otherwise), and
 `restrict`, which turns off forwarding of every kind and a terminal. Signing
 still happens on Bob's machine with Bob's key: the gate only carries the

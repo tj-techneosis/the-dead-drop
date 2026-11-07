@@ -269,11 +269,11 @@ func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
 func TestGateWordsReadOnlyWhatRemoteModeWrites(t *testing.T) {
 	ok := map[string][]string{
 		`d="$HOME/.local/bin/deaddrop"; [ -x "$d" ] || d=deaddrop; DEADDROP_HOPS=1 DEADDROP_FROM='bob' exec "$d" 'inbox' '--json'`: {"inbox", "--json"},
-		`d='/opt/dd'; DEADDROP_HOPS=2 DEADDROP_FROM='bob' exec "$d" 'send' '--subject' 'it'\''s here'`:                        {"send", "--subject", "it's here"},
+		`d='/opt/dd'; DEADDROP_HOPS=2 DEADDROP_FROM='bob' exec "$d" 'send' '--subject' 'it'\''s here'`:                             {"send", "--subject", "it's here"},
 		`deaddrop pull --unread --json`: {"pull", "--unread", "--json"},
 	}
 	for line, want := range ok {
-		got, err := gateWords(line)
+		got, _, err := gateWords(line)
 		if err != nil || strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 			t.Fatalf("%q: got %q, %v", line, got, err)
 		}
@@ -291,7 +291,7 @@ func TestGateWordsReadOnlyWhatRemoteModeWrites(t *testing.T) {
 		`bash -c 'deaddrop inbox'`,
 		"",
 	} {
-		if w, err := gateWords(line); err == nil {
+		if w, _, err := gateWords(line); err == nil {
 			t.Fatalf("%q read as %q", line, w)
 		}
 	}

@@ -556,13 +556,18 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	rung := map[string]bool{}
-	if d.replyBox != "" {
+	// Behind the gate, nothing is said about boxes the key can't read,
+	// not even whether they exist.
+	if d.replyBox != "" && gateReadable(d.replyBox) {
 		if _, err := os.Stat(filepath.Join(dir, d.replyBox)); os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "deaddrop: there's no box %s yet, so answers to this will start one (a typo?)\n", d.replyBox)
 		}
 	}
 	for _, h := range d.helpers {
 		for _, to := range d.to {
+			if !gateReadable(to) {
+				continue
+			}
 			if _, err := os.Stat(slotDir(dir, to, h)); os.IsNotExist(err) {
 				fmt.Fprintf(os.Stderr, "deaddrop: %s has no %s pigeonhole yet; this starts one (a typo?)\n", to, h)
 			}
