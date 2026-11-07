@@ -395,8 +395,8 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true, "as": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
@@ -418,8 +418,12 @@ func replyAsSend(args []string) (string, []string, error) {
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
 		subject = "Re: " + subject
 	}
+	kept, err := replyTags(orig.Tags, f.all("untag"))
+	if err != nil {
+		return "", nil, bad(u, err)
+	}
 	out := []string{"--to", orig.From, "--reply-to", orig.ID, "--subject", subject}
-	for _, t := range orig.Tags {
+	for _, t := range kept {
 		out = append(out, "--tag", t)
 	}
 	for _, t := range f.all("tag") {

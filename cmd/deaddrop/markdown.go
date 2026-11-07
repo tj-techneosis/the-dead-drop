@@ -14,18 +14,8 @@ import (
 // as their alt text: nothing is fetched. The page's Content-Security-Policy
 // forbids loading anything at all, as a second wall.
 
-func messagePage(m *Message) []byte {
-	var b strings.Builder
-	e := html.EscapeString
-	b.WriteString(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>`)
-	b.WriteString(e(m.Subject))
-	b.WriteString(` · Dead Drop</title>
-<style>
+// pageStyle is the look both pages share: calm, light and dark.
+const pageStyle = `<style>
 :root { --bg:#fbfaf8; --fg:#1f2328; --dim:#6b7078; --rule:#e3e1dc; --code:#f1efeb; --accent:#2f6fb3; --urgent:#c4352c; --ok:#2e7d4f; --warn:#9a6a00; }
 @media (prefers-color-scheme: dark) { :root { --bg:#17181a; --fg:#e6e4df; --dim:#9a9ea5; --rule:#2c2e31; --code:#222427; --accent:#7fb0e6; --urgent:#ef7a70; --ok:#7cc79a; --warn:#e0b85c; } }
 * { box-sizing: border-box; }
@@ -51,7 +41,20 @@ blockquote { margin: 1em 0; padding: 0 1em; border-left: 3px solid var(--rule); 
 table { border-collapse: collapse; display: block; overflow-x: auto; }
 th, td { border: 1px solid var(--rule); padding: .3em .6em; text-align: left; }
 hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
-</style></head><body><main>
+</style>`
+
+func messagePage(m *Message) []byte {
+	var b strings.Builder
+	e := html.EscapeString
+	b.WriteString(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>`)
+	b.WriteString(e(m.Subject))
+	b.WriteString(` · Dead Drop</title>
+` + pageStyle + `</head><body><main>
 <header><h1>`)
 	b.WriteString(e(m.Subject))
 	b.WriteString("</h1>\n<div class=\"meta\">")
@@ -302,4 +305,104 @@ func emphasis(s string) string {
 		s = strings.Replace(s, fmt.Sprintf("\x00%d\x00", i), `<a href="`+u+`" rel="noopener noreferrer">`+u+"</a>", 1)
 	}
 	return s
+}
+
+// correspondencePage is a thread or a conversation, read like letters on a
+// desk: theirs on the left, yours on the right, oldest at the top. Each shows
+// its gist; the whole letter opens beneath it (no script needed).
+func correspondencePage(c *Correspondence) []byte {
+	var b strings.Builder
+	e := html.EscapeString
+	title := "Thread"
+	if c.With != "" {
+		title = "With " + c.With
+	} else if len(c.Letters) > 0 {
+		title = c.Letters[0].Subject
+	}
+	b.WriteString(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>`)
+	b.WriteString(e(title))
+	b.WriteString(" · Dead Drop</title>\n")
+	b.WriteString(pageStyle)
+	b.WriteString(`<style>
+.letters { display: flex; flex-direction: column; gap: 1rem; }
+.letter { max-width: 85%; border: 1px solid var(--rule); border-radius: 10px; padding: .75rem 1rem; background: var(--bg); }
+.letter.mine { align-self: flex-end; background: var(--code); }
+.letter.theirs { align-self: flex-start; }
+.letter.unread { border-color: var(--accent); }
+.letter.forged { border-color: var(--urgent); }
+.letter h2 { font-size: 1rem; margin: .25rem 0; }
+.letter .gist { margin: .25rem 0 .5rem; }
+.letter details summary { cursor: pointer; color: var(--dim); font-size: .9rem; }
+.letter details article { margin-top: .75rem; border-top: 1px solid var(--rule); padding-top: .75rem; }
+.note { color: var(--warn); }
+@media (max-width: 40rem) { .letter { max-width: 100%; } }
+</style></head><body><main>
+<header><h1>`)
+	b.WriteString(e(title))
+	b.WriteString("</h1>\n<div class=\"meta\">")
+	fmt.Fprintf(&b, "<span>%s's mail</span><span>%d letters</span>", e(c.Box), len(c.Letters))
+	if c.SentMissing != "" {
+		fmt.Fprintf(&b, `<span class="note">%s</span>`, e(c.SentMissing))
+	}
+	b.WriteString("</div></header>\n<div class=\"letters\">\n")
+	if len(c.Letters) == 0 {
+		b.WriteString("<p class=\"meta\">Nothing yet.</p>\n")
+	}
+	for _, l := range c.Letters {
+		class := "letter theirs"
+		if l.Mine {
+			class = "letter mine"
+		} else if l.State == "unread" {
+			class += " unread"
+		}
+		if l.Signature == sigBad {
+			class += " forged"
+		}
+		fmt.Fprintf(&b, "<section class=\"%s\">\n<div class=\"meta\">", class)
+		if l.Mine {
+			fmt.Fprintf(&b, "<span>You, to <strong>%s</strong></span>", e(strings.Join(l.Recipients, ", ")))
+			if l.Persona != "" {
+				fmt.Fprintf(&b, "<span>as %s</span>", e(l.Persona))
+			}
+			fmt.Fprintf(&b, "<span>%s</span>", e(seen(l)))
+		} else {
+			fmt.Fprintf(&b, "<span>From <strong>%s</strong></span>", e(l.sender()))
+			if l.State == "unread" {
+				b.WriteString(`<span class="ok">new</span>`)
+			}
+		}
+		fmt.Fprintf(&b, "<span>%s</span>", e(l.Sent.Local().Format("Mon 2 Jan, 15:04")))
+		switch l.Signature {
+		case sigVerified:
+			b.WriteString(`<span class="ok">✓</span>`)
+		case sigBad:
+			fmt.Fprintf(&b, `<span class="urgent">✗ forged or changed: %s</span>`, e(l.SignatureNote))
+		default:
+			fmt.Fprintf(&b, `<span class="warn">%s</span>`, e(map[string]string{sigUnsigned: "unsigned", sigUnknown: "can't check"}[l.Signature]))
+		}
+		if l.Urgency == urgent {
+			b.WriteString(`<span class="urgent">urgent</span>`)
+		}
+		for _, t := range l.Tags {
+			fmt.Fprintf(&b, `<span class="tag">%s</span>`, e(t))
+		}
+		b.WriteString("</div>\n")
+		fmt.Fprintf(&b, "<h2>%s</h2>\n", e(l.Subject))
+		if l.Gist != "" {
+			fmt.Fprintf(&b, "<p class=\"gist\">%s</p>\n", e(l.Gist))
+		}
+		b.WriteString("<details><summary>The whole letter</summary><article>\n")
+		b.WriteString(renderMarkdown(l.Body))
+		if len(l.Attachments) > 0 {
+			fmt.Fprintf(&b, "<p class=\"meta\">Attached: %s. <code>deaddrop file %s NAME</code></p>\n", e(strings.Join(l.Attachments, ", ")), e(l.ID))
+		}
+		b.WriteString("</article></details>\n</section>\n")
+	}
+	b.WriteString("</div>\n</main></body></html>\n")
+	return []byte(b.String())
 }

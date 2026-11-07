@@ -1,6 +1,6 @@
 ---
 name: deaddrop
-description: Send, collect and file Markdown documents through the Dead Drop (`deaddrop`), a shared tagged inbox, instead of copying a write-up out of one session and pasting it into another. Use when told to "dead drop this to Bob", "send this to Alice as field notes", "dead drop these reports to me with the X and report tags", "send the requests for the next version to Bob", "check my dead drop", "do I have mail", "pull my dead drop for tool Y", "look at all the reports from tool Y and any notes from Bob about it", "file it", "archive them", "mark them read", "reply to that", "tell me when mail comes in", "put my dead drop in the menu bar", or "file a report of every run of tool Y in my box" / "send me a daily report on Z" (a job of the person's own that ends in `deaddrop send`). Covers choosing a subject, tags and urgency, never putting a secret in a message, pulling everything that matters for the work at hand, filing it when done, follow-ups, setting up a report of one's own with a scheduler, and setting up the person's own machine (the inbox file, notifications, a menu-bar inbox).
+description: Send, collect and file Markdown documents through the Dead Drop (`deaddrop`), a shared tagged inbox, instead of copying a write-up out of one session and pasting it into another. Use when told to "dead drop this to Bob", "send this to Alice as field notes", "dead drop these reports to me with the X and report tags", "send the requests for the next version to Bob", "check my dead drop", "do I have mail", "pull my dead drop for tool Y", "look at all the reports from tool Y and any notes from Bob about it", "file it", "archive them", "mark them read", "reply to that", "tell me when mail comes in", "put my dead drop in the menu bar", "show me my conversation with Bob", "open that thread", or "file a report of every run of tool Y in my box" / "send me a daily report on Z" (a job of the person's own that ends in `deaddrop send`). Covers choosing a subject, tags and urgency, never putting a secret in a message, pulling everything that matters for the work at hand, filing it when done, follow-ups, setting up a report of one's own with a scheduler, and setting up the person's own machine (the inbox file, notifications, a menu-bar inbox).
 ---
 
 # The Dead Drop
@@ -74,7 +74,8 @@ EOF
   person gave you, or describe what you're doing for them. Never send as
   anyone else.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
-  the sender with the same tags, "Re: " and a thread link. Or
+  the sender with its topic tags, "Re: " and a thread link (`persona-…`
+  tags stay behind; `--untag T` drops another, `--tag T` adds yours). Or
   `send --reply-to ID` to send an answer somewhere else.
 
 "Dead drop X to me with tags A and B" means
@@ -116,6 +117,10 @@ deaddrop pull --tag tool-y --from automation --from bob
   fetches one.
 - One message by its id: `deaddrop show ID` (`--json` for a program). Like
   `pull`, it marks nothing.
+- A conversation: `deaddrop with bob` (everything between them and Bob,
+  both sides, oldest first) or `deaddrop thread ID` (one thread). Each
+  letter comes with its gist; `--json` for the full text. "Open it for me"
+  is `deaddrop open --with bob` or `--thread ID`, a page in the browser.
 - What the person sent: `deaddrop sent [--to WHO] [--tag T]`, with each
   recipient's copy unread, read or archived. With `pull`, that's both sides
   of a conversation.
@@ -226,6 +231,7 @@ deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread] [--json]
 deaddrop show ID [--json]
 deaddrop sent [--to WHO]... [--tag T]... [--json]
+deaddrop with WHO | thread ID [--json]   # both sides, in time order
 deaddrop file ID [NAME]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]...
 deaddrop status [--json]

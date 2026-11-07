@@ -69,6 +69,11 @@ deaddrop send --to me --from automation --tag tool-y --tag report --attach run.c
 | `--urgent`, `--fyi` | the urgency; normal without either |
 | `--attach FILE` | repeatable; fetched later with `deaddrop file ID NAME` |
 | `--reply-to ID` | what it answers (`deaddrop reply ID` does this for you, back to the sender) |
+
+`deaddrop reply ID` sends back to the sender with "Re: " and the original's
+tags, the ones about what it's about: tags starting `persona-` name who was
+speaking, so they stay behind, and `--untag T` leaves any other (a proposal
+answered with a status: `--untag proposal --tag status`).
 | `--follow-up 2d` | raise it to urgent if it's still unread then (a span or a time) |
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
@@ -269,7 +274,19 @@ deaddrop watch                 # check once: the inbox file, then the hooks
 deaddrop watch --every 1m      # keep checking, for a machine with no scheduler
 deaddrop show ID               # one message in full (--json, --html)
 deaddrop open ID               # read it in the browser, and mark it read
+deaddrop thread ID             # the whole thread, both sides, in time order
+deaddrop with bob              # everything between you and bob
+deaddrop open --thread ID      # either one as a page in the browser
+deaddrop open --with bob
 ```
+
+**Threads and conversations** put both sides together: what others sent
+you (from your box) and what you sent them (`sent`), oldest first. Each
+letter shows who it's from (and as whom), its signature, whether yours have
+been read, and its gist, the first real paragraph; the whole letter opens
+beneath it. `--json` gives the same to a program (`letters`, each with
+`mine`, `gist` and, for yours, `copies`). They mark nothing. Against a store
+from before 0.4 they show the other side only, and say so.
 
 Run `deaddrop watch` every minute or so with whatever your machine has:
 Crontinental, launchd, systemd, cron, or `--every` in a terminal or a
@@ -322,11 +339,13 @@ the system's own.
 - macOS: [`examples/swiftbar/deaddrop.1m.sh`](examples/swiftbar/), for
   [SwiftBar](https://swiftbar.app). An envelope with the unread count, red
   for urgent; the menu lists your mail with Read (opens it in the browser and
-  marks it read), Mark read or unread, and Archive. It's
+  marks it read), Thread, Mark read or unread, and Archive, and a
+  Conversations list opens everything with one person. It's
   `deaddrop bar --format swiftbar`.
 - Omarchy: [`examples/omarchy/deaddrop/`](examples/omarchy/deaddrop/), a bar
   widget. Click for your inbox, click a message to read it in the panel
-  (that marks it read), archive it or put it back from there. Copy the folder
+  (that marks it read), archive it or put it back from there, or open its
+  thread or the whole conversation in the browser. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
   `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on
   the focused monitor: the plugin's service answers once for every bar.
@@ -407,9 +426,9 @@ What gets reported, and when, belongs to whoever books it.
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
-deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread] [--json]
+deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO]
 deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
@@ -419,7 +438,9 @@ deaddrop status [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks]
-deaddrop open ID [--keep-unread]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO
+deaddrop thread ID [--json|--html]
+deaddrop with WHO [--tag T]... [--json|--html]
 deaddrop bar [--format text|swiftbar]
 deaddrop upgrade [--check] | version | help
 ```

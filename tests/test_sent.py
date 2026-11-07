@@ -157,3 +157,19 @@ class Persona(DeadDrop):
         self.assertNotIn("\n", p)
         self.assertLessEqual(len(p), 60)
         self.dd("send", "--to", "bob", "--as", " ", input="# B\n\nx\n", ok=False)
+
+
+class ReplyTags(DeadDrop):
+    def test_a_reply_keeps_the_topic_not_the_speaker(self):
+        id = self.send("# Plan\n\nx\n", "--to", "bob", "--tag", "city-hall", "--tag", "proposal", "--tag", "persona-harbormaster")
+        self.dd("reply", id, "--tag", "persona-keeper", "--tag", "status", "--untag", "proposal", input="Ok.\n", DEADDROP_FROM="bob")
+        self.assertEqual(self.inbox()[0]["tags"], ["city-hall", "persona-keeper", "status"])
+
+    def test_the_same_when_signed(self):
+        signers(self.tmp / "s", "alice", "bob")
+        env = dict(DEADDROP_SIGNERS=str(self.tmp / "s"))
+        id = self.send("# Plan\n\nx\n", "--to", "bob", "--tag", "topic", "--tag", "persona-a", DEADDROP_SIGN_KEY=key("alice")[0], **env)
+        self.dd("reply", id, "--untag", "topic", "--tag", "persona-b", input="Ok.\n", DEADDROP_FROM="bob", DEADDROP_SIGN_KEY=key("bob")[0], **env)
+        m = self.inbox(**env)[0]
+        self.assertEqual((m["tags"], m["signature"]), (["persona-b"], "verified"))
+        self.dd("reply", id, "--untag", "Not A Tag!", input="x\n", DEADDROP_FROM="bob", ok=False)

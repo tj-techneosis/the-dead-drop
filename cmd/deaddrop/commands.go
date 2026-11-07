@@ -155,8 +155,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true, "as": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -178,7 +178,11 @@ func cmdReply(args []string) error {
 	if orig.From == automation {
 		return fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
 	}
-	d := draft{from: me, to: []string{orig.From}, thread: orig.ID, tags: append([]string{}, orig.Tags...)}
+	kept, err := replyTags(orig.Tags, f.all("untag"))
+	if err != nil {
+		return bad(u, err)
+	}
+	d := draft{from: me, to: []string{orig.From}, thread: orig.ID, tags: kept}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return bad(u, err)
 	}
@@ -190,7 +194,7 @@ func cmdReply(args []string) error {
 		return bad(u, err)
 	}
 	for _, t := range extra {
-		if !orig.hasTag(t) {
+		if !contains(d.tags, t) {
 			d.tags = append(d.tags, t)
 		}
 	}
@@ -207,6 +211,30 @@ func cmdReply(args []string) error {
 		return err
 	}
 	return deliver(dir, d)
+}
+
+// replyTags are the tags a reply carries over from what it answers: what it's
+// about, not who said it or what kind of letter it was. Tags starting
+// persona- name a speaker, so they stay behind (the replier names their own),
+// and so does each --untag.
+func replyTags(orig, untag []string) ([]string, error) {
+	drop := map[string]bool{}
+	for _, raw := range untag {
+		for _, t := range strings.Split(raw, ",") {
+			t, err := checkTag(t)
+			if err != nil {
+				return nil, fmt.Errorf("--untag: %v", err)
+			}
+			drop[t] = true
+		}
+	}
+	out := []string{}
+	for _, t := range orig {
+		if !drop[t] && !strings.HasPrefix(t, "persona-") {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func urgencyOf(f flags) (string, error) {
@@ -653,8 +681,8 @@ func cmdInbox(args []string) error {
 }
 
 func cmdPull(args []string) error {
-	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "json": false, "raw": false})
+	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread|--all] [--json]"
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -671,8 +699,13 @@ func cmdPull(args []string) error {
 		return err
 	}
 	states := []string{"unread", "read"}
-	if f.has("unread") {
+	switch {
+	case f.has("unread") && f.has("all"):
+		return badf(u, "--unread or --all, not both")
+	case f.has("unread"):
 		states = states[:1]
+	case f.has("all"):
+		states = []string{"unread", "read", "archived"}
 	}
 	var ms []*Message
 	if viaHost != "" {

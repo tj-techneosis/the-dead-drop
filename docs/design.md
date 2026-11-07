@@ -146,6 +146,20 @@ names, so a stray copy put in another box can't make the real one look
 forged. Like every reading command, with the store elsewhere it's fetched
 as stored and checked on the caller's machine.
 
+## Threads and conversations
+
+A conversation is read in time order with both sides in it, and both sides
+live in different places: theirs in your box, yours in theirs. `thread` and
+`with` run on your own machine, from `pull --all` and `sent`, so every
+letter is checked there like anywhere else. A thread is every letter joined
+by what it answers, through any copy's id (a reply names the copy it
+answered, which is in the replier's box). Within one second, a reply sorts
+after what it answers. The page is the same safe page as `show --html`: no
+script, nothing loaded; each letter shows its gist and opens to the whole
+text with `<details>`. A gist is the first real paragraph, not a model's
+summary: a summary would need a model, an account and someone else's text
+sent to it, which isn't the tool's call to make for everyone.
+
 ## Pull, then mark
 
 `pull` prints everything that matches, in full, in one go: unread first,

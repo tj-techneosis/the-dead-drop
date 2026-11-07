@@ -379,6 +379,8 @@ Panel {
         else if (k === "a" && m) root.archiveMessage(m)
         else if (k === "u" && m) root.putBackMessage(m)
         else if (k === "b" && root.reading) root.closeMessage()
+        else if (k === "t" && m) root.runAction(["open", "--thread", String(m.id)], "Thread")
+        else if (k === "c" && m && m.from !== "automation") root.runAction(["open", "--with", String(m.from)], "Conversation")
       }
 
       Flickable {
@@ -490,6 +492,23 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
+              }
+
+              PanelActionButton {
+                iconText: "󰅺"
+                tooltipText: "The whole thread, in the browser (t)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.reading) root.runAction(["open", "--thread", String(root.reading.id)], "Thread")
+              }
+
+              PanelActionButton {
+                visible: !!root.reading && root.reading.from !== "automation"
+                iconText: "󰭹"
+                tooltipText: "Everything with them, in the browser (c)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.reading) root.runAction(["open", "--with", String(root.reading.from)], "Conversation")
               }
 
               PanelActionButton {

@@ -18,7 +18,7 @@ Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
                 [--from automation] [--as NAME] < body.md
-  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--as NAME] < body.md
+  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] < body.md
 
 Collect it:
   deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--json]
@@ -33,6 +33,8 @@ Collect it:
 On your own machine:
   deaddrop watch [--every 1m]      keep the inbox file current, run new.d hooks
   deaddrop open ID                 read one in the browser, and mark it read
+  deaddrop thread ID | with WHO    both sides, in time order (--json, --html)
+  deaddrop open --thread ID | --with WHO   the same, in the browser
   deaddrop bar [--format swiftbar] the inbox file as a line, or a menu
   deaddrop key                     your line for everyone's allowed_signers
 
@@ -230,10 +232,12 @@ var readsHere = map[string]bool{"inbox": true, "ls": true, "pull": true, "show":
 var viaHost string
 
 var here = map[string]func([]string) error{
-	"key":   cmdKey,
-	"watch": cmdWatch,
-	"open":  cmdOpen,
-	"bar":   cmdBar,
+	"key":    cmdKey,
+	"thread": cmdThread,
+	"with":   cmdWith,
+	"watch":  cmdWatch,
+	"open":   cmdOpen,
+	"bar":    cmdBar,
 }
 
 var commands = map[string]func([]string) error{

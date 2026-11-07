@@ -20,6 +20,7 @@ Claude Code setup.
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
 | `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
+| `cmd/deaddrop/thread.go` | `thread` and `with`: both sides in time order, and their page (`markdown.go`) |
 | `cmd/deaddrop/read.go` | reading with the store elsewhere: fetch as stored (`--raw`), check here |
 | `agents/` | what ships to users' Claude Code: the skill and the CLAUDE.md snippet |
 | `examples/` | a config, the store machine's jobs, ways to run `watch`, a `new.d` hook, the SwiftBar and Omarchy inboxes |

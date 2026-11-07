@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "deaddrop",
   "name": "Dead Drop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "The Dead Drop",
   "license": "MIT",
   "description": "Your Dead Drop in the bar: an envelope, dim when there's no mail, a count when there is, red for urgent. Click for your inbox: read a message, archive it, put it back.",

@@ -448,30 +448,58 @@ func cleanOpened() {
 }
 
 func cmdOpen(args []string) error {
-	const u = "open ID [--keep-unread]"
-	f, err := parseFlags(args, map[string]bool{"keep-unread": false})
+	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO"
+	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true})
 	if err != nil {
 		return bad(u, err)
 	}
-	if len(f.pos) != 1 {
-		return badf(u, "which message?")
-	}
-	id := f.pos[0]
-	if err := checkID(id); err != nil {
-		return bad(u, err)
-	}
-	page, err := self("show", id, "--html")
-	if err != nil {
-		if strings.Contains(err.Error(), `no command "show"`) {
-			return fmt.Errorf("the store's machine has a deaddrop from before show (0.2.0): upgrade it there (deaddrop upgrade)")
+	var page []byte
+	var name, id string
+	switch {
+	case f.has("thread") || f.has("with"):
+		// A thread or a conversation: shown, nothing marked.
+		if len(f.pos) > 0 || (f.has("thread") && f.has("with")) {
+			return badf(u, "--thread ID or --with WHO, on its own")
 		}
-		return err
+		if f.has("thread") {
+			if err := checkID(f.get("thread")); err != nil {
+				return bad(u, err)
+			}
+			page, err = self("thread", f.get("thread"), "--html")
+			name = "thread-" + f.get("thread")
+		} else {
+			who := strings.ToLower(f.get("with"))
+			if err := checkBox("--with", who); err != nil {
+				return bad(u, err)
+			}
+			page, err = self("with", who, "--html")
+			name = "with-" + who
+		}
+		if err != nil {
+			return err
+		}
+		f.vals["keep-unread"] = []string{""}
+	default:
+		if len(f.pos) != 1 {
+			return badf(u, "which message?")
+		}
+		id = f.pos[0]
+		if err := checkID(id); err != nil {
+			return bad(u, err)
+		}
+		if page, err = self("show", id, "--html"); err != nil {
+			if strings.Contains(err.Error(), `no command "show"`) {
+				return fmt.Errorf("the store's machine has a deaddrop from before show (0.2.0): upgrade it there (deaddrop upgrade)")
+			}
+			return err
+		}
+		name = id
 	}
 	cleanOpened()
 	if err := os.MkdirAll(openedDir(), 0o700); err != nil {
 		return err
 	}
-	path := filepath.Join(openedDir(), id+".html")
+	path := filepath.Join(openedDir(), name+".html")
 	if err := writeAtomic(path, page, 0o600); err != nil {
 		return err
 	}
@@ -620,6 +648,7 @@ func swiftbar(in *InboxFile, bin string) string {
 		}
 		b.WriteString("-----\n")
 		act("--", "Read", "open", e.ID)
+		act("--", "Thread", "open", "--thread", e.ID)
 		if e.State == "unread" {
 			act("--", "Mark read", "mark", "read", e.ID)
 		} else {
@@ -629,6 +658,20 @@ func swiftbar(in *InboxFile, bin string) string {
 	}
 	if len(in.Messages) == 0 {
 		b.WriteString("No mail" + plain + "\n")
+	}
+	// Conversations: everyone who has written, both sides in one page.
+	var people []string
+	for _, e := range in.Messages {
+		if e.From != automation && e.From != in.Box && !contains(people, e.From) {
+			people = append(people, e.From)
+		}
+	}
+	if len(people) > 0 {
+		b.WriteString("---\nConversations" + plain + "\n")
+		sort.Strings(people)
+		for _, p := range people {
+			act("--", "With "+menuText(p, 32), "open", "--with", p)
+		}
 	}
 	b.WriteString("---\n")
 	act("", "Check now", "watch")

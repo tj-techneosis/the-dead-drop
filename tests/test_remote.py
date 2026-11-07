@@ -296,3 +296,21 @@ exit 0
         self.rdd("send", "--to", "bob", input="# Far\n\nx\n", env=self.signed_env("alice", **via))
         ss = json.loads(self.rdd("sent", "--json", env=self.signed_env("alice", **via)).stdout)
         self.assertEqual((ss[0]["subject"], ss[0]["signature"]), ("Far", "verified"))
+
+    def test_a_thread_over_ssh_and_from_an_older_store(self):
+        a = self.rdd("send", "--to", "bob", input="# Q\n\nx\n", env=self.signed_env("alice")).stdout.split()[1]
+        self.rdd("reply", a, input="Yes.\n", env=self.signed_env("bob"))
+        c = json.loads(self.rdd("with", "bob", "--json", env=self.signed_env("alice")).stdout)
+        self.assertEqual([(l["mine"], l["signature"]) for l in c["letters"]], [(True, "verified"), (False, "verified")])
+        self.assertEqual(self.near_files(), [])
+        # A store from before 0.4 has no sent: their side only, and it says so.
+        old = script(self.tmp / "old-deaddrop", f"""
+[ "$1" = sent ] && {{ echo 'deaddrop: no command "sent" (deaddrop help lists them)' >&2; exit 2; }}
+for a; do [ "$a" = --all ] && [ "$1" = pull ] && {{ echo 'deaddrop: unknown flag --all' >&2; exit 2; }}; done
+exec {BIN} "$@"
+""")
+        c = json.loads(self.rdd("with", "bob", "--json", env=self.signed_env("alice", DEADDROP_REMOTE_BIN=str(old))).stdout)
+        self.assertEqual([l["mine"] for l in c["letters"]], [False])
+        self.assertIn("before 0.4", c["sent_missing"])
+        self.assertIn("your side isn't shown", c["sent_missing"])
+        self.assertIn("archived", c["sent_missing"])

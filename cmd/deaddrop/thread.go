@@ -1,0 +1,320 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+)
+
+// Threads and conversations: both sides of the mail, in time order. Your own
+// box holds what others sent you; what you sent lives in theirs, and comes
+// from `sent`. These run on your own machine and build on pull and sent, so
+// every letter is checked here, as anywhere else.
+
+// Letter is one message in a thread or a conversation.
+type Letter struct {
+	*Message
+	Mine   bool       `json:"mine"`             // you sent it
+	Copies []SentCopy `json:"copies,omitempty"` // yours: where each copy is
+	Gist   string     `json:"gist"`             // its first real paragraph
+}
+
+// Correspondence is what thread and with hand out.
+type Correspondence struct {
+	Box     string    `json:"box"`
+	With    string    `json:"with,omitempty"`   // with WHO
+	Thread  string    `json:"thread,omitempty"` // the letter a thread was asked for
+	Letters []*Letter `json:"letters"`
+	// SentMissing says why your side isn't there, when it isn't (a store
+	// from before 0.4 has no sent).
+	SentMissing string `json:"sent_missing,omitempty"`
+}
+
+// gist is a letter's first real paragraph: past any heading, one line, short.
+func gist(body string) string {
+	var para []string
+	inFence := false
+	for _, l := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			inFence = !inFence
+			if len(para) > 0 {
+				break
+			}
+			continue
+		}
+		if inFence {
+			continue
+		}
+		switch {
+		case t == "" && len(para) > 0:
+			return cleanLine(strings.Join(para, " "), 280)
+		case t == "" || strings.HasPrefix(t, "#") || mdRule.MatchString(t):
+			continue
+		}
+		para = append(para, strings.TrimLeft(t, "-*+> "))
+	}
+	return cleanLine(strings.Join(para, " "), 280)
+}
+
+// letters gathers your mail, both ways: everything in your box (archived
+// too) and everything you sent.
+func letters() (string, []*Letter, string, error) {
+	me, err := whoAmI()
+	if err != nil {
+		return "", nil, "", err
+	}
+	var notes []string
+	out, err := self("pull", "--all", "--json")
+	if err != nil && strings.Contains(err.Error(), "unknown flag --all") {
+		// A store from before 0.4: no archived mail to be had.
+		notes = append(notes, "filed (archived) letters aren't shown")
+		out, err = self("pull", "--json")
+	}
+	if err != nil {
+		return "", nil, "", err
+	}
+	var got []*Message
+	if err := json.Unmarshal(out, &got); err != nil {
+		return "", nil, "", fmt.Errorf("pull's answer wasn't a list of messages: %v", err)
+	}
+	var ls []*Letter
+	for _, m := range got {
+		ls = append(ls, &Letter{Message: m, Gist: gist(m.Body)})
+	}
+	out, err = self("sent", "--json")
+	switch {
+	case err != nil && strings.Contains(err.Error(), `no command "sent"`):
+		notes = append([]string{"your side isn't shown"}, notes...)
+	case err != nil:
+		return "", nil, "", err
+	default:
+		var ss []*SentMessage
+		if err := json.Unmarshal(out, &ss); err != nil {
+			return "", nil, "", fmt.Errorf("sent's answer wasn't a list of messages: %v", err)
+		}
+		for _, s := range ss {
+			if len(s.Copies) == 0 {
+				continue
+			}
+			s.ID = s.Copies[0].ID
+			ls = append(ls, &Letter{Message: s.Message, Mine: true, Copies: s.Copies, Gist: gist(s.Body)})
+		}
+	}
+	sortLetters(ls)
+	missing := ""
+	if len(notes) > 0 {
+		missing = strings.Join(notes, ", and ") + ": the store's deaddrop is from before 0.4 (upgrade it there)"
+	}
+	return me, ls, missing, nil
+}
+
+// sortLetters puts letters in time order; within the same second, a reply
+// after the letter it answers.
+func sortLetters(ls []*Letter) {
+	byID := map[string]*Letter{}
+	for _, l := range ls {
+		for _, id := range l.ids() {
+			byID[id] = l
+		}
+	}
+	depth := map[*Letter]int{}
+	var depthOf func(*Letter, int) int
+	depthOf = func(l *Letter, guard int) int {
+		if d, ok := depth[l]; ok {
+			return d
+		}
+		d := 0
+		if p := byID[l.Thread]; p != nil && p != l && guard < 1000 {
+			d = depthOf(p, guard+1) + 1
+		}
+		depth[l] = d
+		return d
+	}
+	sort.SliceStable(ls, func(i, j int) bool {
+		if !ls[i].Sent.Equal(ls[j].Sent) {
+			return ls[i].Sent.Before(ls[j].Sent)
+		}
+		if di, dj := depthOf(ls[i], 0), depthOf(ls[j], 0); di != dj {
+			return di < dj
+		}
+		return ls[i].ID < ls[j].ID
+	})
+}
+
+// ids are every id a letter goes by: one per copy, for what you sent.
+func (l *Letter) ids() []string {
+	if !l.Mine {
+		return []string{l.ID}
+	}
+	var out []string
+	for _, c := range l.Copies {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+// threadOf is every letter in the same thread as id: joined by what each
+// one answers, through any copy's id.
+func threadOf(ls []*Letter, id string) ([]*Letter, error) {
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(x string) string {
+		for parent[x] != "" && parent[x] != x {
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b string) {
+		if ra, rb := find(a), find(b); ra != rb {
+			parent[ra] = rb
+		}
+	}
+	found := false
+	for _, l := range ls {
+		ids := l.ids()
+		for _, x := range ids {
+			found = found || x == id
+			union(x, ids[0])
+		}
+		if l.Thread != "" {
+			union(ids[0], l.Thread)
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("no letter %s in your box or among what you sent", id)
+	}
+	root := find(id)
+	var out []*Letter
+	for _, l := range ls {
+		if find(l.ids()[0]) == root {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func cmdThread(args []string) error {
+	const u = "thread ID [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) != 1 {
+		return badf(u, "which letter's thread?")
+	}
+	if err := checkID(f.pos[0]); err != nil {
+		return bad(u, err)
+	}
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	th, err := threadOf(ls, f.pos[0])
+	if err != nil {
+		return err
+	}
+	return showCorrespondence(f, &Correspondence{Box: me, Thread: f.pos[0], Letters: th, SentMissing: missing})
+}
+
+func cmdWith(args []string) error {
+	const u = "with WHO [--tag T]... [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "tag": true})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) != 1 {
+		return badf(u, "with whom?")
+	}
+	who, err := resolveBox("WHO", f.pos[0])
+	if err != nil {
+		return bad(u, err)
+	}
+	tags, err := tagsOf(f)
+	if err != nil {
+		return bad(u, err)
+	}
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	var out []*Letter
+	for _, l := range ls {
+		between := (!l.Mine && l.From == who) || (l.Mine && contains(l.Recipients, who))
+		if who == me {
+			between = l.Mine && contains(l.Recipients, me) // notes to yourself
+		}
+		if !between {
+			continue
+		}
+		keep := true
+		for _, t := range tags {
+			keep = keep && l.hasTag(t)
+		}
+		if keep {
+			out = append(out, l)
+		}
+	}
+	return showCorrespondence(f, &Correspondence{Box: me, With: who, Letters: out, SentMissing: missing})
+}
+
+func showCorrespondence(f flags, c *Correspondence) error {
+	if c.Letters == nil {
+		c.Letters = []*Letter{}
+	}
+	switch {
+	case f.has("json") && f.has("html"):
+		return fmt.Errorf("--json or --html, not both")
+	case f.has("json"):
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(c)
+	case f.has("html"):
+		_, err := os.Stdout.Write(correspondencePage(c))
+		return err
+	}
+	if c.SentMissing != "" {
+		fmt.Println("(" + c.SentMissing + ")")
+	}
+	if len(c.Letters) == 0 {
+		fmt.Println("Nothing yet.")
+		return nil
+	}
+	at := now()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, l := range c.Letters {
+		who := "← " + cleanLine(l.sender(), 40)
+		state := l.State
+		if l.Mine {
+			who = "→ " + strings.Join(l.Recipients, ", ")
+			state = seen(l)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(l.Sent, at), sigMark(l.Message), who, state, l.Subject)
+		if l.Gist != "" && l.Gist != l.Subject {
+			fmt.Fprintf(tw, "\t\t\t\t  %s\n", cleanLine(l.Gist, 120))
+		}
+	}
+	return tw.Flush()
+}
+
+// seen says whether the people you sent a letter to have read it.
+func seen(l *Letter) string {
+	var read, unread []string
+	for _, c := range l.Copies {
+		if c.State == "unread" {
+			unread = append(unread, c.Box)
+		} else {
+			read = append(read, c.Box)
+		}
+	}
+	switch {
+	case len(unread) == 0:
+		return "seen"
+	case len(read) == 0:
+		return "not yet read"
+	}
+	return "seen by " + strings.Join(read, ", ")
+}
