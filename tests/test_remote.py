@@ -378,6 +378,34 @@ class Mirror(RemoteBase):
         got = json.loads(self.rdd("inbox", "--json", "--all", "--cached", env=self.bob()).stdout)
         self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
 
+    def test_a_write_during_the_first_cached_read_isnt_lost(self):
+        # No mirror yet. While the first --cached read is with the store, this
+        # machine marks the letter read: that answer is older than the write,
+        # so the next cached read asks again.
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        once = self.tmp / "race-once"
+        once.write_text("")
+        near = {k: v for k, v in self.near_env(DEADDROP_FROM="bob").items() if v is not None}
+        envs = " ".join(f"{k}='{v}'" for k, v in near.items())
+        racer = script(self.tmp / "ssh-race", f'''
+for last; do :; done
+out=$("{self.ssh}" "$@")
+case "$last" in *"'inbox'"*)
+  if [ -e "{once}" ]; then
+    rm "{once}"
+    env {envs} DEADDROP_NOW="$DEADDROP_NOW" "{BIN}" mark read {a} >/dev/null
+  fi;;
+esac
+printf '%s\n' "$out"
+''')
+        self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())
+        args = ("inbox", "--json", "--all", "--cached")
+        first = json.loads(self.rdd(*args, env=self.bob(DEADDROP_SSH=str(racer))).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in first}[a], "unread")  # as the store had it
+        self.assertFalse(once.exists())
+        got = json.loads(self.rdd(*args, env=self.bob()).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
+
     def test_cached_reads_are_still_checked_here(self):
         signers(self.tmp / "signers", "alice")
         sk = dict(DEADDROP_SIGN_KEY=key("alice")[0], DEADDROP_SIGNERS=str(self.tmp / "signers"))
