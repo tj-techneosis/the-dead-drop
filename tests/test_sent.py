@@ -112,7 +112,7 @@ class Persona(DeadDrop):
         id = self.send("# Status\n\nx\n", "--to", "bob", "--as", "Release manager", DEADDROP_SIGN_KEY=key("alice")[0])
         m = json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)
         self.assertEqual((m["from"], m["persona"], m["signature"]), ("alice", "Release manager", "verified"))
-        self.assertEqual(m["signature_note"], "signed by alice, as Release manager")
+        self.assertTrue(m["signature_note"].startswith("signed by alice, as Release manager, "), m["signature_note"])
         self.assertIn("alice, as Release manager", self.dd("inbox", DEADDROP_FROM="bob").stdout)
         self.assertIn('persona: "Release manager"', self.dd("pull", DEADDROP_FROM="bob").stdout)
         self.assertIn("as Release manager", self.dd("show", id, "--html", DEADDROP_FROM="bob").stdout)
@@ -173,3 +173,14 @@ class ReplyTags(DeadDrop):
         m = self.inbox(**env)[0]
         self.assertEqual((m["tags"], m["signature"]), (["persona-b"], "verified"))
         self.dd("reply", id, "--untag", "Not A Tag!", input="x\n", DEADDROP_FROM="bob", ok=False)
+
+
+class SentAndReplays(DeadDrop):
+    def test_a_planted_copy_doesnt_make_your_own_letter_bad(self):
+        signers(self.tmp / "s", "alice")
+        env = dict(DEADDROP_SIGNERS=str(self.tmp / "s"), DEADDROP_STATE=str(self.tmp / "state"))
+        id = self.send("# Mine\n\nx\n", "--to", "bob", DEADDROP_SIGN_KEY=key("alice")[0], **env)
+        src = next((self.dir / "bob" / "new").glob("*.md"))
+        (src.parent / (id[:-4] + "aaaa.md")).write_text(src.read_text())
+        ss = json.loads(self.dd("sent", "--json", **env).stdout)
+        self.assertEqual([s["signature"] for s in ss], ["verified"])

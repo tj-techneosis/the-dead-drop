@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -37,7 +39,9 @@ func followUpTime(s string) (time.Time, error) {
 		return at.Add(d), nil
 	}
 	if t, ok := parseWhen(s); ok {
-		if !t.After(at) {
+		// A time a moment past is a short follow-up worked out on the
+		// sender's machine and sealed: it comes due now, not refused.
+		if !t.After(at) && at.Sub(t) > signedSkew {
 			return time.Time{}, fmt.Errorf("--follow-up %q is already past", s)
 		}
 		return t, nil
@@ -46,8 +50,12 @@ func followUpTime(s string) (time.Time, error) {
 }
 
 // followUpJob names a message's job: deaddrop-<when>-<its random part>.
-func followUpJob(id string) string {
-	return "deaddrop-" + strings.ToLower(id[:17]) + "-" + id[len(id)-4:]
+// followUpJob names a copy's job: its id, and a short mark of the box and
+// pigeonhole it's in, since ids are unique only within a box.
+func followUpJob(m *Message) string {
+	id := m.ID
+	h := sha256.Sum256([]byte(m.Box + "/" + m.Pigeonhole))
+	return "deaddrop-" + strings.ToLower(id[:17]) + "-" + id[len(id)-4:] + "-" + hex.EncodeToString(h[:2])
 }
 
 func bookFollowUp(dir string, m *Message) error {
@@ -70,7 +78,7 @@ func bookFollowUp(dir string, m *Message) error {
 	if secs < 1 {
 		secs = 1
 	}
-	args := []string{"in", fmt.Sprintf("%ds", secs), "--name", followUpJob(m.ID),
+	args := []string{"in", fmt.Sprintf("%ds", secs), "--name", followUpJob(m),
 		"--notify", "never", "--catchup", "run", "--by", "deaddrop",
 		"--note", "Dead Drop follow-up: raise " + m.ID + " to urgent if " + m.To + " hasn't read it",
 		"--", "env", "DEADDROP_DIR=" + dir, "DEADDROP_LOCAL=1", exe, "follow-up", m.To, m.ID}
@@ -115,7 +123,11 @@ func cancelFollowUp(m *Message) {
 	if err != nil {
 		return
 	}
-	exec.Command(cron, "rm", followUpJob(m.ID), "--force").Run()
+	exec.Command(cron, "rm", followUpJob(m), "--force").Run()
+	// Booked by 0.6.3 or earlier, under the name it had then.
+	if len(m.ID) > 17 {
+		exec.Command(cron, "rm", "deaddrop-"+strings.ToLower(m.ID[:17])+"-"+m.ID[len(m.ID)-4:], "--force").Run()
+	}
 }
 
 // cmdFollowUp is what the job runs: deaddrop follow-up BOX ID.
@@ -136,6 +148,10 @@ func cmdFollowUp(args []string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+		fmt.Printf("there's no box %s; nothing to follow up\n", box)
+		return nil
+	}
 	unlock, err := lockBox(dir, box)
 	if err != nil {
 		return err
@@ -154,12 +170,22 @@ func cmdFollowUp(args []string) error {
 		fmt.Printf("%s is unread and already urgent\n", m.ID)
 		return nil
 	}
-	m.Urgency, m.Raised = urgent, now().Format(time.RFC3339)
+	m.UrgencyWas, m.Urgency, m.Raised = m.Urgency, urgent, now().Format(time.RFC3339)
 	if err := writeAtomic(m.path, m.render(), 0o600); err != nil {
 		return err
 	}
 	fmt.Printf("%s is still unread: raised to urgent\n", m.ID)
-	ring(box, m)
+	// One ring per letter: a letter for several helpers has a copy (and a
+	// follow-up) each, and rings for whichever is raised first.
+	fp, already := letterOf(m), false
+	for _, other := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
+		if other.ID != m.ID && other.Raised != "" && letterOf(other) == fp {
+			already = true
+		}
+	}
+	if !already {
+		ring(box, m)
+	}
 	return nil
 }
 

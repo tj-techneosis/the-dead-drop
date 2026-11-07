@@ -19,6 +19,7 @@ Claude Code setup.
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
+| `cmd/deaddrop/ledger.go` | the reader's seal ledger (`seals.json` in the state folder): replays read as delivered again |
 | `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
 | `cmd/deaddrop/thread.go` | `thread` and `with`: both sides in time order, and their page (`markdown.go`) |
 | `cmd/deaddrop/read.go` | reading with the store elsewhere: fetch as stored (`--raw`), check here |
@@ -69,7 +70,8 @@ Claude Code setup.
   What's signed (`signedPayload`) changes only with a new version line.
 - **A helper is a pigeonhole, never a box.** `<box>/for/<helper>/`, its own
   state; one letter, a copy per helper, one seal. Older versions never look
-  there. Replies route by persona, never by what the original was for.
+  there. Replies go to a verified letter's reply box if it names one, else to
+  its verified persona's pigeonhole, never by what the original was for.
 - **A persona is a label, never a sender.** Signed with the message; the box,
   the key and the replies stay the person's.
 - **`sent` lists only the caller's mail** (or `--box`'s), never anything

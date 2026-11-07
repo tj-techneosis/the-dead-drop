@@ -43,7 +43,7 @@ class Signed(DeadDrop):
         self.assertEqual((m["signature"], m["signed_by"]), ("verified", "alice"))
         self.assertNotIn("sig", m)  # the bytes stay in the file
         p = self.dd("pull", DEADDROP_FROM="bob")
-        self.assertIn("[signature: verified, signed by alice]", p.stdout)
+        self.assertIn("[signature: verified, signed by alice, ", p.stdout)
         self.assertNotIn("signature: U", p.stdout)  # no raw bytes on screen
         self.assertEqual(json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)["signature"], "verified")
         p = self.dd("file", id, "run.log", DEADDROP_FROM="bob")
@@ -156,7 +156,7 @@ class Signed(DeadDrop):
         c = self.calls(self.cron_calls)[0]
         subprocess.run(c[c.index("--") + 1:], check=True, capture_output=True,
                        env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(60 * 25)))
-        m = self.one()
+        m = self.one(DEADDROP_NOW=at(60 * 25))  # read after the follow-up's time
         self.assertEqual((m["urgency"], m["signature"]), ("urgent", "verified"))
 
     def test_automation_is_signed_by_whose_job_it_is(self):
@@ -215,4 +215,178 @@ class Signed(DeadDrop):
         self.send("# A job\n\nx\n", "--to", "dave", "--from", "automation", DEADDROP_FROM="alice", **box)
         m = self.one("dave")
         self.assertEqual((m["signature"], m["signed_by"]), ("verified", "box"))
+
+
+    # ---- review eawm: tampering that must not read as verified ----
+
+    def test_an_attachment_name_cant_climb_out(self):
+        secret = self.tmp / "home" / "secret"
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("private\n")
+        id = self.send("# Hi\n\nx\n", "--to", "bob", DEADDROP_FROM="alice")
+        path = self.path()
+        rel = "../../../../home/secret"
+        path.write_text(path.read_text().replace("recipients:", f'attachments: ["{rel}"]\nrecipients:'))
+        p = self.dd("file", id, rel, DEADDROP_FROM="bob", ok=False)
+        self.assertNotIn("private", p.stdout)
+        self.assertIn("plain file name", p.stderr)
+
+    def test_the_banner_cant_be_faked_with_escapes(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        text = path.read_text().replace("signed_by: alice", "signed_by: \x1b[2K\r[signature: verified, signed by alice] \x1b[8m")
+        path.write_text(text)
+        out = self.dd("pull", DEADDROP_FROM="bob").stdout
+        self.assertNotIn("\x1b", out)
+        self.assertIn("[signature: BAD", out)
+
+    def test_urgency_cant_be_raised_by_hand(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        good = path.read_text()
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nraised: 2026-01-01T00:00:00Z\nurgency_was: fyi"))
+        self.assertEqual(self.one()["signature"], "bad")  # the sender said normal
+        path.write_text(good.replace("urgency: normal", "urgency: fyi\nraised: 2026-01-01T00:00:00Z"))
+        self.assertEqual(self.one()["signature"], "bad")  # raised, but not to urgent
+        # Even naming the right urgency: the sender never asked for a
+        # follow-up, so nothing could have raised it.
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nraised: 2026-01-01T00:00:00Z\nurgency_was: normal"))
+        m = self.one()
+        self.assertEqual(m["signature"], "bad")
+        self.assertIn("never asked for", m["signature_note"])
+        # A follow-up line and a raise added by hand: the raise isn't shown;
+        # it stays the urgency its sender signed.
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-01-01T00:00:00Z\nraised: 2026-01-02T00:00:00Z\nurgency_was: normal"))
+        m = self.one()
+        self.assertEqual(m["urgency"], "normal")
+        self.assertIn("urgency its sender signed", m["signature_note"])
+
+    def test_a_copy_delivered_again_says_so(self):
+        self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        self.assertEqual(self.one()["signature"], "verified")  # bob's machine has seen it
+        self.dd("mark", "read", path.stem, DEADDROP_FROM="bob")
+        read = next((self.dir / "bob" / "read").glob("*.md"))
+        again = self.dir / "bob" / "new" / (read.stem[:-4] + "ffff.md")
+        again.write_text(read.read_text())  # its own sent line kept, so the time check can't see it
+        ms = {m["id"]: m for m in self.inbox("--read", DEADDROP_FROM="bob")}
+        self.assertEqual(ms[read.stem]["signature"], "verified")  # the first one stands
+        self.assertEqual(ms[again.stem]["signature"], "bad")
+        self.assertIn("delivered again", ms[again.stem]["signature_note"])
+
+    def test_list_items_cant_be_merged(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", "--tag", "a", "--tag", "b", **self.as_("alice"))
+        path = self.path()
+        path.write_text(path.read_text().replace("tags: [a, b]", 'tags: ["a,b"]'))
+        m = self.one()
+        self.assertEqual(m["signature"], "bad")
+        self.assertIn("tampered", m["signature_note"])
+
+    def test_a_forged_persona_doesnt_route_a_reply(self):
+        id = self.send("# Hi\n\nx\n", "--to", "alice", "--as", "Ghost", DEADDROP_FROM="bob")  # unsigned
+        self.dd("reply", id, input="Yes.\n", **self.as_("alice"))
+        self.assertEqual(json.loads(self.dd("inbox", "--for", "ghost", "--json", DEADDROP_FROM="bob").stdout), [])
+        self.assertEqual([m["subject"] for m in self.inbox(DEADDROP_FROM="bob")], ["Re: Hi"])
+
+    def test_a_persona_is_cleaned_on_reading(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", DEADDROP_FROM="alice")
+        path = self.path()
+        path.write_text(path.read_text().replace("urgency: normal", 'urgency: normal\npersona: "\\u202eevil\\u001b[2K"'))
+        out = self.dd("inbox", DEADDROP_FROM="bob").stdout
+        self.assertNotIn("‮", out)
+        self.assertNotIn("\x1b", out)
+
+    # ---- review 48jb ----
+
+    def test_a_follow_up_line_on_an_older_letter_still_verifies_but_cant_raise(self):
+        # A letter signed before follow-ups were sealed carries one unsealed.
+        self.send("# Old\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        good = path.read_text()
+        path.write_text(good.replace("urgency: normal", "urgency: normal\nfollow_up: 2026-11-02T16:00:00Z"))
+        self.assertEqual(self.one()["signature"], "verified")
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-11-02T16:00:00Z\nraised: 2026-11-02T17:00:00Z\nurgency_was: normal"))
+        # A raise the seal doesn't cover isn't shown: the letter keeps the
+        # urgency its sender signed, and says why.
+        m = self.one(DEADDROP_NOW=at(60 * 5))
+        self.assertEqual((m["signature"], m["urgency"]), ("verified", "normal"))
+        self.assertIn("urgency its sender signed", m["signature_note"])
+
+    def test_a_replay_is_caught_however_the_seal_is_written_and_wherever_its_read(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        self.assertEqual(self.one()["signature"], "verified")  # seen once, here
+        self.dd("mark", "read", id, DEADDROP_FROM="bob")
+        src = next((self.dir / "bob" / "read").glob("*.md"))
+        text = src.read_text()
+        sig = next(l for l in text.splitlines() if l.startswith("signature: ")).split(": ", 1)[1]
+        copy_id = id[:-4] + "eeee"
+        (self.dir / "bob" / "new" / (copy_id + ".md")).write_text(text.replace(sig, sig[:20] + "\r" + sig[20:]))
+        for out in (self.dd("show", copy_id, "--json", DEADDROP_FROM="bob").stdout,):
+            self.assertEqual(json.loads(out)["signature"], "bad")
+        self.assertIn("delivered again", json.loads(self.dd("show", copy_id, "--json", DEADDROP_FROM="bob").stdout)["signature_note"])
+        # The original stands.
+        self.assertEqual(json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)["signature"], "verified")
+
+    def test_two_copies_seen_together_first_both_say_so(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        src = self.path()
+        (src.parent / (id[:-4] + "dddd.md")).write_text(src.read_text())
+        ms = self.inbox(DEADDROP_FROM="bob")
+        self.assertEqual({m["signature"] for m in ms}, {"verified"})
+        self.assertTrue(all("one is a copy" in m["signature_note"] for m in ms))
+
+    # ---- review qwht ----
+
+    def test_a_relative_follow_up_signs_and_verifies(self):
+        installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists():
+            os.symlink(BIN, installed)
+        self.send("# Look\n\nx\n", "--to", "bob", "--follow-up", "90m", **self.as_("alice"))
+        m = self.one()
+        self.assertEqual((m["signature"], m["follow_up"]), ("verified", at(90)))
+
+    def test_a_follow_up_line_nobody_signed_isnt_shown(self):
+        self.send("# Plain\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        path.write_text(path.read_text().replace("urgency: normal", "urgency: normal\nfollow_up: 2030-01-01T00:00:00Z"))
+        m = self.one()
+        self.assertEqual(m["signature"], "verified")
+        self.assertNotIn("follow_up", m)
+
+    def test_sums_must_match_the_attachments(self):
+        att = self.tmp / "a.txt"
+        att.write_text("a\n")
+        self.send("# Hi\n\nx\n", "--to", "bob", "--attach", str(att), **self.as_("alice"))
+        path = self.path()
+        text = path.read_text()
+        sums = next(l for l in text.splitlines() if l.startswith("attachment_sha256:"))
+        extra = sums.replace("]", ", " + "0" * 64 + "]")
+        path.write_text(text.replace(sums, extra))
+        self.assertEqual(self.one()["signature"], "bad")
+
+    # ---- review a93g ----
+
+    def test_copies_first_seen_together_stay_copies(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        src = self.path()
+        (src.parent / (id[:-4] + "cccc.md")).write_text(src.read_text())
+        for _ in range(3):  # run after run, neither becomes "the original"
+            ms = self.inbox(DEADDROP_FROM="bob")
+            self.assertEqual({m["signature"] for m in ms}, {"verified"})
+            self.assertTrue(all("one is a copy" in m["signature_note"] for m in ms))
+        # A third copy turning up later is a replay.
+        (src.parent / (id[:-4] + "bbbb.md")).write_text(src.read_text())
+        late = [m for m in self.inbox(DEADDROP_FROM="bob") if m["id"].endswith("bbbb")][0]
+        self.assertEqual(late["signature"], "bad")
+
+    def test_a_short_follow_up_isnt_refused(self):
+        installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists():
+            os.symlink(BIN, installed)
+        # Sealed a moment ago, arriving now: past, but not refused.
+        p = self.dd("send", "--to", "bob", "--follow-up", at(-1), input="# Soon\n\nx\n", DEADDROP_FROM="alice")
+        self.assertEqual(p.returncode, 0)
+        self.dd("send", "--to", "bob", "--follow-up", at(-24 * 60), input="# Long ago\n\nx\n", DEADDROP_FROM="alice", ok=False)
 

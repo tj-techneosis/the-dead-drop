@@ -106,6 +106,14 @@ Panel {
   property var speakers: []       // every speaker in them, busiest first
   property string who: ""         // threads: only those this speaker is in
   property string threadsNote: ""
+  property string threadsErr: ""
+  property string holeNote: ""       // a helper's pigeonhole: loading, or what went wrong
+  property string listerNote: ""     // finding the pigeonholes went wrong
+  property bool holeStale: false     // a fetch came back for another pigeonhole
+  property bool threadsStale: false
+  property var holeUnread: ({})      // helper -> unread count, for the chips
+  property var pending: []           // actions waiting for the one running
+  readonly property int threadLimit: 80
   readonly property var shown: hole === "" ? messages : holeMessages
   readonly property var shownTopics: who === "" ? topics : topics.filter(function(t) { return t.speakers.indexOf(root.who) >= 0 })
 
@@ -152,7 +160,10 @@ Panel {
 
   // Who spoke a letter: its sealed persona, else a persona-<name> tag, else
   // its box. ("persona-release-manager" reads "Release manager".)
+  // Only a verified letter's persona or tag says who spoke: anyone can write
+  // either onto a letter that doesn't verify.
   function speakerOf(l, box) {
+    if (l.signature !== "verified") return l.mine ? box : String(l.from || "")
     if (l.persona) return String(l.persona)
     var tags = l.tags || []
     for (var i = 0; i < tags.length; i++) {
@@ -166,9 +177,14 @@ Panel {
   }
 
   function loadTopics(raw) {
+    if (threadLister.askedFor !== root.hole) { root.threadsStale = true; return } // for another pigeonhole: asked again on exit
     var data
-    try { data = JSON.parse(raw) } catch (e) { root.threadsNote = "Couldn't read the threads."; return }
-    root.threadsNote = data.sent_missing ? String(data.sent_missing) : ""
+    try { data = JSON.parse(raw) } catch (e) { root.topics = []; root.speakers = []; root.who = ""; root.threadsNote = "Couldn't read the threads."; return }
+    root.threadsErr = ""
+    var notes = []
+    if (data.sent_missing) notes.push(String(data.sent_missing))
+    if ((data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads, and the speakers in them.")
+    root.threadsNote = notes.join(" ")
     var count = {}
     var list = data.topics || []
     for (var i = 0; i < list.length; i++) {
@@ -187,47 +203,77 @@ Panel {
     root.speakers = names
     if (root.who !== "" && names.indexOf(root.who) < 0) root.who = ""
     root.topics = list
+    root.clampCursor()
   }
 
   function loadHoles(raw) {
     var list
     try { list = JSON.parse(raw) } catch (e) { return }
     var hs = []
+    var unread = {}
     for (var i = 0; i < list.length; i++) {
       var h = list[i].pigeonhole
-      if (h && hs.indexOf(String(h)) < 0) hs.push(String(h))
+      if (!h) continue
+      h = String(h)
+      if (hs.indexOf(h) < 0) hs.push(h)
+      if (list[i].state === "unread") unread[h] = (unread[h] || 0) + 1
     }
+    // The pigeonhole you picked stays, even with everything in it filed.
+    if (root.hole !== "" && hs.indexOf(root.hole) < 0) hs.push(root.hole)
     hs.sort()
     root.holes = hs
-    if (root.hole !== "" && hs.indexOf(root.hole) < 0) root.pickHole("")
+    root.holeUnread = unread
   }
 
   function loadHole(raw) {
+    if (holeReader.askedFor !== root.hole) { root.holeStale = true; return } // for another pigeonhole: asked again on exit
     var list
-    try { list = JSON.parse(raw) } catch (e) { return }
+    try { list = JSON.parse(raw) } catch (e) { root.holeNote = root.holeNote || "Couldn't read " + root.hole + "'s pigeonhole."; return }
+    root.holeNote = ""
     // Unread first (urgent on top), then read, newest first: as the inbox file.
     function rank(m) { return m.state === "unread" ? (m.urgency === "urgent" ? 0 : 1) : 2 }
     list.sort(function(a, b) { return rank(a) - rank(b) || String(b.sent).localeCompare(String(a.sent)) })
     root.holeMessages = list
+    root.clampCursor()
+  }
+
+  function clampCursor() {
+    var n = root.view === "threads" ? root.shownTopics.length : root.shown.length
+    if (root.cursor > n - 1) root.cursor = Math.max(0, n - 1)
   }
 
   function forArgs() { return root.hole === "" ? [] : ["--for", root.hole] }
 
+  // Each fetch remembers which pigeonhole it was for; one that finishes after
+  // the chip changed is thrown away and asked again (see loadHole, loadTopics).
   function refreshViews() {
     if (!holeLister.running) holeLister.running = true
     if (root.hole !== "" && !holeReader.running) {
+      holeReader.askedFor = root.hole
       holeReader.command = [root.deaddrop, "inbox", "--read", "--json"].concat(root.forArgs())
+      if (root.holeMessages.length === 0) root.holeNote = "Looking in " + root.hole + "'s pigeonhole…"
       holeReader.running = true
     }
     if (root.view === "threads" && !threadLister.running) {
-      threadLister.command = [root.deaddrop, "threads", "--json", "--letters", "--limit", "80"].concat(root.forArgs())
+      threadLister.askedFor = root.hole
+      root.threadsErr = ""
+      threadLister.command = [root.deaddrop, "threads", "--json", "--letters", "--limit", String(root.threadLimit)].concat(root.forArgs())
       threadLister.running = true
     }
   }
 
   function pickView(v) { root.view = v; root.cursor = 0; root.refreshViews() }
-  function pickHole(h) { root.hole = h; root.holeMessages = []; root.cursor = 0; root.refreshViews() }
+  function pickHole(h) { root.hole = h; root.holeMessages = []; root.holeNote = ""; root.topics = []; root.speakers = []; root.who = ""; root.threadsErr = ""; root.cursor = 0; root.refreshViews() }
   function openTopic(t) { root.runAction(["open", "--thread", String(t.root)].concat(root.forArgs()), "Thread") }
+
+  // The pigeonhole on show, as a line: a helper's counts come from its fetch.
+  function holeLine() {
+    if (holeReader.running && root.holeMessages.length === 0) return "For " + root.hole + ": looking…"
+    if (root.holeNote !== "" && root.holeMessages.length === 0) return "For " + root.hole + ": couldn't read it"
+    var n = 0
+    for (var i = 0; i < root.holeMessages.length; i++) if (root.holeMessages[i].state === "unread") n++
+    return "For " + root.hole + ": " + (n > 0 ? n + " unread" : "no unread mail")
+  }
 
   function headline() {
     if (!root.watched) return "Not watching yet"
@@ -247,7 +293,7 @@ Panel {
     root.unread = Number(data.unread || 0)
     root.urgent = Number(data.urgent || 0)
     root.messages = data.messages || []
-    if (root.cursor > root.messages.length) root.cursor = root.messages.length
+    root.clampCursor()
     // The open message, as the file now has it (or gone, once archived).
     if (root.reading) {
       var still = null
@@ -273,9 +319,19 @@ Panel {
 
   // ---- actions, one at a time ----
 
+  // One at a time; one asked for while another runs waits its turn.
   function runAction(cmd, note) {
-    if (actor.running) return
-    root.actionNote = ""
+    if (actor.running) {
+      // A check asked for again while one runs or waits is the same check;
+      // anything else (a mark, an open) always waits its turn.
+      if (cmd[0] === "watch") {
+        var key = cmd.join(" ")
+        if (actor.command.slice(1).join(" ") === key) return
+        for (var i = 0; i < root.pending.length; i++) if (root.pending[i][0].join(" ") === key) return
+      }
+      root.pending = root.pending.concat([[cmd, note]])
+      return
+    }
     actor.label = note
     actor.command = [root.deaddrop].concat(cmd)
     actor.running = true
@@ -283,11 +339,15 @@ Panel {
 
   function checkNow() { root.runAction(["watch", "--no-hooks"], "Check") }
 
+  // The text that comes back is for the message asked for; one opened while
+  // another's text is still on its way is fetched once that one's done.
   function openMessage(m) {
     root.reading = m
     root.readingHtml = ""
     root.readingNote = "Opening…"
-    reader.command = [root.deaddrop, "show", String(m.id), "--html", "--fragment"]
+    if (reader.running) { reader.next = String(m.id); return }
+    reader.askedFor = String(m.id)
+    reader.command = [root.deaddrop, "show", String(m.id), "--html", "--fragment"].concat(root.forArgs())
     reader.running = true
   }
 
@@ -297,9 +357,9 @@ Panel {
     root.readingNote = ""
   }
 
-  function archiveMessage(m) { root.runAction(["mark", "archive", String(m.id)], "Archive"); root.closeMessage() }
-  function putBackMessage(m) { root.runAction(["mark", "unread", String(m.id)], "Mark unread"); root.closeMessage() }
-  function markMessageRead(m) { root.runAction(["mark", "read", String(m.id)], "Mark read") }
+  function archiveMessage(m) { root.runAction(["mark", "archive", String(m.id)].concat(root.forArgs()), "Archive"); root.closeMessage() }
+  function putBackMessage(m) { root.runAction(["mark", "unread", String(m.id)].concat(root.forArgs()), "Mark unread"); root.closeMessage() }
+  function markMessageRead(m) { root.runAction(["mark", "read", String(m.id)].concat(root.forArgs()), "Mark read") }
 
   function openLink(link) {
     var l = String(link).toLowerCase()
@@ -315,6 +375,7 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     cursor = 0
+    actionNote = ""
     closeMessage()
     refreshViews()
   }
@@ -367,16 +428,32 @@ Panel {
   // Reading a message: its text, then it's marked read (unless it is).
   Process {
     id: reader
+    property string askedFor: ""
+    property string next: ""
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (root.reading) root.readingHtml = text
+      onStreamFinished: if (root.reading && String(root.reading.id) === reader.askedFor) root.readingHtml = text
     }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.readingNote = text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: if (text.trim() !== "" && root.reading && String(root.reading.id) === reader.askedFor) root.readingNote = text.trim().replace(/^deaddrop: /, "")
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 || !root.reading) return
+      var asked = reader.askedFor
+      if (reader.next !== "") {
+        // Another message was opened meanwhile: fetch that one now.
+        var id = reader.next
+        reader.next = ""
+        reader.askedFor = id
+        reader.command = [root.deaddrop, "show", id, "--html", "--fragment"].concat(root.forArgs())
+        reader.running = true
+        return
+      }
+      if (!root.reading || String(root.reading.id) !== asked) return
+      if (exitCode !== 0) {
+        if (root.readingNote === "Opening…") root.readingNote = "Couldn't open it (deaddrop show exited " + exitCode + ")."
+        return
+      }
       root.readingNote = ""
       if (root.reading.state === "unread") root.markMessageRead(root.reading)
     }
@@ -384,21 +461,36 @@ Panel {
 
   Process {
     id: holeLister
-    command: [root.deaddrop, "inbox", "--for", "*", "--read", "--json"]
+    command: [root.deaddrop, "inbox", "--for", "*", "--all", "--json"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHoles(text) }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.listerNote = text.trim() !== "" ? "Pigeonholes: " + text.trim().replace(/^deaddrop: /, "") : ""
+    }
   }
 
   Process {
     id: holeReader
+    property string askedFor: ""
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && holeReader.askedFor === root.hole && root.holeNote.indexOf("Looking") === 0) root.holeNote = "Couldn't read " + root.hole + "'s pigeonhole."
+      if (root.holeStale || holeReader.askedFor !== root.hole) { root.holeStale = false; Qt.callLater(root.refreshViews) }
+    }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHole(text) }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (text.trim() !== "" && holeReader.askedFor === root.hole) root.holeNote = text.trim().replace(/^deaddrop: /, "")
+    }
   }
 
   Process {
     id: threadLister
+    property string askedFor: ""
+    onExited: function(exitCode) { if (root.threadsStale || threadLister.askedFor !== root.hole) { root.threadsStale = false; Qt.callLater(root.refreshViews) } }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadTopics(text) }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.threadsNote = text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: if (text.trim() !== "" && threadLister.askedFor === root.hole) root.threadsErr = text.trim().replace(/^deaddrop: /, "")
     }
   }
 
@@ -411,7 +503,17 @@ Panel {
     }
     // mark and watch rewrite the inbox file; the FileView picks that up. A
     // helper's pigeonhole and the threads are fetched again.
-    onExited: function(exitCode) { inboxFile.reload(); root.refreshViews() }
+    onExited: function(exitCode) {
+      // The same action working now clears what it said when it didn't.
+      if (exitCode === 0 && root.actionNote.indexOf(actor.label + " didn't work") === 0) root.actionNote = ""
+      inboxFile.reload()
+      root.refreshViews()
+      if (root.pending.length > 0) {
+        var next = root.pending[0]
+        root.pending = root.pending.slice(1)
+        Qt.callLater(function() { root.runAction(next[0], next[1]) })
+      }
+    }
   }
 
   // Ages on screen move on even when the file doesn't.
@@ -504,8 +606,8 @@ Panel {
         else if (k === "a" && m) root.archiveMessage(m)
         else if (k === "u" && m) root.putBackMessage(m)
         else if (k === "b" && root.reading) root.closeMessage()
-        else if (k === "t" && m) root.runAction(["open", "--thread", String(m.id)], "Thread")
-        else if (k === "c" && m && m.from !== "automation") root.runAction(["open", "--with", String(m.from)], "Conversation")
+        else if (k === "t" && m) root.runAction(["open", "--thread", String(m.id)].concat(root.forArgs()), "Thread")
+        else if (k === "c" && m && m.from !== "automation") root.runAction(["open", "--with", String(m.from)].concat(root.forArgs()), "Conversation")
       }
 
       Flickable {
@@ -529,6 +631,7 @@ Panel {
             title: root.reading ? String(root.reading.subject || "") : "Dead Drop"
             meta: root.reading
               ? "From " + root.sender(root.reading) + " · " + root.ago(root.reading.sent) + (root.reading.urgency === "urgent" ? " · urgent" : "")
+              : root.hole !== "" ? root.holeLine()
               : root.headline() + (root.watched && root.checkedAt ? " · checked " + root.ago(root.checkedAt) : "")
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -561,6 +664,19 @@ Panel {
 
           // ---- what's shown: inbox or threads, whose pigeonhole, which speaker ----
 
+          Text {
+            visible: !root.reading && root.listerNote !== ""
+            width: parent.width
+            leftPadding: Style.space(10)
+            rightPadding: Style.space(10)
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.listerNote
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           Flow {
             visible: !root.reading
             width: parent.width
@@ -576,7 +692,7 @@ Panel {
               model: root.holes
               Chip {
                 required property string modelData
-                label: "for " + modelData
+                label: (root.holeUnread[modelData] ? "(" + root.holeUnread[modelData] + ") " : "") + "for " + modelData
                 on: root.hole === modelData
                 onPicked: root.pickHole(modelData)
               }
@@ -611,14 +727,14 @@ Panel {
             spacing: Style.space(4)
 
             Text {
-              visible: root.threadsNote !== ""
+              visible: text !== ""
               width: parent.width
               leftPadding: Style.space(10)
               rightPadding: Style.space(10)
               textFormat: Text.PlainText
               wrapMode: Text.WordWrap
-              text: root.threadsNote
-              color: root.dim
+              text: root.threadsErr !== "" ? root.threadsErr : root.threadsNote
+              color: root.threadsErr !== "" ? root.urgentColor : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -635,7 +751,7 @@ Panel {
             }
 
             Text {
-              visible: root.shownTopics.length === 0 && !threadLister.running
+              visible: root.shownTopics.length === 0 && !threadLister.running && root.threadsErr === ""
               width: parent.width
               leftPadding: Style.space(10)
               textFormat: Text.PlainText
@@ -666,7 +782,20 @@ Panel {
             }
 
             Text {
-              visible: root.watched && root.shown.length === 0
+              visible: root.hole !== "" && root.holeNote !== ""
+              width: parent.width
+              leftPadding: Style.space(10)
+              rightPadding: Style.space(10)
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              text: root.holeNote
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              visible: (root.hole === "" ? root.watched : (!holeReader.running && root.holeNote === "")) && root.shown.length === 0
               width: parent.width
               leftPadding: Style.space(10)
               textFormat: Text.PlainText
@@ -711,7 +840,7 @@ Panel {
                 tooltipText: "The whole thread, in the browser (t)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                onClicked: if (root.reading) root.runAction(["open", "--thread", String(root.reading.id)], "Thread")
+                onClicked: if (root.reading) root.runAction(["open", "--thread", String(root.reading.id)].concat(root.forArgs()), "Thread")
               }
 
               PanelActionButton {
@@ -720,7 +849,7 @@ Panel {
                 tooltipText: "Everything with them, in the browser (c)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                onClicked: if (root.reading) root.runAction(["open", "--with", String(root.reading.from)], "Conversation")
+                onClicked: if (root.reading) root.runAction(["open", "--with", String(root.reading.from)].concat(root.forArgs()), "Conversation")
               }
 
               PanelActionButton {
@@ -811,7 +940,7 @@ Panel {
     signal picked()
     radius: height / 2
     implicitHeight: chipText.implicitHeight + Style.space(6)
-    implicitWidth: chipText.implicitWidth + Style.space(16)
+    implicitWidth: Math.min(chipText.implicitWidth, Style.space(180)) + Style.space(16)
     color: on ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14) : "transparent"
     border.width: 1
     border.color: on ? root.foreground : root.dim
@@ -819,6 +948,8 @@ Panel {
     Text {
       id: chipText
       anchors.centerIn: parent
+      width: Math.min(implicitWidth, Style.space(180))
+      elide: Text.ElideRight
       textFormat: Text.PlainText
       text: chip.label
       color: chip.on ? root.foreground : root.dim

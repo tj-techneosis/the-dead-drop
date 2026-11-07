@@ -47,7 +47,7 @@ class Threads(DeadDrop):
         self.assertEqual(len(json.loads(self.dd("thread", a, "--json").stdout)["letters"]), 3)
         out = self.dd("thread", b).stdout
         self.assertIn("→ bob", out)
-        self.assertIn("← bob, as Release manager", out)
+        self.assertIn("← bob (unverified), as Release manager", out)
         self.assertIn("seen", out)
         self.dd("mark", "unread", "--tag", "tool-x", DEADDROP_FROM="bob")
         self.assertIn("not yet read", self.dd("thread", b).stdout)
@@ -63,11 +63,9 @@ class Threads(DeadDrop):
                          ["To carol", "Carol to alice"])
         # Bob's view of the same conversation is his.
         mine = [l["mine"] for l in json.loads(self.dd("with", "alice", "--json", DEADDROP_FROM="bob").stdout)["letters"]]
-        # Alice's thanks went to bob's Release manager, so it's in that
-        # helper's pigeonhole, not bob's own.
-        self.assertEqual(mine, [False, True, True])
-        rm = json.loads(self.dd("with", "alice", "--for", "release-manager", "--json", DEADDROP_FROM="bob").stdout)["letters"]
-        self.assertEqual([(l["mine"], l["subject"]) for l in rm if not l["mine"]], [(False, "Re: Requests for tool X")])
+        # Bob's persona was unsigned, so alice's thanks comes to bob's own
+        # pigeonhole: only a verified persona routes a reply.
+        self.assertEqual(mine, [False, True, False, True])
 
     def test_the_page(self):
         a, b = self.conversation()
@@ -116,3 +114,53 @@ class Threads(DeadDrop):
         self.send("# Title\n\n```\ncode first\n```\n\n## Why\n\n> The real point,\n> on two lines.\n\nMore.\n", "--to", "bob")
         l = json.loads(self.dd("with", "bob", "--json").stdout)["letters"][0]
         self.assertEqual(l["gist"], "The real point, on two lines.")
+
+    def test_every_thread_on_one_page(self):
+        a, b = self.conversation()
+        page = self.dd("threads", "--html").stdout
+        self.assertIn("default-src 'none'", page)
+        self.assertEqual(page.count('<details class="topic'), 4)
+        self.assertIn("Requests for tool X</span>", page)
+        self.assertIn("The whole letter", page)  # the letters are inside
+        self.assertNotIn("<script", page)
+        opened = self.tmp / "opened"
+        opener = script(self.tmp / "opener", f'cp "$1" "{opened}"\n')
+        self.dd("open", "--threads", DEADDROP_OPENER=str(opener))
+        self.assertIn("Threads</h1>", opened.read_text())
+        self.assertEqual(len(self.ids(DEADDROP_FROM="alice")), 3)  # nothing marked
+        self.dd("threads", "--html", "--json", ok=False)
+
+    def test_asks_wait_until_answered(self):
+        self.dd("send", "--to", "alice", "--ask", input="# Which name?\n\nWatches or Lookouts: which should the page say?\n\nDetail.\n", DEADDROP_FROM="bob")
+        self.dd("send", "--to", "alice", "--tag", "ask-alice", input="# Old style\n\nMerge the release tonight?\n", DEADDROP_FROM="carol")
+        self.send("# Just news\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        asks = json.loads(self.dd("asks", "--json").stdout)
+        self.assertEqual([a["question"] for a in asks], ["Watches or Lookouts: which should the page say?", "Merge the release tonight?"])
+        self.assertIn("answer with deaddrop reply", self.dd("asks").stdout)
+        self.dd("reply", asks[0]["id"], input="Lookouts.\n")
+        self.assertEqual([a["subject"] for a in json.loads(self.dd("asks", "--json").stdout)], ["Old style"])
+        self.dd("mark", "archive", asks[1]["id"])  # filed is closed too
+        self.assertIn("Nothing waiting on your decision", self.dd("asks").stdout)
+        # The answer doesn't carry the ask back.
+        self.assertNotIn("ask", self.inbox(DEADDROP_FROM="bob")[0]["tags"])
+        self.dd("send", "--to", "alice", "--ask", input="# Only a heading\n", DEADDROP_FROM="bob", ok=False)
+
+    def test_an_ask_closes_only_on_a_real_answer(self):
+        signers(self.tmp / "s3", "alice", "bob")
+        env = dict(DEADDROP_SIGNERS=str(self.tmp / "s3"))
+        mine = dict(DEADDROP_SIGN_KEY=key("alice")[0], **env)
+        self.send("# Earlier\n\nx\n", "--to", "bob", **mine)  # alice signs
+        self.dd("send", "--to", "alice", "--ask", input="# Q\n\nWhich one?\n", DEADDROP_FROM="bob", DEADDROP_SIGN_KEY=key("bob")[0], **env)
+        ask = json.loads(self.dd("asks", "--json", **mine).stdout)[0]
+        # A forged "answer" in alice's name doesn't close it.
+        self.send("# Re: Q\n\nForged.\n", "--to", "bob", "--reply-to", ask["id"])  # unsigned, as alice
+        self.assertEqual(len(json.loads(self.dd("asks", "--json", **mine).stdout)), 1)
+        self.dd("reply", ask["id"], input="This one.\n", **mine)
+        self.assertEqual(json.loads(self.dd("asks", "--json", **mine).stdout), [])
+        # The answer carries neither ask nor ask-<box>.
+        self.dd("send", "--to", "alice", "--tag", "ask-alice", input="# Q2\n\nAnd this?\n", DEADDROP_FROM="bob")
+        q2 = [a for a in json.loads(self.dd("asks", "--json", **mine).stdout)][0]
+        self.dd("reply", q2["id"], input="Yes.\n", **mine)
+        back = [m for m in self.inbox(DEADDROP_FROM="bob", **env) if m["subject"] == "Re: Q2"][0]
+        self.assertNotIn("ask-alice", back["tags"])
+

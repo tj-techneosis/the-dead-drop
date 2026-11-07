@@ -20,14 +20,27 @@ Scope {
     || ((Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/deaddrop")
   readonly property string requestFile: stateDir + "/panel-request"
 
+  property var queued: []
+
   function ask(action) {
+    // One write at a time; a request made meanwhile waits its turn.
+    if (writer.running) { service.queued = service.queued.concat([action]); return }
     // "<action> <ms>": the time makes every request a change, even a repeat.
     writer.command = ["sh", "-c", 'mkdir -p "$1" && printf "%s %s\\n" "$2" "$3" > "$1/panel-request"',
       "sh", service.stateDir, action, String(Date.now())]
     writer.running = true
   }
 
-  Process { id: writer }
+  Process {
+    id: writer
+    onExited: function(exitCode) {
+      if (service.queued.length > 0) {
+        var next = service.queued[0]
+        service.queued = service.queued.slice(1)
+        Qt.callLater(function() { service.ask(next) })
+      }
+    }
+  }
   Process { id: checker; command: [service.deaddrop, "watch", "--no-hooks"] }
 
   IpcHandler {

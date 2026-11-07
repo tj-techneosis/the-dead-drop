@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -26,6 +27,7 @@ type draft struct {
 	from, subject, urgency, thread string
 	persona                        string
 	helpers                        []string // --for: pigeonholes in each recipient's box
+	replyBox                       string   // --reply-box: where answers go
 	to, tags                       []string
 	body                           string
 	attach                         []string // paths on this machine
@@ -34,12 +36,13 @@ type draft struct {
 	signedBy, signedAt, sig string
 }
 
-const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] < body.md`
+const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
 
 var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
 	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
-	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true,
+	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true, "reply-box": true,
+	"ask": false,
 }
 
 // helpersOf is a send's --for: the helpers it's addressed to.
@@ -89,10 +92,18 @@ func loadFor(dir, box, helper string, all bool, states []string, withBody bool) 
 
 // forArgs passes a reading command's --for on, to the store's machine.
 func forArgs(f flags) []string {
-	if f.has("for") {
-		return []string{"--for", f.get("for")}
+	if h := strings.ToLower(strings.TrimSpace(f.get("for"))); f.has("for") && h != "" {
+		return []string{"--for", h}
 	}
 	return nil
+}
+
+// followUpText is a follow-up time as the header and the signature hold it.
+func followUpText(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // helperSlug is the pigeonhole a persona answers at: "Release manager" is
@@ -154,6 +165,15 @@ func draftOf(f flags) (draft, error) {
 	if d.helpers, err = helpersOf(f); err != nil {
 		return d, bad(u, err)
 	}
+	if f.has("reply-box") {
+		d.replyBox = strings.ToLower(strings.TrimSpace(f.get("reply-box")))
+		if err := checkBox("--reply-box", d.replyBox); err != nil || d.replyBox == automation {
+			if env := os.Getenv("DEADDROP_REPLY_BOX"); env != "" && strings.EqualFold(strings.TrimSpace(env), d.replyBox) {
+				return d, badf(u, "$DEADDROP_REPLY_BOX (%q) isn't a box name, like alice-helper", env)
+			}
+			return d, badf(u, "--reply-box: a box, like alice-helper")
+		}
+	}
 	if d.from, err = senderOf(f); err != nil {
 		return d, bad(u, err)
 	}
@@ -174,6 +194,10 @@ func draftOf(f flags) (draft, error) {
 	if d.tags == nil {
 		d.tags = []string{}
 	}
+	// An ask needs its recipient's decision: a reserved tag, sealed like any.
+	if f.has("ask") && !contains(d.tags, askTag) {
+		d.tags = append(d.tags, askTag)
+	}
 	if d.thread != "" {
 		if err := checkID(d.thread); err != nil {
 			return d, bad(u, fmt.Errorf("--reply-to: %v", err))
@@ -190,6 +214,9 @@ func draftOf(f flags) (draft, error) {
 // settle finishes a draft once its body is known: the subject, and the
 // check for secrets.
 func (d *draft) settle() error {
+	if contains(d.tags, askTag) && gist(d.body) == "" {
+		return fmt.Errorf("an ask starts with the question: the document's first paragraph")
+	}
 	if d.subject == "" {
 		d.subject = subjectFrom(d.body)
 	}
@@ -237,8 +264,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -253,10 +280,11 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	orig, err := findAnywhere(dir, me, f.pos[0], false)
+	orig, err := findAnywhere(dir, me, f.pos[0], true)
 	if err != nil {
 		return err
 	}
+	verify(orig) // a reply follows only a persona that's really theirs
 	if orig.From == automation {
 		return fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
 	}
@@ -264,7 +292,7 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
-	d := draft{from: me, to: []string{orig.From}, thread: orig.ID, tags: kept}
+	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return bad(u, err)
 	}
@@ -273,6 +301,12 @@ func cmdReply(args []string) error {
 	}
 	if d.helpers, err = replyHelpers(orig, f); err != nil {
 		return bad(u, err)
+	}
+	if f.has("reply-box") {
+		d.replyBox = strings.ToLower(strings.TrimSpace(f.get("reply-box")))
+		if err := checkBox("--reply-box", d.replyBox); err != nil || d.replyBox == automation {
+			return badf(u, "--reply-box: a box, like alice-helper")
+		}
 	}
 	extra, err := tagsOf(f)
 	if err != nil {
@@ -298,6 +332,25 @@ func cmdReply(args []string) error {
 	return deliver(dir, d)
 }
 
+var warnedReplyBox bool
+
+// replyTo is the box a reply goes to: the letter's reply box, when it has
+// one and verifies (anyone could write one onto an unsigned letter), else its
+// sender's.
+func replyTo(orig *Message) string {
+	if orig.ReplyBox == "" {
+		return orig.From
+	}
+	if orig.Signature != sigVerified {
+		if !warnedReplyBox {
+			warnedReplyBox = true
+			fmt.Fprintf(os.Stderr, "deaddrop: %s asks for answers at %s, but isn't verified, so this goes to %s\n", orig.ID, orig.ReplyBox, orig.From)
+		}
+		return orig.From
+	}
+	return orig.ReplyBox
+}
+
 // replyHelpers is where a reply goes in the sender's box: --for if given,
 // else the pigeonhole of the persona that wrote it (an answer to "bob, as
 // Planner" goes to bob's planner), else bob's own. What the original was for is
@@ -305,6 +358,14 @@ func cmdReply(args []string) error {
 func replyHelpers(orig *Message, f flags) ([]string, error) {
 	if f.has("for") {
 		return helpersOf(f)
+	}
+	if replyTo(orig) != orig.From {
+		return nil, nil // its own box is the address: no pigeonhole on top
+	}
+	// Only a sealed persona that verifies says where a reply goes: anyone can
+	// write a letter claiming one.
+	if orig.Signature != sigVerified {
+		return nil, nil
 	}
 	if s := helperSlug(orig.Persona); s != "" {
 		return []string{s}, nil
@@ -329,7 +390,8 @@ func replyTags(orig, untag []string) ([]string, error) {
 	}
 	out := []string{}
 	for _, t := range orig {
-		if !drop[t] && !strings.HasPrefix(t, "persona-") {
+		// Who spoke, and "needs your decision", stay with the original.
+		if !drop[t] && !strings.HasPrefix(t, "persona-") && t != askTag && !strings.HasPrefix(t, "ask-") {
 			out = append(out, t)
 		}
 	}
@@ -453,7 +515,7 @@ func deliver(dir string, d draft) error {
 		for i := range attached {
 			as[i] = attachSum{attached[i], sums[i]}
 		}
-		payload := signedPayload(d.from, d.persona, d.helpers, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
+		payload := signedPayload(d.from, d.persona, d.helpers, d.replyBox, followUpText(d.followUp), d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
@@ -475,9 +537,40 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	rung := map[string]bool{}
+	if d.replyBox != "" {
+		if _, err := os.Stat(filepath.Join(dir, d.replyBox)); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "deaddrop: there's no box %s yet, so answers to this will start one (a typo?)\n", d.replyBox)
+		}
+	}
+	for _, h := range d.helpers {
+		for _, to := range d.to {
+			if _, err := os.Stat(slotDir(dir, to, h)); os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "deaddrop: %s has no %s pigeonhole yet; this starts one (a typo?)\n", to, h)
+			}
+		}
+	}
+	// Hold every box while its copies go in, so gc never takes a new
+	// letter's attachments for leftovers. All of them, in name order, before
+	// anything is written: two sends to the same boxes can't wait on each
+	// other.
+	order := append([]string{}, d.to...)
+	sort.Strings(order)
+	var unlocks []func()
+	defer func() {
+		for _, u := range unlocks {
+			u()
+		}
+	}()
+	for _, to := range order {
+		u, err := lockBox(dir, to)
+		if err != nil {
+			return err
+		}
+		unlocks = append(unlocks, u)
+	}
 	for _, at := range copies {
 		to := at.box
-		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
+		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, ReplyBox: d.replyBox, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
 			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
 		// Who it went to, in every copy (deaddrop sent puts them together).
 		m.Recipients = d.to
@@ -487,9 +580,7 @@ func deliver(dir string, d draft) error {
 		if m.Tags == nil {
 			m.Tags = []string{}
 		}
-		if !d.followUp.IsZero() {
-			m.FollowUp = d.followUp.Format(time.RFC3339)
-		}
+		m.FollowUp = followUpText(d.followUp)
 		var path string
 		for {
 			m.ID = newID(d.from, sent)
@@ -711,7 +802,7 @@ func boxArg(u string, pos []string) (string, error) {
 }
 
 func cmdInbox(args []string) error {
-	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for HELPER|'*'] [--json]"
+	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for HELPER|'*'] [--json]"
 	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "read": false, "all": false, "json": false, "raw": false, "for": true})
 	if err != nil {
 		return bad(u, err)
@@ -772,6 +863,7 @@ func cmdInbox(args []string) error {
 			where = h + "'s pigeonhole in " + where
 		}
 		fmt.Printf("%s in %s.\n", what, where)
+		helperHint(dir, box, f)
 		if !f.has("all") && !f.has("read") && viaHost == "" && !f.has("for") {
 			if n := len(fl.apply(loadBox(dir, box, []string{"read"}, false))); n > 0 {
 				fmt.Printf("(%d read: --all shows them.)\n", n)
@@ -805,6 +897,7 @@ func cmdInbox(args []string) error {
 			fmt.Printf("\n✗ %s: %s. Don't trust who it says it's from.\n", m.ID, m.SignatureNote)
 		}
 	}
+	helperHint(dir, box, f)
 	return nil
 }
 
@@ -853,6 +946,7 @@ func cmdPull(args []string) error {
 	if f.has("json") {
 		return printJSON(ms)
 	}
+	defer helperHint(dir, box, f)
 	what := "mail"
 	if h := f.get("for"); h == "*" {
 		what = "mail, every pigeonhole,"
@@ -963,6 +1057,9 @@ func cmdFile(args []string) error {
 		return nil
 	}
 	name := f.pos[1]
+	if !fileRE.MatchString(name) || filepath.Base(name) != name {
+		return fmt.Errorf("%q isn't a plain file name, so it's not handed out", name)
+	}
 	found := false
 	for _, a := range m.Attachments {
 		found = found || a == name
@@ -980,6 +1077,12 @@ func cmdFile(args []string) error {
 // handOver writes an attachment out once it's checked: never a file that
 // isn't what was sent, and a word when nobody vouches for who sent it.
 func handOver(m *Message, name string, data []byte) error {
+	if !fileRE.MatchString(name) || filepath.Base(name) != name {
+		return fmt.Errorf("%q isn't a plain file name, so it's not handed out", name)
+	}
+	if !contains(m.Attachments, name) {
+		return fmt.Errorf("%s has no attachment %q", m.ID, name)
+	}
 	verify(m)
 	if err := checkAttachment(m, name, data); err != nil {
 		return err
@@ -1020,6 +1123,60 @@ func boxFlag(f flags) []string {
 	return out
 }
 
+// letterFileThere says a letter's file is in a pigeonhole, readable or not:
+// gc never takes a damaged letter's attachments for leftovers.
+func letterFileThere(dir, box, helper, id string) bool {
+	for _, s := range stateDirs {
+		if _, err := os.Stat(filepath.Join(slotDir(dir, box, helper), s.dir, id+".md")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// slotEmpty says a pigeonhole holds nothing at all.
+func slotEmpty(dir, box, helper string) bool {
+	for _, sub := range []string{"new", "read", "archive", "files"} {
+		if ents, err := os.ReadDir(filepath.Join(slotDir(dir, box, helper), sub)); err == nil && len(ents) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// helperHint says, under a person's own inbox, that their helpers have
+// unread mail of their own (with the store here; status says it anywhere).
+func helperHint(dir, box string, f flags) {
+	if f.has("for") || f.has("json") {
+		return
+	}
+	var hs []string
+	if viaHost != "" {
+		// The store's elsewhere: ask it, for this box only.
+		out, err := remoteBytes(viaHost, "status", []string{"--box", box, "--json"})
+		var st []boxStatus
+		if err != nil || json.Unmarshal(out, &st) != nil || len(st) == 0 {
+			return
+		}
+		for h, n := range st[0].HelpersUnread {
+			hs = append(hs, fmt.Sprintf("%s %d", h, n))
+		}
+		sort.Strings(hs)
+	} else {
+		if dir == "" {
+			return
+		}
+		for _, h := range helpers(dir, box) {
+			if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+				hs = append(hs, fmt.Sprintf("%s %d", h, n))
+			}
+		}
+	}
+	if len(hs) > 0 {
+		fmt.Printf("(unread for helpers: %s. deaddrop inbox --for '*')\n", strings.Join(hs, ", "))
+	}
+}
+
 // findFor finds one letter by id: in the pigeonhole --for names, else in any
 // of the box's (ids are unique across them).
 func findFor(dir, box string, f flags, id string, withBody bool) (*Message, error) {
@@ -1028,7 +1185,17 @@ func findFor(dir, box string, f flags, id string, withBody bool) (*Message, erro
 		return nil, err
 	}
 	if helper != "" && !all {
-		return findIn(dir, box, helper, id, withBody)
+		m, err := findIn(dir, box, helper, id, withBody)
+		if err != nil {
+			if other, err2 := findAnywhere(dir, box, id, false); err2 == nil {
+				where := "the person's own pigeonhole"
+				if other.Pigeonhole != "" {
+					where = other.Pigeonhole + "'s pigeonhole"
+				}
+				return nil, fmt.Errorf("%s isn't in %s's pigeonhole; it's in %s", id, helper, where)
+			}
+		}
+		return m, err
 	}
 	return findAnywhere(dir, box, id, withBody)
 }
@@ -1036,7 +1203,7 @@ func findFor(dir, box string, f flags, id string, withBody bool) (*Message, erro
 // ---- marking ----
 
 func cmdMark(args []string) error {
-	const u = "mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for HELPER|'*']"
+	const u = "mark read|unread|archive ID... | --tag T... [--from WHO]... [--since D] [--box WHO] [--for HELPER|'*']"
 	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
@@ -1053,6 +1220,13 @@ func cmdMark(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
+	var uniq []string
+	for _, id := range ids {
+		if !contains(uniq, id) {
+			uniq = append(uniq, id)
+		}
+	}
+	ids = uniq
 	if len(ids) > 0 && !fl.empty() {
 		return badf(u, "ids or --tag/--from, not both")
 	}
@@ -1066,6 +1240,10 @@ func cmdMark(args []string) error {
 	dir, err := storeDir()
 	if err != nil {
 		return err
+	}
+	// A box that isn't there has nothing to mark: never make one by asking.
+	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+		return fmt.Errorf("there's no box %s", box)
 	}
 	unlock, err := lockBox(dir, box)
 	if err != nil {
@@ -1121,12 +1299,14 @@ func cmdMark(args []string) error {
 // ---- the whole store ----
 
 type boxStatus struct {
-	Box      string   `json:"box"`
-	Unread   int      `json:"unread"`
-	Urgent   int      `json:"urgent"`
-	Read     int      `json:"read"`
-	Archived int      `json:"archived"`
-	Newest   *Message `json:"newest_unread,omitempty"`
+	Box    string `json:"box"`
+	Unread int    `json:"unread"`
+	// HelpersUnread: unread mail in each helper's pigeonhole (0.6.4).
+	HelpersUnread map[string]int `json:"helpers_unread,omitempty"`
+	Urgent        int            `json:"urgent"`
+	Read          int            `json:"read"`
+	Archived      int            `json:"archived"`
+	Newest        *Message       `json:"newest_unread,omitempty"`
 }
 
 func statusOf(dir, box string) boxStatus {
@@ -1141,6 +1321,14 @@ func statusOf(dir, box string) boxStatus {
 	s.Read = countFiles(filepath.Join(dir, box, "read"))
 	s.Archived = countFiles(filepath.Join(dir, box, "archive"))
 	s.Newest = newest(unread)
+	for _, h := range helpers(dir, box) {
+		if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+			if s.HelpersUnread == nil {
+				s.HelpersUnread = map[string]int{}
+			}
+			s.HelpersUnread[h] = n
+		}
+	}
 	return s
 }
 
@@ -1156,20 +1344,37 @@ func countFiles(dir string) int {
 }
 
 func cmdStatus(args []string) error {
-	const u = "status [--json]"
-	f, err := parseFlags(args, map[string]bool{"json": false})
+	const u = "status [--box WHO]... [--json]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "box": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) > 0 {
-		return badf(u, "status takes nothing but --json")
+		return badf(u, "status takes --box and --json, nothing else")
 	}
 	dir, err := storeDir()
 	if err != nil {
 		return err
 	}
+	// Every box, or only those named: a front end asks for the viewer's own
+	// and never holds anyone else's counts.
+	list := boxes(dir)
+	if f.has("box") {
+		list = nil
+		for _, raw := range f.all("box") {
+			for _, w := range strings.Split(raw, ",") {
+				b, err := resolveBox("--box", strings.TrimSpace(w))
+				if err != nil {
+					return bad(u, err)
+				}
+				if !contains(list, b) {
+					list = append(list, b)
+				}
+			}
+		}
+	}
 	out := []boxStatus{}
-	for _, b := range boxes(dir) {
+	for _, b := range list {
 		out = append(out, statusOf(dir, b))
 	}
 	if f.has("json") {
@@ -1180,13 +1385,22 @@ func cmdStatus(args []string) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "BOX\tUNREAD\tURGENT\tREAD\tARCHIVED\tNEWEST UNREAD")
+	fmt.Fprintln(tw, "BOX\tUNREAD\tURGENT\tREAD\tARCHIVED\tHELPERS\tNEWEST UNREAD")
 	for _, s := range out {
 		newest := "-"
 		if s.Newest != nil {
-			newest = s.Newest.Subject + " (from " + s.Newest.From + ")"
+			newest = cleanLine(s.Newest.Subject+" (from "+s.Newest.From+")", 120)
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\n", s.Box, s.Unread, s.Urgent, s.Read, s.Archived, newest)
+		hs := []string{}
+		for h, n := range s.HelpersUnread {
+			hs = append(hs, fmt.Sprintf("%s %d", h, n))
+		}
+		sort.Strings(hs)
+		helpersCol := "-"
+		if len(hs) > 0 {
+			helpersCol = strings.Join(hs, ", ")
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", s.Box, s.Unread, s.Urgent, s.Read, s.Archived, helpersCol, newest)
 	}
 	return tw.Flush()
 }
@@ -1230,9 +1444,14 @@ func cmdGc(args []string) error {
 			files := filepath.Join(slotDir(dir, box, h), "files")
 			ents, _ := os.ReadDir(files)
 			for _, e := range ents {
-				if _, err := findIn(dir, box, h, e.Name(), false); err != nil && checkID(e.Name()) == nil {
+				if checkID(e.Name()) == nil && !letterFileThere(dir, box, h, e.Name()) {
 					os.RemoveAll(filepath.Join(files, e.Name()))
 				}
+			}
+			// A helper's pigeonhole with nothing at all left in it (not one
+			// file in new, read, archive or files, readable or not) goes too.
+			if h != "" && slotEmpty(dir, box, h) {
+				os.RemoveAll(slotDir(dir, box, h))
 			}
 		}
 		unlock()

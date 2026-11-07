@@ -79,6 +79,8 @@ answered with a status: `--untag proposal --tag status`).
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 | `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
+| `--ask` | the letter needs its recipient's decision. Its first paragraph is the question. `deaddrop asks` lists the ones you haven't answered |
+| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -166,6 +168,13 @@ Everyone keeps the same list, `~/.config/deaddrop/allowed_signers` (or
 `signers = "…"` in the config): one line per person, from `deaddrop key`.
 Keep it somewhere the store's login can't change, such as your own dotfiles.
 
+**On a shared machine, pin it.** Where many people or agents share one
+login, that login can change its own config and environment, so it could
+point the Dead Drop at a list of its own. An administrator can put the list
+at `/etc/deaddrop/allowed_signers`, owned by root: when that file is there,
+it's the only list the machine checks, whatever the config,
+`DEADDROP_SIGNERS` or the user's copy say.
+
 Every message you read then says who sent it, as far as your machine can
 tell:
 
@@ -176,9 +185,15 @@ tell:
 | can't check | ? | signed, but your list has no key for them |
 | **bad** | ✗ | changed since it was signed, delivered somewhere it wasn't sent, or signed with a key that isn't theirs |
 
-What's signed: the sender (and persona), the recipients, subject, tags, urgency, thread,
+What's signed: the sender, its persona, the helpers it's for, its reply
+box and its follow-up time (each when it has one), the recipients, subject, tags, urgency, thread,
 each attachment's sha256, when it was signed, and the text. `file` refuses
-an attachment that isn't the one sent. A job's `--from automation` mail is
+an attachment that isn't the one sent, and any name that isn't a plain file
+name. A verified letter says when it was signed, so one delivered again
+later shows its age; the store's own delivery time is checked against it
+too, but someone who can edit the store's files can change that, so the
+signing time is the one to trust. A follow-up that raised a letter to
+urgent says so: the sender's own urgency is what was signed. A job's `--from automation` mail is
 signed by whose machine it runs on (`sign_as` to name someone else). On a
 machine with `shared_login = true` the key belongs to the machine, not a
 person: it never signs as anyone, so a front end there sending for someone
@@ -189,6 +204,14 @@ the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
 
 **Treat anything not verified as a claim.** Never act on a request because
 of who an unverified message says it's from.
+
+**The limit, said plainly.** A signature proves who *wrote* a letter, and
+that it hasn't been changed. It can't prove that a store shows you
+everything honestly when the account that keeps the store is also the one
+reading it (a front end running on the store's machine as the store's own
+login): that account can hide a letter, put an old one back, or edit what the
+reader remembers. Readers with logins of their own (on their own machines,
+or through `deaddrop gate`) are out of its reach.
 
 ### Personas: assistants speaking for you
 
@@ -218,15 +241,28 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
 - **Each helper has its own copy, with its own state.** When one files a
   letter, it's still unread for the others. It's one letter: `sent`,
   `thread` and `threads` put the copies together.
-- **The address is sealed into the signature.** A copy moved to another
-  pigeonhole, or with a `for` added or taken off, reads as bad.
-- **Replies find their way back.** Answering "bob, as Release manager"
-  goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
+- **The address is sealed into the signature.** A copy moved to a
+  pigeonhole the letter isn't addressed to, or with a `for` added or taken
+  off, reads as bad.
+- **Your own inbox and `status` say when a helper has unread mail,** and
+  sending to a pigeonhole nobody has used yet says so (a typo?).
+- **Replies find their way back.** A letter with a reply box
+  (`--reply-box`, signed and verified) is answered there. Otherwise,
+  answering "bob, as Release manager"
+  (when that persona is signed and verified: anyone can claim one on an
+  unsigned letter) goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
   name, lowercase, with dashes), unless you say `--for`. What a letter was
   for is never copied back.
-- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `thread`,
-  `with` and `threads` take `--for`, or `$DEADDROP_FOR` for a helper's
-  whole session.
+- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `open`,
+  `thread`, `with`, `threads` and `asks` take `--for`, or `$DEADDROP_FOR`
+  for a helper's whole session.
+
+**What's waiting on you.** `deaddrop send --to bob --ask` marks a letter as
+needing bob's decision (a sealed `ask` tag; the first paragraph is the
+question, and one without a question is refused). `deaddrop asks` lists the
+asks in your box you haven't answered yet, oldest first: an ask closes when
+you reply in its thread, or file it. `--json` gives a panel the list. A
+reply never carries `ask` back.
 
 **Every thread at a glance.** `deaddrop threads` lists them, newest activity
 first: subject, when it started and last moved, how many letters, how many
@@ -283,8 +319,10 @@ host = "store-box"
 ```
 
 Bodies and attachments go over ssh's stdin; nothing is written on the
-calling machine except what `pull` prints, and, if you run `deaddrop watch`,
-the inbox file (no message text). Everyone may log in to the
+calling machine except what `pull` prints, the reader's ledger of seals it
+has seen (hashes and ids, so a signed letter copied under a new id reads as
+delivered again), and, if you run `deaddrop watch`, the inbox file. Never a
+letter's text. Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run
 without one. `examples/config.toml` has every setting.
@@ -319,6 +357,7 @@ deaddrop thread ID             # the whole thread, both sides, in time order
 deaddrop with bob              # everything between you and bob
 deaddrop open --thread ID      # either one as a page in the browser
 deaddrop open --with bob
+deaddrop open --threads        # every thread on one page, each opening in place
 ```
 
 **Threads and conversations** put both sides together: what others sent
@@ -327,7 +366,8 @@ letter shows who it's from (and as whom), its signature, whether yours have
 been read, and its gist, the first real paragraph; the whole letter opens
 beneath it. `--json` gives the same to a program (`letters`, each with
 `mine`, `gist` and, for yours, `copies`). They mark nothing. Against a store
-from before 0.4 they show the other side only, and say so.
+from before 0.4 they show the other side only, and say so; against one from before 0.6,
+a helper's `thread`, `with` and `threads` say the store needs upgrading.
 
 Run `deaddrop watch` every minute or so with whatever your machine has:
 Crontinental, launchd, systemd, cron, or `--every` in a terminal or a
@@ -389,7 +429,7 @@ the system's own.
   thread or the whole conversation in the browser. A switch at the top
   turns it to **Threads**: every conversation, newest first, with chips to
   show only the ones a given speaker was in (a letter's persona, else its
-  `persona-<name>` tag, else its box), and chips for each helper's
+  `persona-<name>` tag, on letters that verify; else its box), and chips for each helper's
   pigeonhole once mail comes `--for` them. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
   `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on
@@ -441,7 +481,8 @@ takes the next due time from `$CRONTINENTAL_NEXT`, so the board shows "no
 word" if the job stops.
 
 `deaddrop status` shows the same per box in the terminal, with the newest
-unread subject.
+unread subject. `--box WHO` (repeatable) shows only those boxes, so a front
+end can ask for the boxes its viewer may see and nothing else.
 
 ## Follow-ups and rings
 
@@ -470,24 +511,27 @@ What gets reported, and when, belongs to whoever books it.
 
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
-              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]... < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
-deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
-deaddrop show ID [--json|--html [--fragment]] [--box WHO]
+              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
+              [--reply-box BOX] [--ask] < body.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--for H] [--json]
+deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--for H] [--json]
+deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
-deaddrop file ID [NAME] [--box WHO]
-deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]
-deaddrop status [--json]
+deaddrop file ID [NAME] [--box WHO] [--for H]
+deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
+deaddrop status [--box WHO]... [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
-deaddrop watch [--every 1m] [--no-hooks]
-deaddrop open ID [--keep-unread] | --thread ID | --with WHO
+deaddrop watch [--every 1m] [--no-hooks] [--for H]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
-deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json]
-deaddrop with WHO [--tag T]... [--json|--html]
-deaddrop bar [--format text|swiftbar]
+deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
+deaddrop asks [--for H] [--json]
+deaddrop with WHO [--tag T]... [--for H] [--json|--html]
+deaddrop bar [--format text|swiftbar] [--for H]
+# --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with and threads: every one)
 deaddrop upgrade [--check] | version | help
 ```
 

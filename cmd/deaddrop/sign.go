@@ -26,8 +26,11 @@ import (
 // What's signed is a canonical text of everything the sender chose: who
 // from, the recipients, subject, tags, urgency, thread, the attachments'
 // names and sha256s, when it was signed, and the body. The id and the sent
-// time are the store's, so they aren't signed; a copy delivered again later,
-// or to another box, fails the recipients or the time check.
+// time are the store's, so they aren't signed; a copy moved to a box or
+// pigeonhole the letter doesn't name fails the recipients check, and the
+// reader's seal ledger (ledger.go) catches a copy that turns up again under
+// another id. Neither holds against someone who can write both the store and
+// the reader's own state (see the limit in design.md).
 
 const signNamespace = "deaddrop"
 
@@ -51,14 +54,31 @@ type attachSum struct{ name, sum string }
 // verify; v2 adds the persona. Taking a persona off, or putting one on,
 // changes which is checked, and the signature fails.
 //
-// v3 (0.6) adds the helpers it's addressed to, and is used only when there
-// are some, so v1 and v2 letters verify as they always did.
-func signedPayload(from, persona string, helpers []string, recipients []string, subject string, tags []string, urgency, thread string,
+// v3 (0.6) adds the helpers it's addressed to, v4 (0.7.0) a reply box, and
+// v5 (0.7.0) a follow-up time. Each is used only when the letter has that
+// field, so a letter verifies as the version it was signed as.
+func signedPayload(from, persona string, helpers []string, replyBox, followUp string, recipients []string, subject string, tags []string, urgency, thread string,
 	sums []attachSum, signedAt string, body string) []byte {
 	var b bytes.Buffer
 	q, _ := json.Marshal(subject)
 	p, _ := json.Marshal(persona)
 	switch {
+	case followUp != "":
+		// v5 (0.7.0) seals the follow-up time: only a letter its sender gave
+		// a follow-up can be raised to urgent and still verify.
+		fmt.Fprintf(&b, "deaddrop signed message v5\n")
+		fmt.Fprintf(&b, "from: %s\n", from)
+		fmt.Fprintf(&b, "persona: %s\n", p)
+		fmt.Fprintf(&b, "for: %s\n", strings.Join(helpers, ","))
+		fmt.Fprintf(&b, "reply_box: %s\n", replyBox)
+		fmt.Fprintf(&b, "follow_up: %s\n", followUp)
+	case replyBox != "":
+		// v4 (0.7.0) adds the reply box; only for letters that name one.
+		fmt.Fprintf(&b, "deaddrop signed message v4\n")
+		fmt.Fprintf(&b, "from: %s\n", from)
+		fmt.Fprintf(&b, "persona: %s\n", p)
+		fmt.Fprintf(&b, "for: %s\n", strings.Join(helpers, ","))
+		fmt.Fprintf(&b, "reply_box: %s\n", replyBox)
 	case len(helpers) > 0:
 		fmt.Fprintf(&b, "deaddrop signed message v3\n")
 		fmt.Fprintf(&b, "from: %s\n", from)
@@ -127,8 +147,25 @@ func signKey() (string, error) {
 	return expandHome(c.SignKey), nil
 }
 
-// signersPath is this machine's list of who holds which key.
+// systemSigners is a machine's pinned list of who holds which key, put
+// there by its administrator. When it's there it's the only list checked:
+// on a machine many people (or agents) share one login, that login can
+// change its own config and environment, but not a root-owned file.
+var systemSigners = "/etc/deaddrop/allowed_signers"
+
+// pinnedSigners says the machine's administrator has pinned the list.
+func pinnedSigners() bool {
+	info, err := os.Stat(systemSigners)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// signersPath is this machine's list of who holds which key: the pinned
+// one if there is one, else $DEADDROP_SIGNERS, signers in the config, or
+// allowed_signers beside the config.
 func signersPath() string {
+	if pinnedSigners() {
+		return systemSigners
+	}
 	if p := os.Getenv("DEADDROP_SIGNERS"); p != "" {
 		return expandHome(p)
 	}
@@ -197,7 +234,58 @@ func sumsOf(m *Message) []attachSum {
 // machine's list of signers. It needs the body.
 func verify(m *Message) {
 	m.Signature, m.SignatureNote = verifyState(m)
+	if m.Signature == sigVerified {
+		checkLedger(m)
+	}
 }
+
+// wellFormed checks every header field a signature covers, before anything
+// from them is shown or signed over: names are names, tags are tags, files
+// are plain file names, sums are sums. A list item with a comma or a newline
+// in it would otherwise sign the same as two items.
+func wellFormed(m *Message) bool {
+	name := func(s string) bool { return checkBox("", s) == nil }
+	if !(m.From == automation || name(m.From)) || !name(m.SignedBy) {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339, m.SignedAt); err != nil {
+		return false
+	}
+	for _, r := range append(append([]string{}, m.Recipients...), m.For...) {
+		if !name(r) {
+			return false
+		}
+	}
+	for _, t := range m.Tags {
+		if c, err := checkTag(t); err != nil || c != t {
+			return false
+		}
+	}
+	for _, a := range m.Attachments {
+		if !fileRE.MatchString(a) || filepath.Base(a) != a {
+			return false
+		}
+	}
+	if len(m.AttachmentSums) != 0 && len(m.AttachmentSums) != len(m.Attachments) {
+		return false
+	}
+	for _, s := range m.AttachmentSums {
+		if len(s) != 64 || strings.Trim(s, "0123456789abcdef") != "" {
+			return false
+		}
+	}
+	if m.ReplyBox != "" && !name(m.ReplyBox) {
+		return false
+	}
+	if m.FollowUp != "" {
+		if _, err := time.Parse(time.RFC3339, m.FollowUp); err != nil {
+			return false
+		}
+	}
+	return m.Urgency == normal || m.Urgency == fyi || m.Urgency == urgent
+}
+
+const tamperedHeader = "its header has been tampered with: a name, tag, file or time no sender could have signed"
 
 func verifyState(m *Message) (string, string) {
 	if m.Sig == "" {
@@ -205,6 +293,9 @@ func verifyState(m *Message) (string, string) {
 	}
 	if m.SignedBy == "" {
 		return sigBad, "a signature with no signer"
+	}
+	if !wellFormed(m) {
+		return sigBad, tamperedHeader
 	}
 	if m.From != automation && m.SignedBy != m.From {
 		return sigBad, fmt.Sprintf("signed by %s, but it says it's from %s", m.SignedBy, m.From)
@@ -240,20 +331,72 @@ func verifyState(m *Message) (string, string) {
 		return sigBad, err.Error()
 	}
 	defer done()
-	// A follow-up raises a message to urgent after it was signed.
-	urgencies := []string{m.Urgency}
-	if m.Raised != "" {
-		urgencies = []string{normal, fyi, urgent}
+	// A follow-up raises a message to urgent after it was signed, and says
+	// what it was. Only ever to urgent, and the note says so.
+	// What the letter could have been signed as. A follow-up time is sealed
+	// from 0.6.4 (v5); a letter signed earlier carries one unsealed, and is
+	// checked as it was signed. Only a sealed follow-up can have raised it.
+	type attempt struct {
+		urgency, followUp string
+		raise             bool
 	}
-	for _, u := range urgencies {
-		payload := signedPayload(m.From, m.Persona, m.For, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
+	var tries []attempt
+	if m.Raised != "" {
+		fu, err1 := time.Parse(time.RFC3339, m.FollowUp)
+		at, err2 := time.Parse(time.RFC3339, m.Raised)
+		switch {
+		case m.Urgency != urgent:
+			return sigBad, "marked raised by a follow-up, but it isn't urgent"
+		case m.FollowUp == "" || err1 != nil || err2 != nil || at.Before(fu):
+			return sigBad, "marked raised by a follow-up its sender never asked for"
+		case now().Before(fu):
+			// The shared login can at most do what the sender's own
+			// follow-up would have done, and not before its time.
+			return sigBad, "marked raised by its follow-up before the follow-up's time"
+		}
+		if m.UrgencyWas != normal && m.UrgencyWas != fyi {
+			return sigBad, tamperedHeader
+		}
+		// Sealed with its follow-up (0.6.4 on): the sender asked for this.
+		// Signed before follow-ups were sealed: the store raised it, which
+		// the letter can't vouch for, and it says so rather than reading bad.
+		tries = append(tries, attempt{m.UrgencyWas, m.FollowUp, true}, attempt{m.UrgencyWas, "", true})
+	} else {
+		if m.FollowUp != "" {
+			tries = append(tries, attempt{m.Urgency, m.FollowUp, false})
+		}
+		tries = append(tries, attempt{m.Urgency, "", false})
+	}
+	for _, t := range tries {
+		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, t.followUp, m.Recipients, m.Subject, m.Tags, t.urgency, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
-			if m.Persona != "" {
-				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona
+			if t.followUp == "" && m.FollowUp != "" {
+				// Not in what was signed (a letter from before 0.6.4, or one
+				// written onto it since): not shown as the sender's.
+				m.FollowUp = ""
 			}
-			return sigVerified, "signed by " + m.SignedBy
+			raised := ""
+			switch {
+			case t.raise && t.followUp != "":
+				raised = "; raised to urgent by its follow-up, not by the sender"
+			case t.raise:
+				// A raise the seal doesn't cover isn't shown: anyone could
+				// have written it. The letter keeps the urgency its sender
+				// signed, and says why.
+				m.Urgency, m.Raised = m.UrgencyWas, ""
+				raised = "; marked raised, but its seal covers no follow-up, so it shows the urgency its sender signed"
+			}
+			// When it was signed, too: a letter delivered again shows its age.
+			when := ""
+			if at, err := time.Parse(time.RFC3339, m.SignedAt); err == nil {
+				when = ", " + at.Local().Format("2006-01-02 15:04")
+			}
+			if m.Persona != "" {
+				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona + when + raised
+			}
+			return sigVerified, "signed by " + m.SignedBy + when + raised
 		}
 	}
 	// Whose key it is, by this machine's list: someone else's is a forgery;
@@ -308,6 +451,9 @@ func contains(xs []string, x string) bool {
 // sender's machine, so it goes to the store (and into the signature) as a
 // flag.
 func withPersona(cmd string, args []string) []string {
+	if rb := os.Getenv("DEADDROP_REPLY_BOX"); rb != "" && hops() == 0 && (cmd == "send" || cmd == "reply") && !hasFlag(args, "reply-box") {
+		args = append(append([]string{}, args...), "--reply-box", rb)
+	}
 	p := os.Getenv("DEADDROP_AS")
 	if p == "" || hops() > 0 || (cmd != "send" && cmd != "reply") {
 		return args
@@ -325,7 +471,7 @@ func withPersona(cmd string, args []string) []string {
 
 // readsFor are the commands $DEADDROP_FOR points at a helper's pigeonhole.
 var readsFor = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "file": true,
-	"mark": true, "watch": true, "bar": true, "thread": true, "with": true, "threads": true, "open": true}
+	"mark": true, "watch": true, "bar": true, "thread": true, "with": true, "threads": true, "open": true, "asks": true}
 
 // withFor adds $DEADDROP_FOR to a reading command that doesn't name a
 // pigeonhole, so a helper's session can set it once. It's added here, on the
@@ -346,6 +492,19 @@ func withFor(cmd string, args []string) []string {
 	return append(append([]string{}, args...), "--for", h)
 }
 
+// hasFlag says args name --flag (before any --).
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--"+flag || strings.HasPrefix(a, "--"+flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // presetBody, when set, is the body: the signing step has read stdin already.
 var presetBody *string
 
@@ -357,6 +516,9 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	if hops() > 0 || (cmd != "send" && cmd != "reply") {
 		return cmd, args, nil
 	}
+	// Whatever can't be signed goes on as the person typed it, so its
+	// errors name their own command (a reply's, not the send it became).
+	origCmd, origArgs := cmd, args
 	key, err := signKey()
 	if err != nil || key == "" {
 		return cmd, args, err
@@ -368,7 +530,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	}
 	f, err := parseFlags(args, sendFlags)
 	if err != nil || f.has("signature") {
-		return cmd, args, nil // send says what's wrong
+		return origCmd, origArgs, nil // the command says what's wrong
 	}
 	body, err := readBody()
 	if err != nil {
@@ -377,7 +539,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	presetBody = &body
 	d, err := draftOf(f)
 	if err != nil {
-		return cmd, args, nil // send says what's wrong
+		return origCmd, origArgs, nil // the command says what's wrong
 	}
 	d.body = body
 	if err := d.settle(); err != nil {
@@ -394,7 +556,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		// goes unsigned, as it should), only a job's automation mail, and
 		// only under a name the config gives it.
 		if d.from != automation || c.SignAs == "" {
-			return cmd, args, nil
+			return origCmd, origArgs, nil
 		}
 		signer = c.SignAs
 	} else if signer == automation {
@@ -411,11 +573,16 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		sums = append(sums, attachSum{filepath.Base(p), s})
 	}
 	at := now().UTC().Format(time.RFC3339)
-	sig, err := sign(key, signedPayload(d.from, d.persona, d.helpers, d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
+	sig, err := sign(key, signedPayload(d.from, d.persona, d.helpers, d.replyBox, followUpText(d.followUp), d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
 	if err != nil {
 		return cmd, args, err
 	}
 	out := append([]string{}, args...)
+	if fu := followUpText(d.followUp); fu != "" {
+		// Worked out once, here, and sealed: the store must not work out
+		// "2d" again a moment later and get another time.
+		out = append(out, "--follow-up", fu)
+	}
 	return "send", append(out, "--subject", d.subject, "--signed-by", signer, "--signed-at", at, "--signature", sig), nil
 }
 
@@ -427,6 +594,9 @@ func signAs() (string, error) {
 		return "", err
 	}
 	if c.SignAs != "" {
+		if err := checkBox("sign_as", c.SignAs); err != nil {
+			return "", fmt.Errorf("%s: %v", c.path, err)
+		}
 		return c.SignAs, nil
 	}
 	return explicitMe()
@@ -435,8 +605,8 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
@@ -462,7 +632,7 @@ func replyAsSend(args []string) (string, []string, error) {
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
-	out := []string{"--to", orig.From, "--reply-to", orig.ID, "--subject", subject}
+	out := []string{"--to", replyTo(&orig), "--reply-to", orig.ID, "--subject", subject}
 	for _, t := range kept {
 		out = append(out, "--tag", t)
 	}
@@ -479,6 +649,9 @@ func replyAsSend(args []string) (string, []string, error) {
 	}
 	if f.has("as") {
 		out = append(out, "--as", f.get("as"))
+	}
+	if f.has("reply-box") {
+		out = append(out, "--reply-box", f.get("reply-box"))
 	}
 	hs, err := replyHelpers(&orig, f)
 	if err != nil {
@@ -527,5 +700,8 @@ func cmdKey(args []string) error {
 		return fmt.Errorf("%s isn't an ssh public key", pub)
 	}
 	fmt.Printf("%s namespaces=\"%s\" %s %s\n", who, signNamespace, fields[0], fields[1])
+	if pinnedSigners() {
+		fmt.Fprintf(os.Stderr, "deaddrop: this machine checks signatures only against %s (pinned by its administrator)\n", systemSigners)
+	}
 	return nil
 }

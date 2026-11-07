@@ -31,10 +31,15 @@ type Message struct {
 	Persona string `json:"persona,omitempty"`
 	// For: the helpers it's addressed to, in the recipient's box (0.6).
 	// Each gets a copy in their own pigeonhole, with its own state.
-	For         []string  `json:"for,omitempty"`
-	Thread      string    `json:"thread,omitempty"`
-	FollowUp    string    `json:"follow_up,omitempty"`
-	Raised      string    `json:"raised,omitempty"`
+	For []string `json:"for,omitempty"`
+	// ReplyBox: where answers go, when not to the sender's own box (0.6.4),
+	// such as an assistant's own box. Sealed, and honoured only when verified.
+	ReplyBox string `json:"reply_box,omitempty"`
+	Thread   string `json:"thread,omitempty"`
+	FollowUp string `json:"follow_up,omitempty"`
+	Raised   string `json:"raised,omitempty"`
+	// UrgencyWas: what the sender signed, when a follow-up raised it (0.6.4).
+	UrgencyWas  string    `json:"urgency_was,omitempty"`
 	Attachments []string  `json:"attachments,omitempty"`
 	Sent        time.Time `json:"sent"`
 	Body        string    `json:"body,omitempty"`
@@ -118,13 +123,14 @@ func newID(from string, at time.Time) string {
 }
 
 // cleanLine makes a one-line header value: no control characters, no
-// newlines, trimmed, at most n runes.
+// invisible format characters (a right-to-left override can reorder a line
+// on screen), no line or paragraph separators, trimmed, at most n runes.
 func cleanLine(s string, n int) string {
 	s = strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' {
 			return ' '
 		}
-		if unicode.IsControl(r) || r == ' ' || r == ' ' {
+		if unicode.IsControl(r) || (unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d') || r == '\u2028' || r == '\u2029' {
 			return -1
 		}
 		return r
@@ -197,6 +203,20 @@ func (m *Message) render() []byte { return m.renderAs(false) }
 func (m *Message) display() []byte { return m.renderAs(true) }
 
 func (m *Message) renderAs(forDisplay bool) []byte {
+	if forDisplay {
+		// What a person sees on a terminal: every value made safe, so a
+		// hand-edited header can't move the cursor or fake a line.
+		c := *m
+		safe := func(s string) string { return cleanLine(s, 400) }
+		c.ID, c.From, c.To, c.Thread, c.FollowUp, c.Raised, c.SignedBy, c.SignedAt, c.UrgencyWas =
+			safe(m.ID), safe(m.From), safe(m.To), safe(m.Thread), safe(m.FollowUp), safe(m.Raised), safe(m.SignedBy), safe(m.SignedAt), safe(m.UrgencyWas)
+		c.Urgency, c.ReplyBox = safe(m.Urgency), safe(m.ReplyBox)
+		c.unknown = nil
+		for _, l := range m.unknown {
+			c.unknown = append(c.unknown, safe(l))
+		}
+		m = &c
+	}
 	var b strings.Builder
 	q := func(s string) string { j, _ := json.Marshal(s); return string(j) }
 	b.WriteString("---\n")
@@ -212,6 +232,9 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 	if len(m.For) > 0 {
 		fmt.Fprintf(&b, "for: [%s]\n", strings.Join(m.For, ", "))
 	}
+	if m.ReplyBox != "" {
+		fmt.Fprintf(&b, "reply_box: %s\n", m.ReplyBox)
+	}
 	if m.Thread != "" {
 		fmt.Fprintf(&b, "thread: %s\n", m.Thread)
 	}
@@ -220,6 +243,9 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 	}
 	if m.Raised != "" {
 		fmt.Fprintf(&b, "raised: %s\n", m.Raised)
+	}
+	if m.UrgencyWas != "" {
+		fmt.Fprintf(&b, "urgency_was: %s\n", m.UrgencyWas)
 	}
 	if len(m.Attachments) > 0 {
 		a, _ := json.Marshal(m.Attachments)
@@ -287,15 +313,20 @@ func parseMessage(data []byte, withBody bool) (*Message, error) {
 		case "urgency":
 			m.Urgency = v
 		case "persona":
-			m.Persona = unquote(v)
+			// One clean line, however it was written: it's shown everywhere.
+			m.Persona = cleanLine(unquote(v), 60)
 		case "for":
 			m.For = list(v)
+		case "reply_box":
+			m.ReplyBox = v
 		case "thread":
 			m.Thread = v
 		case "follow_up":
 			m.FollowUp = v
 		case "raised":
 			m.Raised = v
+		case "urgency_was":
+			m.UrgencyWas = v
 		case "attachments":
 			m.Attachments = list(v)
 		case "attachment_sha256":
@@ -360,10 +391,15 @@ func list(v string) []string {
 // sender is who it's from as a person reads it: "alice", or "alice, as Release
 // manager" when one of their robots wrote it.
 func (m *Message) sender() string {
-	if m.Persona != "" {
+	switch {
+	case m.Persona == "":
+		return m.From
+	case m.Signature == "" || m.Signature == sigVerified:
 		return m.From + ", as " + m.Persona
 	}
-	return m.From
+	// Anyone can write a persona onto a letter that doesn't verify. Said
+	// first, so a narrow column can't cut it off.
+	return m.From + " (unverified), as " + m.Persona
 }
 
 func (m *Message) hasTag(t string) bool {

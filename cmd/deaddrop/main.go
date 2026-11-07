@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -17,31 +18,34 @@ const usage = `deaddrop: a shared, tagged inbox of documents
 Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
-                [--from automation] [--as NAME] < body.md
-  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] < body.md
+                [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] [--ask] < body.md
+  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
+                [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 
-Collect it:
-  deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--json]
-  deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]
-  deaddrop show ID [--json|--html]  one message in full
-  deaddrop sent [--to WHO]... [--tag T]... [--since D] [--json]
+Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
+  deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for H] [--json]
+  deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since D] [--unread|--all] [--for H] [--json]
+  deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]   one message in full
+  deaddrop sent [--to WHO]... [--tag T]... [--since D] [--box WHO] [--json]
                                    what you sent, with each copy's state
-  deaddrop file ID [NAME]          an attachment, on stdout (no NAME: list them)
+  deaddrop file ID [NAME] [--box WHO] [--for H]   an attachment (no NAME: list them)
   deaddrop mark read|unread|archive ID... [--box WHO]
-  deaddrop mark read|unread|archive --tag T... [--from WHO]... [--box WHO]
+  deaddrop mark read|unread|archive --tag T... [--from WHO]... [--since D] [--box WHO] [--for H]
 
 On your own machine:
-  deaddrop watch [--every 1m]      keep the inbox file current, run new.d hooks
-  deaddrop open ID                 read one in the browser, and mark it read
-  deaddrop thread ID | with WHO    both sides, in time order (--json, --html)
-  deaddrop threads [--letters] [--json]   every thread, newest activity first
-  deaddrop open --thread ID | --with WHO   the same, in the browser
-  deaddrop bar [--format swiftbar] the inbox file as a line, or a menu
+  deaddrop watch [--every 1m] [--no-hooks] [--for H]   keep the inbox file current, run new.d hooks
+  deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
+  deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
+  deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
+  deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json|--html]
+                                   every thread, newest activity first
+  deaddrop open --thread ID | --with WHO | --threads [--for H]   the same, in the browser
+  deaddrop bar [--format text|swiftbar] [--for H]   the inbox file as a line, or a menu
   deaddrop key                     your line for everyone's allowed_signers
 
 Look after it:
-  deaddrop status [--json]         per box: unread, urgent, newest subject
-  deaddrop firetower [--next 6m|TIME|none]   one lookout per box, mail/<who>/inbox
+  deaddrop status [--box WHO]... [--json]   per box: unread, urgent, helpers' unread, newest subject
+  deaddrop firetower [--next 6m|TIME|none] [--box WHO]...   one lookout per box, mail/<who>/inbox
   deaddrop gc [--days 30]          archived mail older than that goes
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help
@@ -52,6 +56,11 @@ for inbox, pull and mark. You send as yourself, or a job sends --from
 automation; "automation" is a sender, never a box. With shared_login in the
 config, the login name is never used.
 
+A helper (an assistant working for someone) reads its own pigeonhole with
+--for, or $DEADDROP_FOR for a whole session, and signs as a persona with
+--as, or $DEADDROP_AS. --reply-box (or $DEADDROP_REPLY_BOX) asks for answers
+at another box, such as its own; reply honours it when the letter verifies.
+
 The body is Markdown on stdin. With no --subject, the subject is the
 document's first heading (or its first line). Several --tag on inbox, pull
 and mark all have to match; several --from match any of them. pull prints
@@ -61,7 +70,9 @@ Crontinental job that raises the message to urgent if it's still unread then.
 
 Messages are signed with your ssh key (sign_key in the config) and checked
 against your own allowed_signers: inbox, pull and show say whether each one
-is verified, unsigned, can't be checked, or BAD (forged or changed).
+is verified, unsigned, can't be checked, or BAD (forged or changed). On a
+machine whose administrator put a list at /etc/deaddrop/allowed_signers,
+that's the only one checked.
 
 Never put a secret in a message: name where it lives instead.
 
@@ -131,6 +142,7 @@ func main() {
 }
 
 func dispatch(cmd string, args []string) error {
+	defer saveLedger()
 	switch cmd {
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
@@ -216,22 +228,21 @@ func refreshInbox(args []string) {
 	if os.Getenv("DEADDROP_LOCAL") == "1" || hops() > 0 {
 		return
 	}
-	// The pigeonhole the mark was in: a helper's has its own inbox file.
-	for i, a := range args {
-		if a == "--for" && i+1 < len(args) && args[i+1] != "*" {
-			watchFor = strings.ToLower(args[i+1])
-		} else if strings.HasPrefix(a, "--for=") && a != "--for=*" {
-			watchFor = strings.ToLower(strings.TrimPrefix(a, "--for="))
+	// Every inbox file watched here, the person's and each helper's: a mark
+	// by id may have moved a letter in any of them.
+	me, err := whoAmI()
+	if err != nil {
+		return
+	}
+	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
+	for _, path := range files {
+		base := strings.TrimSuffix(filepath.Base(path), ".json")
+		watchFor = strings.TrimPrefix(strings.TrimPrefix(base, "inbox"), "-")
+		if in := readInbox(); in != nil && in.Box == me && in.For == watchFor {
+			watchPass(false)
 		}
 	}
-	in := readInbox()
-	if in == nil {
-		return
-	}
-	if me, err := whoAmI(); err != nil || me != in.Box {
-		return
-	}
-	watchPass(false)
+	watchFor = ""
 }
 
 // readsHere are the commands whose messages are checked on the reader's
@@ -245,6 +256,7 @@ var here = map[string]func([]string) error{
 	"key":     cmdKey,
 	"thread":  cmdThread,
 	"threads": cmdThreads,
+	"asks":    cmdAsks,
 	"with":    cmdWith,
 	"watch":   cmdWatch,
 	"open":    cmdOpen,

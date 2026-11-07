@@ -121,7 +121,7 @@ class Helpers(DeadDrop):
         self.assertEqual(log.read_text(), "planner For the planner\n")
         f = json.loads((self.tmp / "state" / "inbox-planner.json").read_text())
         self.assertEqual((f["for"], [m["subject"] for m in f["messages"]]), ("planner", ["For the planner"]))
-        self.assertEqual(self.dd("bar", "--for", "planner", **bob).stdout.strip(), "1 unread")
+        self.assertEqual(self.dd("bar", "--for", "planner", **bob).stdout.strip(), "for planner: 1 unread")
         # mark --for brings the helper's file up to date.
         self.dd("mark", "read", "--from", "alice", "--for", "planner", **bob)
         self.assertEqual(json.loads((self.tmp / "state" / "inbox-planner.json").read_text())["unread"], 0)
@@ -203,3 +203,103 @@ class Topics(DeadDrop):
         opener = script(self.tmp / "opener", f'cp "$1" "{opened}"\n')
         self.dd("open", "--thread", id, "--for", "planner", DEADDROP_FROM="bob", DEADDROP_OPENER=str(opener))
         self.assertIn("For the planner", opened.read_text())
+
+
+class PigeonholeReview(DeadDrop):
+    """Review eawm: what the pigeonholes got wrong."""
+
+    def setUp(self):
+        super().setUp()
+        self.signers = signers(self.tmp / "allowed_signers", "alice", "bob")
+
+    def env(self, **extra):
+        e = super().env(**extra)
+        e.setdefault("DEADDROP_SIGNERS", str(self.signers))
+        e.setdefault("DEADDROP_STATE", str(self.tmp / "state"))
+        return e
+
+    def signed(self, who="alice"):
+        return dict(DEADDROP_FROM=who, DEADDROP_SIGN_KEY=key(who)[0])
+
+    def box(self, who, *args, **env):
+        env.setdefault("DEADDROP_FROM", who)
+        return self.inbox(*args, **env)
+
+    def test_the_person_hears_about_helper_mail_and_typos(self):
+        p = self.dd("send", "--to", "bob", "--for", "planer", input="# Typo\n\nx\n")
+        self.assertIn("no planer pigeonhole yet", p.stderr)
+        self.assertIn("unread for helpers: planer 1", self.dd("inbox", DEADDROP_FROM="bob").stdout)
+        st = {s["box"]: s for s in json.loads(self.dd("status", "--json").stdout)}
+        self.assertEqual(st["bob"]["helpers_unread"], {"planer": 1})
+        self.assertIn("planer 1", self.dd("status").stdout)
+        # Filed and gone: the empty pigeonhole goes with it.
+        self.dd("mark", "archive", "--from", "alice", "--for", "planer", DEADDROP_FROM="bob")
+        self.dd("gc", "--days", "1", DEADDROP_NOW=at(60 * 24 * 3))
+        self.assertFalse((self.dir / "bob" / "for" / "planer").exists())
+
+    def test_marking_by_id_refreshes_the_helpers_file(self):
+        bob = dict(DEADDROP_FROM="bob")
+        self.send("# For the planner\n\nx\n", "--to", "bob", "--for", "planner")
+        self.dd("watch", "--for", "planner", **bob)
+        id = self.inbox("--for", "planner", **bob)[0]["id"]
+        self.dd("mark", "read", id, id, **bob)  # by id, twice: one move, no error
+        f = json.loads((self.tmp / "state" / "inbox-planner.json").read_text())
+        self.assertEqual(f["unread"], 0)
+        self.assertFalse((self.tmp / "state" / "inbox.json").exists())  # the person's untouched
+
+    def test_a_helper_session_replies_to_the_persons_mail(self):
+        id = self.send("# To bob himself\n\nx\n", "--to", "bob", **self.signed("alice"))
+        self.dd("reply", id, input="Yes.\n", DEADDROP_FOR="planner", **self.signed("bob"))
+        self.assertEqual([m["subject"] for m in self.box("alice")], ["Re: To bob himself"])
+
+    def test_a_letter_for_two_helpers_rings_once(self):
+        installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
+        installed.parent.mkdir(parents=True)
+        os.symlink(BIN, installed)
+        self.config.write_text("ring_urgent = true\n")
+        self.send("# Look\n\nx\n", "--to", "bob", "--for", "planner", "--for", "reviewer", "--follow-up", "1d")
+        jobs = [c for c in self.calls(self.cron_calls) if c[0] == "in"]
+        self.assertEqual(len({c[c.index("--name") + 1] for c in jobs}), 2)  # a name each
+        for c in jobs:
+            subprocess.run(c[c.index("--") + 1:], check=True, capture_output=True, env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(60 * 25)))
+        rings = [c for c in self.calls(self.cron_calls) if c[0] == "notify"]
+        self.assertEqual(len(rings), 1)
+
+    def test_a_reply_box_takes_the_answers(self):
+        # An assistant with a box of its own signs as its person and asks for
+        # answers there.
+        id = self.send("# A question\n\nx\n", "--to", "bob", "--reply-box", "alice-helper", **self.signed("alice"))
+        m = self.inbox(DEADDROP_FROM="bob")[0]
+        self.assertEqual((m["reply_box"], m["signature"]), ("alice-helper", "verified"))
+        p = self.dd("reply", id, input="An answer.\n", **self.signed("bob"))
+        self.assertIn("to alice-helper", p.stdout)
+        self.assertEqual([x["subject"] for x in self.inbox("alice-helper", DEADDROP_FROM="alice")], ["Re: A question"])
+        self.assertEqual(self.inbox(DEADDROP_FROM="alice"), [])
+        # Sealed: changed by hand, it reads bad, and a reply goes to alice.
+        path = next((self.dir / "bob" / "new").glob("*.md"))
+        path.write_text(path.read_text().replace("reply_box: alice-helper", "reply_box: mallory"))
+        self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["signature"], "bad")
+        p = self.dd("reply", id, input="Again.\n", DEADDROP_FROM="bob")
+        self.assertIn("isn't verified", p.stderr)
+        self.assertEqual(self.inbox("mallory", DEADDROP_FROM="carol"), [])
+        self.assertEqual([x["subject"] for x in self.inbox(DEADDROP_FROM="alice")], ["Re: A question"])
+
+    def test_a_reply_box_set_once(self):
+        self.send("# Q\n\nx\n", "--to", "bob", DEADDROP_REPLY_BOX="alice-helper", **self.signed("alice"))
+        self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["reply_box"], "alice-helper")
+        self.dd("send", "--to", "bob", "--reply-box", "Not A Box", input="# B\n\nx\n", ok=False)
+
+    def test_a_reply_box_typo_and_a_bad_variable_say_so(self):
+        p = self.dd("send", "--to", "bob", "--reply-box", "alice-helpr", input="# Q\n\nx\n")
+        self.assertIn("no box alice-helpr yet", p.stderr)
+        p = self.dd("send", "--to", "bob", input="# Q\n\nx\n", DEADDROP_REPLY_BOX="Not A Box", ok=False)
+        self.assertIn("$DEADDROP_REPLY_BOX", p.stderr)
+
+    def test_an_answer_counts_in_the_helpers_view(self):
+        bob = dict(DEADDROP_FROM="bob")
+        self.dd("send", "--to", "bob", "--for", "planner", "--ask", input="# Which?\n\nThis or that?\n")
+        ask = json.loads(self.dd("asks", "--for", "planner", "--json", **bob).stdout)[0]
+        self.dd("reply", ask["id"], input="This.\n", **bob)  # bob answers as himself
+        self.assertEqual(json.loads(self.dd("asks", "--for", "planner", "--json", **bob).stdout), [])
+        letters = json.loads(self.dd("thread", ask["id"], "--for", "planner", "--json", **bob).stdout)["letters"]
+        self.assertEqual([l["mine"] for l in letters], [False, True])

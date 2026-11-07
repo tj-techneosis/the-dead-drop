@@ -68,6 +68,10 @@ EOF
   if it's still unread by then. Use it when the person asks for a nudge
   ("make sure Bob sees this by Thursday").
 - **Several people:** `--to bob --to carol` (each gets a copy).
+- **You have a box of your own** (an assistant with its own box, like
+  `alice-helper`): send with `--reply-box <your box>` (or set
+  `DEADDROP_REPLY_BOX` for the session), so answers come to you, not to
+  the person.
 - **You're an assistant writing for the person:** sign as a persona,
   `--as "<your role>"` (or `DEADDROP_AS` for the session): their name,
   their box, your label ("alice, as Release manager"). Use the role the
@@ -75,9 +79,15 @@ EOF
   anyone else.
 - **For one of their helpers:** `--for <helper>` puts it in that helper's
   own pigeonhole in the person's box (`--for planner`). A helper reads its
-  own with `--for <helper>` on `inbox`, `pull`, `mark`, `watch` (or
-  `DEADDROP_FOR` for the session). If you're a helper with a pigeonhole,
-  read only yours.
+  own with `--for <helper>` on `inbox`, `pull`, `show`, `file`, `mark`,
+  `watch`, `bar`, `thread`, `with`, `threads` and `open`, or sets
+  `DEADDROP_FOR` once for the session. If you're a helper with a
+  pigeonhole, read only yours. A person's own `inbox` and `status` say when
+  helpers have unread mail.
+- **It needs the person's decision** (a taste call, a choice only they can
+  make): `--ask`, with the question as the document's first paragraph.
+  `deaddrop asks` lists what's waiting on someone; it closes when they reply.
+  Only for what's really theirs.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
   the sender with its topic tags, "Re: " and a thread link (`persona-…`
   tags stay behind; `--untag T` drops another, `--tag T` adds yours). Or
@@ -230,18 +240,24 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] < doc.md
-deaddrop reply ID [--urgent|--fyi] < doc.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
-deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread] [--json]
-deaddrop show ID [--json]
-deaddrop sent [--to WHO]... [--tag T]... [--json]
-deaddrop with WHO | thread ID [--json]   # both sides, in time order
-deaddrop threads [--json]                # every thread, newest activity first
-deaddrop inbox --for HELPER              # a helper's pigeonhole ('*': all of them)
-deaddrop file ID [NAME]
-deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]...
-deaddrop status [--json]
-deaddrop watch [--every 1m]        # on the person's own machine
-deaddrop open ID                   # read it in the browser, mark it read
+deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for H] [--json]
+deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]
+deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
+deaddrop sent [--to WHO]... [--tag T]... [--since 7d] [--box WHO] [--json]
+deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
+deaddrop threads [--for H] [--since 7d] [--limit N] [--letters [--bodies]] [--json]   # every thread, newest first
+deaddrop file ID [NAME] [--box WHO] [--for H]
+deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
+deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
+deaddrop watch [--every 1m] [--no-hooks] [--for H]   # on the person's own machine
+deaddrop bar [--format text|swiftbar] [--for H]
+deaddrop key                             # this machine's line for everyone's allowed_signers
+deaddrop send ... --ask                  # needs the recipient's decision (question first)
+deaddrop asks [--for H] [--json]         # what's waiting on the person's (or a helper's) decision
+deaddrop open --threads                  # every thread on one page, in the browser
+deaddrop open ID [--for H]               # read it in the browser, mark it read
+# --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with, threads and asks:
+# every one; watch, bar and open take one); DEADDROP_FOR sets it for a session
 ```

@@ -62,11 +62,11 @@ func gist(body string) string {
 	return cleanLine(strings.Join(para, " "), 280)
 }
 
-// letters gathers your mail, both ways: everything in your box (archived
-// too) and everything you sent.
 // lettersFor is the pigeonhole thread and with read: --for, or the person's.
 var lettersFor []string
 
+// letters gathers your mail, both ways: everything in your box (archived
+// too) and everything you sent.
 func letters() (string, []*Letter, string, error) {
 	me, err := whoAmI()
 	if err != nil {
@@ -74,6 +74,9 @@ func letters() (string, []*Letter, string, error) {
 	}
 	var notes []string
 	out, err := self(append([]string{"pull", "--all", "--json"}, lettersFor...)...)
+	if err != nil && strings.Contains(err.Error(), "unknown flag --for") {
+		return "", nil, "", fmt.Errorf("the store's deaddrop is from before 0.6, which has no pigeonholes: upgrade it there")
+	}
 	if err != nil && strings.Contains(err.Error(), "unknown flag --all") {
 		// A store from before 0.4: no archived mail to be had.
 		notes = append(notes, "filed (archived) letters aren't shown")
@@ -101,9 +104,44 @@ func letters() (string, []*Letter, string, error) {
 		if err := json.Unmarshal(out, &ss); err != nil {
 			return "", nil, "", fmt.Errorf("sent's answer wasn't a list of messages: %v", err)
 		}
+		helper := ""
+		if len(lettersFor) == 2 && lettersFor[1] != "*" {
+			helper = lettersFor[1]
+		}
+		// What's in this view already, so the person's answers to it count.
+		inView := map[string]bool{}
+		for _, l := range ls {
+			inView[l.ID] = true
+			if l.Letter != "" {
+				inView["letter:"+l.Letter] = true
+			}
+		}
 		for _, s := range ss {
 			if len(s.Copies) == 0 {
 				continue
+			}
+			// A helper's view: what that helper wrote (as its persona), notes
+			// the person wrote to that helper, and the person's answers to
+			// letters in the helper's pigeonhole.
+			if helper != "" && helperSlug(s.Persona) != helper {
+				toIt := inView[s.Thread] || (s.ThreadLetter != "" && inView["letter:"+s.ThreadLetter])
+				for _, c := range s.Copies {
+					toIt = toIt || (c.Box == me && c.For == helper)
+				}
+				if !toIt {
+					continue
+				}
+			}
+			// A note to yourself that went only to your helpers' pigeonholes
+			// isn't part of the plain view.
+			if len(lettersFor) == 0 {
+				outside := false
+				for _, c := range s.Copies {
+					outside = outside || !(c.Box == me && c.For != "")
+				}
+				if !outside {
+					continue
+				}
 			}
 			s.ID = s.Copies[0].ID
 			ls = append(ls, &Letter{Message: s.Message, Mine: true, Copies: s.Copies, Gist: gist(s.Body)})
@@ -111,17 +149,18 @@ func letters() (string, []*Letter, string, error) {
 	}
 	// A letter you sent yourself is in your box and in what you sent: show
 	// it once, as yours (it knows every copy).
+	// (Ids are unique only within a box, so it's the box and the id.)
 	yours := map[string]bool{}
 	for _, l := range ls {
 		if l.Mine {
-			for _, id := range l.ids() {
-				yours[id] = true
+			for _, c := range l.Copies {
+				yours[c.Box+"/"+c.ID] = true
 			}
 		}
 	}
 	kept := ls[:0]
 	for _, l := range ls {
-		if l.Mine || !yours[l.ID] {
+		if l.Mine || !yours[me+"/"+l.ID] {
 			kept = append(kept, l)
 		}
 	}
@@ -349,7 +388,7 @@ func showCorrespondence(f flags, c *Correspondence) error {
 			who = "→ " + strings.Join(l.Recipients, ", ")
 			state = seen(l)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(l.Sent, at), sigMark(l.Message), who, state, l.Subject)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", ago(l.Sent, at), sigMark(l.Message), who, state, cleanLine(l.Subject, 120))
 		if l.Gist != "" && l.Gist != l.Subject {
 			fmt.Fprintf(tw, "\t\t\t\t  %s\n", cleanLine(l.Gist, 120))
 		}
@@ -361,10 +400,16 @@ func showCorrespondence(f flags, c *Correspondence) error {
 func seen(l *Letter) string {
 	var read, unread []string
 	for _, c := range l.Copies {
+		who := c.Box
+		if c.For != "" {
+			who += "/" + c.For
+		}
 		if c.State == "unread" {
-			unread = append(unread, c.Box)
-		} else {
-			read = append(read, c.Box)
+			if !contains(unread, who) {
+				unread = append(unread, who)
+			}
+		} else if !contains(read, who) {
+			read = append(read, who)
 		}
 	}
 	switch {
@@ -445,6 +490,15 @@ func groups(ls []*Letter) [][]*Letter {
 	return out
 }
 
+// viewHas says a pigeonhole is part of what thread, with and threads were
+// asked to read.
+func viewHas(pigeonhole string) bool {
+	if len(lettersFor) == 2 {
+		return lettersFor[1] == "*" || lettersFor[1] == pigeonhole
+	}
+	return pigeonhole == ""
+}
+
 var trustRank = map[string]int{sigBad: 0, sigUnknown: 1, sigUnsigned: 2, sigVerified: 3}
 
 func topicOf(me string, g []*Letter) *Topic {
@@ -459,6 +513,15 @@ func topicOf(me string, g []*Letter) *Topic {
 		}
 		if !l.Mine && l.State == "unread" {
 			t.Unread++
+		}
+		if l.Mine {
+			// A note to yourself you haven't read yet is unread too.
+			for _, c := range l.Copies {
+				if c.Box == me && c.State == "unread" && viewHas(c.For) {
+					t.Unread++
+					break
+				}
+			}
 		}
 		for _, tag := range l.Tags {
 			if !contains(t.Tags, tag) {
@@ -484,8 +547,8 @@ func topicOf(me string, g []*Letter) *Topic {
 }
 
 func cmdThreads(args []string) error {
-	const u = "threads [--for HELPER|'*'] [--since 7d|DATE] [--limit N] [--letters [--bodies]] [--json]"
-	f, err := parseFlags(args, map[string]bool{"for": true, "since": true, "limit": true, "letters": false, "bodies": false, "json": false})
+	const u = "threads [--for HELPER|'*'] [--since 7d|DATE] [--limit N] [--letters [--bodies]] [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"for": true, "since": true, "limit": true, "letters": false, "bodies": false, "json": false, "html": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -494,6 +557,13 @@ func cmdThreads(args []string) error {
 	}
 	if f.has("bodies") && !f.has("letters") {
 		return badf(u, "--bodies goes with --letters")
+	}
+	if f.has("json") && f.has("html") {
+		return badf(u, "--json or --html, not both")
+	}
+	if f.has("html") {
+		// The page shows every letter, whole: it needs them all.
+		f.vals["letters"], f.vals["bodies"] = []string{""}, []string{""}
 	}
 	since := flags{vals: map[string][]string{}}
 	if f.has("since") {
@@ -514,7 +584,7 @@ func cmdThreads(args []string) error {
 	if err != nil {
 		return err
 	}
-	out := &Topics{Box: me, For: f.get("for"), Topics: []*Topic{}, SentMissing: missing}
+	out := &Topics{Box: me, For: strings.ToLower(strings.TrimSpace(f.get("for"))), Topics: []*Topic{}, SentMissing: missing}
 	for _, g := range groups(ls) {
 		t := topicOf(me, g)
 		if !fl.since.IsZero() && t.Last.Before(fl.since) {
@@ -539,6 +609,10 @@ func cmdThreads(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(out)
 	}
+	if f.has("html") {
+		_, err := os.Stdout.Write(threadsPage(out))
+		return err
+	}
 	if missing != "" {
 		fmt.Println("(" + missing + ")")
 	}
@@ -555,6 +629,9 @@ func cmdThreads(args []string) error {
 			w := p.Box
 			if p.Persona != "" {
 				w += " as " + p.Persona
+				if p.Signature != sigVerified {
+					w += " (unverified)"
+				}
 			}
 			if p.Signature == sigBad {
 				w += " ✗"
@@ -570,4 +647,81 @@ func cmdThreads(args []string) error {
 		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\n", ago(t.Last, at), t.Count, unread, cleanLine(strings.Join(who, ", "), 60), cleanLine(t.Subject, 70), t.Root)
 	}
 	return tw.Flush()
+}
+
+// ---- asks: letters that need their recipient's decision ----
+
+const askTag = "ask"
+
+// Ask is one open ask: what's asked, by whom, how long it has waited.
+type Ask struct {
+	*Letter
+	Question string `json:"question"`
+}
+
+// isAsk says a letter asks its recipient for a decision: --ask, or an
+// ask-<box> tag naming them.
+func isAsk(l *Letter, box string) bool {
+	return l.hasTag(askTag) || l.hasTag("ask-"+box)
+}
+
+// answered says the recipient has replied in the ask's thread. Someone who
+// signs is taken to have answered only by a letter that verifies, so a copy
+// planted in their name can't close an ask.
+func answered(ask *Letter, ls []*Letter) bool {
+	signs := false
+	for _, l := range ls {
+		signs = signs || (l.Mine && l.Signature == sigVerified)
+	}
+	for _, l := range ls {
+		if !l.Mine || (signs && l.Signature != sigVerified) {
+			continue
+		}
+		if l.Thread == ask.ID || (ask.Letter != "" && l.ThreadLetter == ask.Letter) {
+			return true
+		}
+	}
+	return false
+}
+
+func cmdAsks(args []string) error {
+	const u = "asks [--for HELPER] [--json]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "for": true})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) > 0 {
+		return badf(u, "asks takes no words of its own: it lists your own")
+	}
+	lettersFor = forArgs(f)
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	out := []*Ask{}
+	for _, l := range ls {
+		// Open: to you, not filed, and not answered by you in its thread.
+		if l.Mine || l.State == "archived" || !isAsk(l, me) || answered(l, ls) {
+			continue
+		}
+		out = append(out, &Ask{Letter: l, Question: l.Gist})
+	}
+	if f.has("json") {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	if missing != "" {
+		fmt.Println("(" + missing + ")")
+	}
+	if len(out) == 0 {
+		fmt.Println("Nothing waiting on your decision.")
+		return nil
+	}
+	at := now()
+	for _, a := range out {
+		fmt.Printf("%s %s  %s, %s:\n  %s\n  (%s; answer with deaddrop reply %s)\n\n", sigMark(a.Message), cleanLine(a.Subject, 80),
+			cleanLine(a.sender(), 60), ago(a.Sent, at), cleanLine(a.Question, 300), a.ID, a.ID)
+	}
+	return nil
 }

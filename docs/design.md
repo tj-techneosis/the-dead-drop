@@ -93,8 +93,16 @@ copied onto replies and could be stuck on by anyone. So a box has a
 pigeonhole per helper, `<box>/for/<helper>/`, the same new/read/archive
 folders again: state stays "which folder it's in", and each helper's copy
 has its own. The address is part of the letter and its signature; replies
-route by the persona that wrote (its name made into a pigeonhole's), never
-by what the original was for. One box, one key, one person.
+route by the persona that wrote (its name made into a pigeonhole's), and
+only when that persona is signed and verifies: anyone can claim one on an
+unsigned letter, which would send the answer where nobody reads. Never by
+what the original was for. One box, one key, one person.
+
+**A reply box.** Some people give an assistant a box of its own rather than
+a pigeonhole. `--reply-box` puts that box on a letter, sealed (v4 of the
+signed text), and `reply` answers there, as email's Reply-To does, but only
+when the letter verifies: written onto an unsigned letter, it would send the
+answer wherever a forger liked.
 
 ## Signatures
 
@@ -107,17 +115,23 @@ and checked where the reader is:
   sign`, namespace `deaddrop`), through the agent if they like. The key
   never reaches the store, so the store and its login can't sign.
 - **What's signed** is a canonical text of what the sender chose: from (and
-  persona, in v2 of the text, and the helpers it's for, in v3; each is used
-  only when there's something to say, so older letters verify as they
-  always did), the
+  persona, in v2 of the text; the helpers it's for, in v3; a reply box, in
+  v4; a follow-up time, in v5; each is used only when there's something to
+  say, so older letters verify as they always did), the
   recipients, subject, tags, urgency, thread, each attachment's name and
   sha256, when it was signed, and the body. The sender works it out with
   the same code the store uses, and the store checks the signature is of
   exactly that (by any key: it holds none), so a send that could never
   verify is refused at once rather than delivered. The id and the sent time
   are the store's and aren't signed; a copy moved to another box fails the
-  recipients, and one delivered again later fails the time (an hour's
-  slack). A follow-up raising it to urgent is allowed for.
+  recipients, and one the store delivers again later fails the time (an
+  hour's slack). The time check can't stop someone who edits the store's
+  files, since `sent` is the store's own line, so a verified letter also
+  says when it was signed: its age shows whatever the store says. A follow-up raising it to urgent records the urgency it had
+  (`urgency_was`), which is what's checked; the letter then says it was
+  raised by a follow-up, and only ever to urgent. Every field the signature
+  covers is checked for shape before anything else: a list item with a comma
+  in it would otherwise sign the same as two.
 - **Checked on the reader's machine**, against the reader's own
   `allowed_signers`, never the store's. With the store elsewhere, `inbox`,
   `pull`, `show` and `file` fetch the messages as they are (`--raw`) and
@@ -133,8 +147,18 @@ and checked where the reader is:
   breaks. Header fields a version doesn't know are kept when it rewrites a
   message, so an older store never strips a signature.
 
+**The limit.** Signatures prove who wrote a letter and that it wasn't changed.
+Against an account that can write both the store and the reader's own state
+(a reader running on the store's machine as the store's login), they can't
+prove the store shows everything honestly: that account can take a letter
+out, put a copy back, or edit the reader's seal ledger, and every rule added
+to catch one move opens another. The fix is a reader with a login of its own,
+which `deaddrop gate` gives a shared store.
+
 The list of keys is the trust: keep it where the store's login can't write,
-in each person's own dotfiles.
+in each person's own dotfiles. On a machine many share one login on, that
+login can change its own config and environment, so a root-owned list at
+`/etc/deaddrop/allowed_signers` wins over both when it's there.
 
 There are no permissions per box in this version. Anyone who can read the
 store can read every box. That's why **secrets never go in a message**: the
