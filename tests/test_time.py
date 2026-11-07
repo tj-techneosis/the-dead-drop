@@ -71,28 +71,57 @@ class Firetower(DeadDrop):
         self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "2 unread"])
         self.dd("firetower", "--smoke-after", "3h", "--fire-after", "1h", ok=False)
 
+    def rings(self):
+        return [c for c in self.calls(self.cron_calls) if c and c[0] == "notify"]
+
     def test_ring_once_when_a_box_goes_to_fire(self):
-        self.send("a\n", "--to", "bob")
+        self.send("a secret plan\n", "--to", "bob")
         ages = ("--smoke-after", "30m", "--fire-after", "3h", "--ring")
         self.clock = at(10)
-        self.dd("firetower", "--box", "bob", *ages)
-        self.assertEqual(self.calls(self.cron_calls), [])  # clear: no ring
+        self.dd("firetower", "--box", "bob", *ages)  # the first --ring run: notes, rings nothing
+        self.assertEqual(self.rings(), [])
         self.clock = at(200)
-        self.dd("firetower", "--box", "bob", *ages)
-        rings = [c for c in self.calls(self.cron_calls) if c[0] == "notify"]
+        self.dd("firetower", "--box", "bob", "--box", "bob", *ages)  # named twice: one ring
+        rings = self.rings()
         self.assertEqual(len(rings), 1)
         self.assertIn("deaddrop-box=bob", rings[0])
-        self.assertNotIn("a", [w for w in rings[0] if w == "a"])  # no letter text
-        # Still on fire: no second ring. Out and back in: one more.
+        self.assertEqual(rings[0][-1], "1 unread, 1 unheard, the oldest 3h")  # the board's line, no letter text
+        # Still on fire: no second ring. Heard, then a new fire: one more.
         self.clock = at(210)
         self.dd("firetower", "--box", "bob", *ages)
-        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 1)
+        self.assertEqual(len(self.rings()), 1)
         self.dd("pull", "bob")
         self.dd("firetower", "--box", "bob", *ages)
         self.send("b\n", "--to", "bob")
         self.clock = at(500)
         self.dd("firetower", "--box", "bob", *ages)
-        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 2)
+        self.assertEqual(len(self.rings()), 2)
+
+    def test_a_fire_already_burning_when_ring_starts_isnt_rung(self):
+        self.send("a\n", "--to", "bob")
+        self.clock = at(200)
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")
+        self.assertEqual(self.rings(), [])
+
+    def test_a_ring_that_fails_isnt_counted_as_rung(self):
+        self.send("a\n", "--to", "bob")
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")  # first run: notes
+        self.clock = at(200)
+        broken = self.tmp / "broken-crontinental"
+        broken.write_text("#!/bin/sh\necho no notify hooks >&2\nexit 1\n")
+        broken.chmod(0o755)
+        p = self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring", DEADDROP_CRONTINENTAL=str(broken), ok=False)
+        self.assertIn("could not ring", p.stderr)
+        # It works again: the fire that never rang rings now.
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")
+        self.assertEqual(len(self.rings()), 1)
+
+    def test_a_broken_fire_list_is_said_not_rung_from(self):
+        self.send("a\n", "--to", "bob")
+        self.dd("firetower", "--box", "bob", "--ring")
+        (self.tmp / "home" / ".local" / "state" / "deaddrop" / "firetower-fire.json").write_text("{not json")
+        p = self.dd("firetower", "--box", "bob", "--ring", ok=False)
+        self.assertIn("can't be read", p.stderr)
 
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")

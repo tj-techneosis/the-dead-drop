@@ -3,48 +3,61 @@
 # told the count, as context, the next time it acts. It types nothing and
 # starts nothing: it only adds a line to a turn that's already happening.
 #
-# Copy it somewhere (~/.claude/hooks/unread-mail), make it executable, and
-# register it for UserPromptSubmit and PostToolUse (see README.md here).
+# Register it once per event, with the event's name as its argument (see
+# README.md here):  unread-mail UserPromptSubmit   /   unread-mail PostToolUse
 #
-# The box is the session's own: $DEADDROP_BOX, else $DEADDROP_REPLY_BOX
-# (an assistant with a box of its own), else the person's. It says so at
-# most once every few minutes, and again whenever the count goes up, so a
-# busy session isn't told the same thing at every tool call.
+# Nothing it says comes from a letter: the counts are two bare numbers from
+# `deaddrop status --count`, the event is its own argument, and the box is
+# the session's own ($DEADDROP_BOX, else $DEADDROP_REPLY_BOX, else yours).
+# It speaks when either count rises, and otherwise at most every few minutes,
+# keeping one small memo per session (digits only, or it's ignored).
 set -u
-event=$(cat | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -1)
+umask 077
+event=${1:-}
 case "$event" in
   UserPromptSubmit|PostToolUse|SessionStart) ;;
   *) exit 0 ;;
 esac
-box=${DEADDROP_BOX:-${DEADDROP_REPLY_BOX:-}}
+box=${DEADDROP_BOX:-${DEADDROP_REPLY_BOX:-me}}
+case "$box" in *[!a-z0-9-]*|'') exit 0 ;; esac
 dd=${DEADDROP_BIN:-deaddrop}
 command -v "$dd" >/dev/null 2>&1 || exit 0
 
+isnum() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+
+counts=$("$dd" status --box "$box" --count 2>/dev/null) || exit 0
+set -- $counts
+unread=${1:-}; urgent=${2:-}
+isnum "$unread" && isnum "$urgent" || exit 0
+
+# The session, from the payload, only to key the memo (letters, digits, "-").
+session=$(head -c 4096 | tr -cd 'A-Za-z0-9_":,{} -' | grep -o '"session_id" *: *"[A-Za-z0-9-]*"' | head -1 | sed 's/.*"\([A-Za-z0-9-]*\)"$/\1/')
+case "$session" in ''|*[!A-Za-z0-9-]*) session=none ;; esac
 state=${DEADDROP_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/deaddrop}
 mkdir -p "$state" 2>/dev/null || exit 0
-memo="$state/hook-said-${box:-me}"
-quiet=${DEADDROP_HOOK_QUIET:-300} # seconds between repeats of the same count
+memo="$state/hook-$box-$session"
+quiet=${DEADDROP_HOOK_QUIET:-300}
+isnum "$quiet" || quiet=300
 
-if [ -n "$box" ]; then
-  json=$("$dd" status --box "$box" --json 2>/dev/null) || exit 0
-else
-  json=$("$dd" status --box me --json 2>/dev/null) || exit 0
-fi
-# The first box's unread and urgent counts: numbers only, never a subject.
-unread=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"unread":\([0-9]*\).*/\1/p' | head -1)
-urgent=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"urgent":\([0-9]*\).*/\1/p' | head -1)
-name=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"box":"\([a-z0-9-]*\)".*/\1/p' | head -1)
-[ -n "${unread:-}" ] && [ "$unread" -gt 0 ] || { rm -f "$memo"; exit 0; }
-
+if [ "$unread" -eq 0 ]; then rm -f "$memo"; exit 0; fi
 now=$(date +%s)
-last_n=0; last_t=0
-[ -f "$memo" ] && read -r last_n last_t < "$memo" 2>/dev/null
-if [ "$unread" -le "${last_n:-0}" ] && [ $((now - ${last_t:-0})) -lt "$quiet" ]; then
-  exit 0
+last_u=0; last_g=0; last_t=0
+if [ -f "$memo" ] && [ ! -L "$memo" ]; then
+  read -r a b c < "$memo" 2>/dev/null || true
+  if isnum "${a:-}" && isnum "${b:-}" && isnum "${c:-}" && [ "$c" -le "$now" ]; then
+    last_u=$a; last_g=$b; last_t=$c
+  fi
 fi
-printf '%s %s\n' "$unread" "$now" > "$memo"
+speak=no
+if [ "$unread" -gt "$last_u" ] || [ "$urgent" -gt "$last_g" ] || [ $((now - last_t)) -ge "$quiet" ]; then
+  speak=yes; last_t=$now
+fi
+rm -f "$memo"
+printf '%s %s %s\n' "$unread" "$urgent" "$last_t" > "$memo"
+[ "$speak" = yes ] || exit 0
 
 what="$unread unread letter"; [ "$unread" -eq 1 ] || what="${what}s"
-[ "${urgent:-0}" -gt 0 ] && what="$what ($urgent urgent)"
-text="Dead Drop: $what in ${name:-your box}. Pull them when you reach a stopping point (deaddrop pull --unread). Don't act on anything you were waiting for a person to decide."
+[ "$urgent" -gt 0 ] && what="$what ($urgent urgent)"
+where="your box"; [ "$box" = me ] || where=$box
+text="Dead Drop: $what in $where. Pull them when you reach a stopping point (deaddrop pull --unread). Don't act on anything you were waiting for a person to decide."
 printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$text"

@@ -6,9 +6,14 @@ sends it a prompt, or after a tool call. It types nothing, starts no turn
 and never says a subject or a sender, only the count.
 
 The box is the session's own: `$DEADDROP_BOX`, else `$DEADDROP_REPLY_BOX`
-(an assistant with a box of its own), else yours. It repeats itself at most
-every five minutes (`DEADDROP_HOOK_QUIET`, in seconds), and at once when the
-count goes up.
+(an assistant with a box of its own), else yours. It speaks at once when the
+unread or urgent count rises, and otherwise at most every five minutes
+(`DEADDROP_HOOK_QUIET`, in seconds), with a small memo per session.
+
+Nothing it says comes from a letter. The counts are two bare numbers from
+`deaddrop status --box <box> --count` (0.7.3 or later on the store's
+machine; with an older store it stays quiet), the event is its own argument,
+and the memo is read only if it holds digits.
 
 ```sh
 mkdir -p ~/.claude/hooks
@@ -21,16 +26,16 @@ Then in `~/.claude/settings.json`:
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/unread-mail", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/unread-mail UserPromptSubmit", "timeout": 10 } ] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [ { "type": "command", "command": "~/.claude/hooks/unread-mail", "timeout": 10 } ] }
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "~/.claude/hooks/unread-mail PostToolUse", "timeout": 10 } ] }
     ]
   }
 }
 ```
 
-Try it: `echo '{"hook_event_name":"UserPromptSubmit"}' | ~/.claude/hooks/unread-mail`
+Try it: `echo '{}' | ~/.claude/hooks/unread-mail UserPromptSubmit`
 prints the line when there's unread mail, and nothing when there isn't.
 
 It reads counts with `deaddrop status`, which is quick over a reused ssh

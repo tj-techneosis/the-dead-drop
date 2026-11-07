@@ -1403,8 +1403,8 @@ func countFiles(dir string) int {
 }
 
 func cmdStatus(args []string) error {
-	const u = "status [--box WHO]... [--json]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "box": true})
+	const u = "status [--box WHO]... [--json] | status --box WHO --count"
+	f, err := parseFlags(args, map[string]bool{"json": false, "box": true, "count": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -1435,6 +1435,16 @@ func cmdStatus(args []string) error {
 	out := []boxStatus{}
 	for _, b := range list {
 		out = append(out, statusOf(dir, b))
+	}
+	// --count: one box's unread and urgent, as two bare numbers, for a
+	// script that shouldn't have to parse anything (a hook in an agent's
+	// session). Nothing anyone sends can change its shape.
+	if f.has("count") {
+		if !f.has("box") || len(out) != 1 {
+			return badf(u, "--count: one --box")
+		}
+		fmt.Printf("%d %d\n", out[0].Unread, out[0].Urgent)
+		return nil
 	}
 	if f.has("json") {
 		return printJSON(out)

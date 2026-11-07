@@ -515,7 +515,13 @@ With `--ring`, a box that's just gone to fire also runs `crontinental notify
 --urgent` on the store's machine, once per fire (not every run), tagged
 `deaddrop-box=<box>` so that machine's notify hooks can send it to whoever
 minds that box. It says what the board says: counts, unless the box is in
-`board_detail`.
+`board_detail`. The first `--ring` run notes what's already on fire and
+rings nothing; a ring that fails is said (the run exits non-zero) and tried
+again next run. With `ring_urgent` on too, a box red only from urgent mail
+isn't rung again: `ring_urgent` already rang it as it arrived.
+
+The board counts a box's own mail, not its helpers' pigeonholes: watch a
+helper's pigeonhole with `watch --for`, or give a helper a box of its own.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -584,7 +590,7 @@ deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
-deaddrop status [--box WHO]... [--json]
+deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]

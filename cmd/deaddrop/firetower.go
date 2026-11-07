@@ -66,7 +66,9 @@ func cmdFiretower(args []string) error {
 			if err != nil {
 				return bad(u, err)
 			}
-			list = append(list, b)
+			if !contains(list, b) {
+				list = append(list, b)
+			}
 		}
 	}
 	next := f.get("next")
@@ -81,12 +83,27 @@ func cmdFiretower(args []string) error {
 	// hooks once (Crontinental), tagged with the box so they can route it.
 	wasOnFire := map[string]bool{}
 	onFire := map[string]bool{}
+	firstRing := false
+	ringUrgent := false
 	if f.has("ring") {
-		wasOnFire = readFireList()
+		// One run at a time decides who rings: the state lock is held from
+		// reading the fire list to writing it.
+		unlock, err := lockState()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		if wasOnFire, firstRing, err = readFireList(); err != nil {
+			return err
+		}
+		if c, err := loadConfig(); err == nil {
+			ringUrgent = c.RingUrgent
+		}
 	}
 	for _, box := range list {
 		s := statusOf(dir, box)
 		status, msg, value := "green", "No mail.", "none"
+		redByAge := false
 		switch {
 		case s.Urgent > 0:
 			status, msg = "red", fmt.Sprintf("%d urgent", s.Urgent)
@@ -110,6 +127,7 @@ func cmdFiretower(args []string) error {
 			case fireAfter > 0 && waited >= fireAfter:
 				status = "red"
 			}
+			redByAge = fireAfter > 0 && unheard > 0 && waited >= fireAfter
 			if unheard > 0 {
 				msg += fmt.Sprintf(", %d unheard, the oldest %s", unheard, spanWords(waited))
 			}
@@ -133,9 +151,23 @@ func cmdFiretower(args []string) error {
 			continue
 		}
 		if status == "red" {
-			onFire[box] = true
-			if f.has("ring") && !wasOnFire[box] {
-				ringFire(box, msg)
+			switch {
+			case !f.has("ring"), wasOnFire[box]:
+				onFire[box] = true
+			case firstRing:
+				// The first --ring run on this machine: what's on fire now is
+				// noted, not rung (it may have been burning for days).
+				onFire[box] = true
+			case ringUrgent && !redByAge:
+				// Red only because of urgent mail, which ring_urgent has
+				// already rung as it arrived: not again.
+				onFire[box] = true
+			default:
+				if err := ringFire(box, msg); err != nil {
+					failed = append(failed, box+": could not ring: "+err.Error())
+				} else {
+					onFire[box] = true // marked only once it's really rung
+				}
 			}
 		}
 		fmt.Printf("mail/%s/inbox  %s  %s\n", box, status, msg)
@@ -147,7 +179,9 @@ func cmdFiretower(args []string) error {
 				onFire[b] = true
 			}
 		}
-		writeFireList(onFire)
+		if err := writeFireList(onFire); err != nil {
+			return fmt.Errorf("could not keep the list of boxes on fire (%s): %v", fireListPath(), err)
+		}
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("could not report %s", strings.Join(failed, "; "))
@@ -161,38 +195,55 @@ func cmdFiretower(args []string) error {
 // The boxes on fire at the last --ring run, so each rings once per fire.
 func fireListPath() string { return filepath.Join(stateDir(), "firetower-fire.json") }
 
-func readFireList() map[string]bool {
+// readFireList is the boxes on fire at the last --ring run. first: there's
+// no list yet, so this run notes what's on fire and rings nothing. A list
+// that can't be read is an error, not an empty list (that would ring every
+// fire again).
+func readFireList() (map[string]bool, bool, error) {
 	out := map[string]bool{}
-	var boxes []string
-	if b, err := os.ReadFile(fireListPath()); err == nil && json.Unmarshal(b, &boxes) == nil {
-		for _, b := range boxes {
-			out[b] = true
-		}
+	b, err := os.ReadFile(fireListPath())
+	if os.IsNotExist(err) {
+		return out, true, nil
 	}
-	return out
+	var boxes []string
+	if err == nil {
+		err = json.Unmarshal(b, &boxes)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("the list of boxes on fire (%s) can't be read: %v; remove it to start again (the next run notes what's on fire and rings nothing)", fireListPath(), err)
+	}
+	for _, b := range boxes {
+		out[b] = true
+	}
+	return out, false, nil
 }
 
-func writeFireList(on map[string]bool) {
+func writeFireList(on map[string]bool) error {
 	boxes := []string{}
 	for b := range on {
 		boxes = append(boxes, b)
 	}
 	sort.Strings(boxes)
-	os.MkdirAll(stateDir(), 0o700)
-	writeJSONFile(fireListPath(), boxes)
+	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+		return err
+	}
+	return writeJSONFile(fireListPath(), boxes)
 }
 
 // ringFire rings for a box that's gone to fire: the box and the board's own
 // line (counts, unless the box is in board_detail), tagged deaddrop-box=<box>.
-func ringFire(box, line string) {
+func ringFire(box, line string) error {
 	cron, err := crontinental()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "deaddrop: --ring, but "+err.Error())
-		return
+		return err
 	}
 	if out, err := exec.Command(cron, "notify", "--urgent", "--tag", "deaddrop-box="+box, "--title", "Dead Drop: "+box, line).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "deaddrop: could not ring for %s: %s\n", box, strings.TrimSpace(string(out)))
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return err
 	}
+	return nil
 }
 
 // unheardWait counts the box's unread letters that arrived after it was last
