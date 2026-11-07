@@ -53,6 +53,19 @@ sent: 2026-11-02T15:30:00Z
 The body.
 """)
 
+    def test_a_bare_double_dash_is_never_a_value(self):
+        # The default box and a helper go in before any "--": a "--" taken as
+        # a value would put them among the words after it.
+        p = self.dd("send", "--to", "bob", "--subject", "--", ok=False, input="hi\n")
+        self.assertIn("--subject=--", p.stderr)
+        self.assertEqual(self.files("bob", "new"), [])
+        id = self.send("hi\n", "--to", "bob", "--subject=--")
+        self.me = "bob"
+        self.assertEqual([m["subject"] for m in self.inbox()], ["--"])
+        p = self.dd("show", id, "--box", "--", ok=False, DEADDROP_BOX="bob")
+        self.assertIn("isn't one", p.stderr)  # a box is never --: no =-- advice
+        self.assertNotIn("--box=--", p.stderr)
+
     def test_subject_from_the_document(self):
         self.send("Just a first line here\nand more\n", "--to", "bob")
         self.send("---\ntitle: x\n---\n\nintro\n\n## The heading\n", "--to", "bob")

@@ -269,7 +269,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
     def test_an_older_store_says_to_upgrade_it(self):
         # What a deaddrop from before 0.3 says to flags it doesn't know.
         old = script(self.tmp / "old-deaddrop", """
-for a; do case "$a" in --signed-by|--raw) echo "deaddrop: unknown flag $a" >&2; echo "usage: deaddrop ..." >&2; exit 2;; esac; done
+for a; do case "$a" in --signed-by|--signed-by=*|--raw) echo "deaddrop: unknown flag ${a%%=*}" >&2; echo "usage: deaddrop ..." >&2; exit 2;; esac; done
 exit 0
 """)
         env = dict(DEADDROP_REMOTE_BIN=str(old))
@@ -344,6 +344,15 @@ exec {BIN} "$@"
         self.assertIn("unread for helpers: planner 1", out)
 
 
+class RemoteDashes(RemoteBase):
+    def test_reads_after_a_double_dash_still_reach_the_store_as_reads(self):
+        # The flags remote mode adds go before a person's "--", not after.
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        for cmd in ("inbox", "pull"):
+            p = self.rdd(cmd, "--", "bob", env=dict(DEADDROP_FROM="bob"))
+            self.assertIn(a[-4:], p.stdout, (cmd, p.stderr))
+
+
 class Mirror(RemoteBase):
     """--cached: the store's answers kept on the reader's machine, checked
     here on every read, refreshed by watch --mirror, dropped by a write."""
@@ -376,6 +385,34 @@ class Mirror(RemoteBase):
         # A write from here: the next cached read asks the store.
         self.rdd("mark", "read", a, env=self.bob())
         got = json.loads(self.rdd("inbox", "--json", "--all", "--cached", env=self.bob()).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
+
+    def test_a_write_during_the_first_cached_read_isnt_lost(self):
+        # No mirror yet. While the first --cached read is with the store, this
+        # machine marks the letter read: that answer is older than the write,
+        # so the next cached read asks again.
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        once = self.tmp / "race-once"
+        once.write_text("")
+        near = {k: v for k, v in self.near_env(DEADDROP_FROM="bob").items() if v is not None}
+        envs = " ".join(f"{k}='{v}'" for k, v in near.items())
+        racer = script(self.tmp / "ssh-race", f'''
+for last; do :; done
+out=$("{self.ssh}" "$@")
+case "$last" in *"'inbox'"*)
+  if [ -e "{once}" ]; then
+    rm "{once}"
+    env {envs} DEADDROP_NOW="$DEADDROP_NOW" "{BIN}" mark read {a} >/dev/null
+  fi;;
+esac
+printf '%s\n' "$out"
+''')
+        self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())
+        args = ("inbox", "--json", "--all", "--cached")
+        first = json.loads(self.rdd(*args, env=self.bob(DEADDROP_SSH=str(racer))).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in first}[a], "unread")  # as the store had it
+        self.assertFalse(once.exists())
+        got = json.loads(self.rdd(*args, env=self.bob()).stdout)
         self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
 
     def test_cached_reads_are_still_checked_here(self):
@@ -522,6 +559,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         rows = json.loads(self.rdd("sent", "--json").stdout)
         boxes = {c["box"] for r in rows for c in r.get("copies", [])}
         self.assertEqual(boxes, {"alice-helper"})  # the readable copy, and only it
+        self.assertEqual([r.get("copies_partial") for r in rows], [True])  # said in the answer
+        p = self.rdd("sent")
+        self.assertIn("only letters with a copy in a box this key reads", p.stderr)  # said on the reader's machine
         p = self.gate("deaddrop sent --raw --json")
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)
 
@@ -560,6 +600,10 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
 
     def test_a_flag_value_of_dashes_cant_hide_a_from(self):
         p = self.gate("deaddrop send --to bob --subject -- --from carol", input="x\n")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertRegex(p.stderr, r"sends only as alice|send as yourself \(alice\)|got -- ")
+        self.assertEqual(self.files("bob", "new"), [])
+        p = self.gate("deaddrop send --to bob --subject=-- --from carol", input="x\n")
         self.assertNotEqual(p.returncode, 0)
         self.assertRegex(p.stderr, r"sends only as alice|send as yourself \(alice\)")
 

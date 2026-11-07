@@ -514,15 +514,20 @@ func withBox(cmd string, args []string) []string {
 // withFlag adds a flag and its value before any "--", so it's never read
 // as one of the words after it.
 func withFlag(args []string, flag, value string) []string {
-	out := make([]string, 0, len(args)+2)
+	return beforeDashes(args, flag, value)
+}
+
+// beforeDashes returns a copy of args with extra added before any "--".
+func beforeDashes(args []string, extra ...string) []string {
+	out := make([]string, 0, len(args)+len(extra))
 	for i, a := range args {
 		if a == "--" {
-			out = append(out, flag, value)
+			out = append(out, extra...)
 			return append(out, args[i:]...)
 		}
 		out = append(out, a)
 	}
-	return append(out, flag, value)
+	return append(out, extra...)
 }
 
 // hasFlag says args name --flag (before any --).
@@ -561,8 +566,13 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 			return cmd, args, err
 		}
 	}
+	// A send by someone with a key is signed or refused, never sent on
+	// unsigned in silence: a line this can't read is the sender's to fix.
 	f, err := parseFlags(args, sendFlags)
-	if err != nil || f.has("signature") {
+	if err != nil {
+		return origCmd, origArgs, bad(usageOf(origCmd), err)
+	}
+	if f.has("signature") {
 		return origCmd, origArgs, nil // the command says what's wrong
 	}
 	body, err := readBody()
@@ -572,7 +582,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	presetBody = &body
 	d, err := draftOf(f)
 	if err != nil {
-		return origCmd, origArgs, nil // the command says what's wrong
+		return origCmd, origArgs, bad(usageOf(origCmd), err)
 	}
 	d.body = body
 	if err := d.settle(); err != nil {
@@ -610,13 +620,24 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	if err != nil {
 		return cmd, args, err
 	}
-	out := append([]string{}, args...)
+	// Each as one word (--flag=value), so no value (a subject of "--") is
+	// ever read as a flag or the end of them; before any "--".
+	var add []string
 	if fu := followUpText(d.followUp); fu != "" {
 		// Worked out once, here, and sealed: the store must not work out
 		// "2d" again a moment later and get another time.
-		out = append(out, "--follow-up", fu)
+		add = append(add, "--follow-up="+fu)
 	}
-	return "send", append(out, "--subject", d.subject, "--signed-by", signer, "--signed-at", at, "--signature", sig), nil
+	add = append(add, "--subject="+d.subject, "--signed-by="+signer, "--signed-at="+at, "--signature="+sig)
+	return "send", beforeDashes(args, add...), nil
+}
+
+// usageOf is send's or reply's usage line, for the command as typed.
+func usageOf(cmd string) string {
+	if cmd == "reply" {
+		return replyUsage
+	}
+	return sendUsage
 }
 
 // signAs is who signs a job's automation mail: sign_as in the config, else
@@ -638,7 +659,7 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	const u = replyUsage
 	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return "", nil, bad(u, err)
@@ -669,7 +690,7 @@ func replyAsSend(args []string) (string, []string, error) {
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
-	out := []string{"--to", replyTo(&orig), "--reply-to", orig.ID, "--subject", subject}
+	out := []string{"--to", replyTo(&orig), "--reply-to", orig.ID, "--subject=" + subject}
 	for _, t := range kept {
 		out = append(out, "--tag", t)
 	}
@@ -682,7 +703,7 @@ func replyAsSend(args []string) (string, []string, error) {
 		}
 	}
 	if f.has("follow-up") {
-		out = append(out, "--follow-up", f.get("follow-up"))
+		out = append(out, "--follow-up="+f.get("follow-up"))
 	}
 	if f.has("as") {
 		out = append(out, "--as", f.get("as"))

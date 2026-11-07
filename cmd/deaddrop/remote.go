@@ -141,7 +141,7 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 const tooOld = "the store's machine has a deaddrop from before 0.3, which can't take or hand out signed messages: upgrade it there first (deaddrop upgrade)"
 
 func runRemote(host, cmd string, args []string) error {
-	if cmd != "send" || !contains(args, "--signed-by") {
+	if cmd != "send" || !hasFlag(args, "signed-by") {
 		return runRemoteTo(host, cmd, args, os.Stdout, os.Stderr)
 	}
 	// A signed send: an older store only says it doesn't know the flags.

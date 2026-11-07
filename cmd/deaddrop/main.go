@@ -368,6 +368,15 @@ func parseFlags(args []string, spec map[string]bool) (flags, error) {
 			if flagLike.MatchString(v) {
 				return f, fmt.Errorf("--%s needs a value, and got %s (an empty variable?)", k, v)
 			}
+			// A bare "--" ends the flags everywhere else that reads them (the
+			// default box, a helper, the gate), so it's never a value: say
+			// --%s=-- for that.
+			if v == "--" {
+				if freeText[k] {
+					return f, fmt.Errorf("--%s needs a value, and got -- (for a value of --, say --%s=--)", k, k)
+				}
+				return f, fmt.Errorf("--%s needs a value, and got -- (a -- isn't one)", k)
+			}
 		}
 		if !takes && hasV {
 			return f, fmt.Errorf("--%s takes no value", k)
@@ -379,5 +388,8 @@ func parseFlags(args []string, spec map[string]bool) (flags, error) {
 	}
 	return f, nil
 }
+
+// freeText are the flags whose value is anyone's words, so "--" could be one.
+var freeText = map[string]bool{"subject": true}
 
 var flagLike = regexp.MustCompile(`^--[a-z][a-z-]*(=.*)?$`)
