@@ -417,9 +417,12 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false})
 	if err != nil {
 		return bad(u, err)
+	}
+	if f.has("fingerprint") {
+		return showFingerprint(f)
 	}
 	if len(f.pos) != 1 {
 		return badf(u, "which message?")
@@ -466,6 +469,32 @@ func cmdShow(args []string) error {
 	fmt.Println(sigLine(m))
 	_, err = os.Stdout.Write(m.display())
 	return err
+}
+
+// showFingerprint prints the letter an id is, from whichever box holds it:
+// only the fingerprint, never the letter, so a thread can be found by the id
+// someone else's copy has.
+func showFingerprint(f flags) error {
+	if len(f.pos) != 1 {
+		return fmt.Errorf("which id?")
+	}
+	if err := checkID(f.pos[0]); err != nil {
+		return err
+	}
+	if viaHost != "" {
+		return runRemote(viaHost, "show", []string{f.pos[0], "--fingerprint"})
+	}
+	dir, err := storeDir()
+	if err != nil {
+		return err
+	}
+	for _, box := range boxes(dir) {
+		if m, err := findAnywhere(dir, box, f.pos[0], true); err == nil {
+			fmt.Println(letterOf(m))
+			return nil
+		}
+	}
+	return fmt.Errorf("no message %s anywhere in the store", f.pos[0])
 }
 
 // ---- open: read one in the browser ----

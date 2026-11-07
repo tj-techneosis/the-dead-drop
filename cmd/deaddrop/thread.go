@@ -109,6 +109,23 @@ func letters() (string, []*Letter, string, error) {
 			ls = append(ls, &Letter{Message: s.Message, Mine: true, Copies: s.Copies, Gist: gist(s.Body)})
 		}
 	}
+	// A letter you sent yourself is in your box and in what you sent: show
+	// it once, as yours (it knows every copy).
+	yours := map[string]bool{}
+	for _, l := range ls {
+		if l.Mine {
+			for _, id := range l.ids() {
+				yours[id] = true
+			}
+		}
+	}
+	kept := ls[:0]
+	for _, l := range ls {
+		if l.Mine || !yours[l.ID] {
+			kept = append(kept, l)
+		}
+	}
+	ls = kept
 	sortLetters(ls)
 	missing := ""
 	if len(notes) > 0 {
@@ -148,6 +165,15 @@ func sortLetters(ls []*Letter) {
 		}
 		return ls[i].ID < ls[j].ID
 	})
+}
+
+// fingerprintOf asks the store for the letter an id is, in whatever box.
+func fingerprintOf(id string) string {
+	out, err := self("show", id, "--fingerprint")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // joinLetters ties a letter into its thread: by the id it answers, and by
@@ -201,6 +227,17 @@ func threadOf(ls []*Letter, id string) ([]*Letter, error) {
 			union(x, ids[0])
 		}
 		joinLetters(l, ids[0], union)
+	}
+	if !found {
+		// An id from someone else's box: the same letter, by its fingerprint.
+		if fp := fingerprintOf(id); fp != "" {
+			for _, l := range ls {
+				if l.Letter == fp || l.ThreadLetter == fp {
+					id, found = l.ids()[0], true
+					break
+				}
+			}
+		}
 	}
 	if !found {
 		return nil, fmt.Errorf("no letter %s in your box or among what you sent", id)

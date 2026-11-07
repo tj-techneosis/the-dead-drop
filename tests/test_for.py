@@ -186,3 +186,12 @@ class Topics(DeadDrop):
             self.assertEqual([(t["subject"], t["count"]) for t in topics], [("Council", 2)], who)
         carols = [m for m in self.inbox(DEADDROP_FROM="carol") if m["subject"] == "Council"][0]["id"]
         self.assertEqual(len(json.loads(self.dd("thread", carols, "--json", DEADDROP_FROM="carol").stdout)["letters"]), 2)
+
+    def test_a_letter_to_yourself_shows_once_and_any_copy_finds_the_thread(self):
+        self.send("# Council\n\nx\n", "--to", "alice,bob")
+        mine = self.inbox()[0]["id"]
+        letters = json.loads(self.dd("thread", mine, "--json").stdout)["letters"]
+        self.assertEqual([l["mine"] for l in letters], [True])
+        # bob asks by alice's copy's id, which isn't in his box.
+        self.assertEqual(len(json.loads(self.dd("thread", mine, "--json", DEADDROP_FROM="bob").stdout)["letters"]), 1)
+        self.dd("thread", "2026-11-02T153000-alice-ffff", DEADDROP_FROM="bob", ok=False)
