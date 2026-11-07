@@ -499,7 +499,7 @@ func withFor(cmd string, args []string) []string {
 // boxFlagged are the commands that name a box with --box; withBox adds the
 // default box to them. inbox, ls and pull name theirs as a word, which they
 // add themselves when they go to the store.
-var boxFlagged = map[string]bool{"mark": true, "show": true, "file": true}
+var boxFlagged = map[string]bool{"mark": true, "show": true, "file": true, "reply": true}
 
 // withBox adds the default box (defaultBox) to a command that doesn't name
 // one, on the caller's machine, so it reaches the store as a flag.
@@ -624,15 +624,19 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
+	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
 	if len(f.pos) != 1 {
 		return "", nil, badf(u, "reply to one message: its id")
 	}
-	raw, err := self("show", f.pos[0], "--json")
+	show := []string{"show", f.pos[0], "--json"}
+	if f.has("box") {
+		show = append(show, "--box", f.get("box"))
+	}
+	raw, err := self(show...)
 	if err != nil {
 		return "", nil, err
 	}
@@ -640,8 +644,8 @@ func replyAsSend(args []string) (string, []string, error) {
 	if err := json.Unmarshal(raw, &orig); err != nil {
 		return "", nil, err
 	}
-	if orig.From == automation {
-		return "", nil, fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
+	if err := replyable(&orig); err != nil {
+		return "", nil, err
 	}
 	subject := orig.Subject
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {

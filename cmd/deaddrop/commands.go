@@ -264,8 +264,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
+	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -280,13 +280,21 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	orig, err := findAnywhere(dir, me, f.pos[0], true)
+	// The letter is in your box, or the one --box names (a session's own,
+	// by default): the answer still comes from you.
+	in := me
+	if f.has("box") {
+		if in, err = resolveBox("--box", f.get("box")); err != nil {
+			return bad(u, err)
+		}
+	}
+	orig, err := findAnywhere(dir, in, f.pos[0], true)
 	if err != nil {
 		return err
 	}
 	verify(orig) // a reply follows only a persona that's really theirs
-	if orig.From == automation {
-		return fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
+	if err := replyable(orig); err != nil {
+		return err
 	}
 	kept, err := replyTags(orig.Tags, f.all("untag"))
 	if err != nil {
@@ -337,6 +345,15 @@ var warnedReplyBox bool
 // replyTo is the box a reply goes to: the letter's reply box, when it has
 // one and verifies (anyone could write one onto an unsigned letter), else its
 // sender's.
+// replyable refuses an answer with nowhere to go: automation has no box,
+// unless a verified letter names a reply box for its answers.
+func replyable(orig *Message) error {
+	if orig.From == automation && (orig.ReplyBox == "" || orig.Signature != sigVerified) {
+		return fmt.Errorf("%s came from automation, which has no box to reply to (unless a verified letter names a reply box)", orig.ID)
+	}
+	return nil
+}
+
 func replyTo(orig *Message) string {
 	if orig.ReplyBox == "" {
 		return orig.From
