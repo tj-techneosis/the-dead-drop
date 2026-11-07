@@ -254,9 +254,10 @@ class Signed(DeadDrop):
         m = self.one()
         self.assertEqual(m["signature"], "bad")
         self.assertIn("never asked for", m["signature_note"])
-        # A follow-up added by hand to a signed letter breaks its seal.
+        # A follow-up line and a raise added by hand: never presented as the
+        # sender's urgency. It says the seal doesn't cover the raise.
         path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-01-01T00:00:00Z\nraised: 2026-01-02T00:00:00Z\nurgency_was: normal"))
-        self.assertEqual(self.one()["signature"], "bad")
+        self.assertIn("seal doesn't cover", self.one()["signature_note"])
 
     def test_a_copy_delivered_again_says_so(self):
         self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
@@ -303,7 +304,11 @@ class Signed(DeadDrop):
         path.write_text(good.replace("urgency: normal", "urgency: normal\nfollow_up: 2026-11-02T16:00:00Z"))
         self.assertEqual(self.one()["signature"], "verified")
         path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-11-02T16:00:00Z\nraised: 2026-11-02T17:00:00Z\nurgency_was: normal"))
-        self.assertEqual(self.one(DEADDROP_NOW=at(60 * 5))["signature"], "bad")
+        # Raised by the store's follow-up: the old seal can't vouch for it,
+        # and the letter says so rather than reading bad.
+        m = self.one(DEADDROP_NOW=at(60 * 5))
+        self.assertEqual(m["signature"], "verified")
+        self.assertIn("seal doesn't cover", m["signature_note"])
 
     def test_a_replay_is_caught_however_the_seal_is_written_and_wherever_its_read(self):
         id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
@@ -357,3 +362,29 @@ class Signed(DeadDrop):
         extra = sums.replace("]", ", " + "0" * 64 + "]")
         path.write_text(text.replace(sums, extra))
         self.assertEqual(self.one()["signature"], "bad")
+
+    # ---- review a93g ----
+
+    def test_copies_first_seen_together_stay_copies(self):
+        id = self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        src = self.path()
+        (src.parent / (id[:-4] + "cccc.md")).write_text(src.read_text())
+        for _ in range(3):  # run after run, neither becomes "the original"
+            ms = self.inbox(DEADDROP_FROM="bob")
+            self.assertEqual({m["signature"] for m in ms}, {"verified"})
+            self.assertTrue(all("one is a copy" in m["signature_note"] for m in ms))
+        # A third copy turning up later is a replay.
+        (src.parent / (id[:-4] + "bbbb.md")).write_text(src.read_text())
+        late = [m for m in self.inbox(DEADDROP_FROM="bob") if m["id"].endswith("bbbb")][0]
+        self.assertEqual(late["signature"], "bad")
+
+    def test_a_short_follow_up_isnt_refused(self):
+        installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        if not installed.exists():
+            os.symlink(BIN, installed)
+        # Sealed a moment ago, arriving now: past, but not refused.
+        p = self.dd("send", "--to", "bob", "--follow-up", at(-1), input="# Soon\n\nx\n", DEADDROP_FROM="alice")
+        self.assertEqual(p.returncode, 0)
+        self.dd("send", "--to", "bob", "--follow-up", at(-24 * 60), input="# Long ago\n\nx\n", DEADDROP_FROM="alice", ok=False)
+

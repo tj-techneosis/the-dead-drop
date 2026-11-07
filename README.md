@@ -185,7 +185,8 @@ tell:
 | can't check | ? | signed, but your list has no key for them |
 | **bad** | ✗ | changed since it was signed, delivered somewhere it wasn't sent, or signed with a key that isn't theirs |
 
-What's signed: the sender (and persona), the recipients, subject, tags, urgency, thread,
+What's signed: the sender, its persona, the helpers it's for, its reply
+box and its follow-up time (each when it has one), the recipients, subject, tags, urgency, thread,
 each attachment's sha256, when it was signed, and the text. `file` refuses
 an attachment that isn't the one sent, and any name that isn't a plain file
 name. A verified letter says when it was signed, so one delivered again
@@ -243,9 +244,9 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
   unsigned letter) goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
   name, lowercase, with dashes), unless you say `--for`. What a letter was
   for is never copied back.
-- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `thread`,
-  `with` and `threads` take `--for`, or `$DEADDROP_FOR` for a helper's
-  whole session.
+- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `open`,
+  `thread`, `with`, `threads` and `asks` take `--for`, or `$DEADDROP_FOR`
+  for a helper's whole session.
 
 **What's waiting on you.** `deaddrop send --to bob --ask` marks a letter as
 needing bob's decision (a sealed `ask` tag; the first paragraph is the
@@ -419,7 +420,7 @@ the system's own.
   thread or the whole conversation in the browser. A switch at the top
   turns it to **Threads**: every conversation, newest first, with chips to
   show only the ones a given speaker was in (a letter's persona, else its
-  `persona-<name>` tag, else its box), and chips for each helper's
+  `persona-<name>` tag, on letters that verify; else its box), and chips for each helper's
   pigeonhole once mail comes `--for` them. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
   `omarchy-shell deaddrop open` (or `close`, `toggle`, `check`) opens it on

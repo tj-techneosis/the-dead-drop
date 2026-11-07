@@ -255,5 +255,6 @@ deaddrop watch [--every 1m] [--no-hooks] [--for H]   # on the person's own machi
 deaddrop bar [--format text|swiftbar] [--for H]
 deaddrop key                             # this machine's line for everyone's allowed_signers
 deaddrop open ID [--for H]               # read it in the browser, mark it read
-# --for H: a helper's pigeonhole ('*': every one); DEADDROP_FOR sets it for a session
+# --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with, threads and asks:
+# every one; watch, bar and open take one); DEADDROP_FOR sets it for a session
 ```

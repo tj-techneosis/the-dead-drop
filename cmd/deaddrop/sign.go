@@ -354,7 +354,10 @@ func verifyState(m *Message) (string, string) {
 		if m.UrgencyWas != normal && m.UrgencyWas != fyi {
 			return sigBad, tamperedHeader
 		}
-		tries = append(tries, attempt{m.UrgencyWas, m.FollowUp, true})
+		// Sealed with its follow-up (0.6.4 on): the sender asked for this.
+		// Signed before follow-ups were sealed: the store raised it, which
+		// the letter can't vouch for, and it says so rather than reading bad.
+		tries = append(tries, attempt{m.UrgencyWas, m.FollowUp, true}, attempt{m.UrgencyWas, "", true})
 	} else {
 		if m.FollowUp != "" {
 			tries = append(tries, attempt{m.Urgency, m.FollowUp, false})
@@ -372,8 +375,11 @@ func verifyState(m *Message) (string, string) {
 				m.FollowUp = ""
 			}
 			raised := ""
-			if t.raise {
+			switch {
+			case t.raise && t.followUp != "":
 				raised = "; raised to urgent by its follow-up, not by the sender"
+			case t.raise:
+				raised = "; raised to urgent by the store's follow-up, which this letter's seal doesn't cover (signed before 0.6.4)"
 			}
 			// When it was signed, too: a letter delivered again shows its age.
 			when := ""

@@ -39,7 +39,9 @@ func followUpTime(s string) (time.Time, error) {
 		return at.Add(d), nil
 	}
 	if t, ok := parseWhen(s); ok {
-		if !t.After(at) {
+		// A time a moment past is a short follow-up worked out on the
+		// sender's machine and sealed: it comes due now, not refused.
+		if !t.After(at) && at.Sub(t) > signedSkew {
 			return time.Time{}, fmt.Errorf("--follow-up %q is already past", s)
 		}
 		return t, nil

@@ -1147,13 +1147,29 @@ func slotEmpty(dir, box, helper string) bool {
 // helperHint says, under a person's own inbox, that their helpers have
 // unread mail of their own (with the store here; status says it anywhere).
 func helperHint(dir, box string, f flags) {
-	if viaHost != "" || f.has("for") || dir == "" {
+	if f.has("for") || f.has("json") {
 		return
 	}
 	var hs []string
-	for _, h := range helpers(dir, box) {
-		if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+	if viaHost != "" {
+		// The store's elsewhere: ask it, for this box only.
+		out, err := remoteBytes(viaHost, "status", []string{"--box", box, "--json"})
+		var st []boxStatus
+		if err != nil || json.Unmarshal(out, &st) != nil || len(st) == 0 {
+			return
+		}
+		for h, n := range st[0].HelpersUnread {
 			hs = append(hs, fmt.Sprintf("%s %d", h, n))
+		}
+		sort.Strings(hs)
+	} else {
+		if dir == "" {
+			return
+		}
+		for _, h := range helpers(dir, box) {
+			if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+				hs = append(hs, fmt.Sprintf("%s %d", h, n))
+			}
 		}
 	}
 	if len(hs) > 0 {
@@ -1432,8 +1448,8 @@ func cmdGc(args []string) error {
 					os.RemoveAll(filepath.Join(files, e.Name()))
 				}
 			}
-			// A helper's pigeonhole with nothing at all left in it goes too:
-			// not one file, readable or not.
+			// A helper's pigeonhole with nothing at all left in it (not one
+			// file in new, read, archive or files, readable or not) goes too.
 			if h != "" && slotEmpty(dir, box, h) {
 				os.RemoveAll(slotDir(dir, box, h))
 			}

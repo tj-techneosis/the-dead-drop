@@ -75,37 +75,66 @@ func loadLedger() *sealLedger {
 // guards a reader against replays, stays out of it.
 var ledgerOff bool
 
-// checkLedger looks a verified letter up in the reader's ledger.
+// checkLedger looks a verified letter up in the reader's ledger. A record
+// is the id first seen in a place, or, when several copies were first seen
+// together, all of them: first-seen order proves nothing, so none of those
+// becomes "the original", and only a copy that turns up later reads as
+// delivered again.
 func checkLedger(m *Message) {
 	if ledgerOff || m.Sig == "" || m.ID == "" {
 		return
 	}
 	l := loadLedger()
 	k := sealKey(m)
-	if first, ok := l.Seen[k]; ok && first != m.ID {
-		if _, mine := l.fresh[k]; !mine {
-			m.Signature, m.SignatureNote = sigBad, "the same signed letter as "+first+", first seen here earlier: delivered again"
-			return
+	known := splitIDs(l.Seen[k])
+	_, freshNow := l.fresh[k]
+	switch {
+	case len(known) == 0 || freshNow:
+		// New to this reader: the first look at this seal, in this run.
+		if !contains(known, m.ID) {
+			known = append(known, m.ID)
+			l.Seen[k], l.dirty = strings.Join(known, ","), true
 		}
+		l.fresh[k] = appendOnce(l.fresh[k], m)
+	case !contains(known, m.ID):
+		m.Signature, m.SignatureNote = sigBad, "the same signed letter as "+known[0]+", seen here earlier: delivered again"
+		return
 	}
-	if _, ok := l.Seen[k]; !ok {
-		l.Seen[k], l.dirty = m.ID, true
-	}
-	for _, other := range l.fresh[k] {
-		if other.ID == m.ID {
-			return
+	if len(known) > 1 {
+		if !strings.Contains(m.SignatureNote, "one is a copy") {
+			m.SignatureNote += "; the same letter is here more than once: one is a copy"
 		}
-	}
-	l.fresh[k] = append(l.fresh[k], m)
-	if len(l.fresh[k]) > 1 {
-		// Two copies, both new to this reader: neither can be told to be the
-		// original, so both say so.
 		for _, x := range l.fresh[k] {
 			if !strings.Contains(x.SignatureNote, "one is a copy") {
 				x.SignatureNote += "; the same letter is here more than once: one is a copy"
 			}
 		}
 	}
+}
+
+// ledgerFreshIDs are the ids first seen under k in this run.
+func ledgerFreshIDs(k string) string {
+	var ids []string
+	for _, m := range ledger.fresh[k] {
+		ids = append(ids, m.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+func splitIDs(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+func appendOnce(ms []*Message, m *Message) []*Message {
+	for _, x := range ms {
+		if x.ID == m.ID {
+			return ms
+		}
+	}
+	return append(ms, m)
 }
 
 // saveLedger writes the ledger back, if it learned anything. Merged with
@@ -130,8 +159,16 @@ func saveLedger() {
 	if b, err := os.ReadFile(ledgerPath()); err == nil {
 		json.Unmarshal(b, &onDisk)
 	}
-	for k, id := range onDisk.Seen {
-		ledger.Seen[k] = id // the earlier record wins
+	for k, ids := range onDisk.Seen {
+		// What another reader saw first stays first; what this run added
+		// alongside it joins it.
+		merged := splitIDs(ids)
+		for _, id := range splitIDs(ledger.Seen[k]) {
+			if !contains(merged, id) && contains(splitIDs(ledgerFreshIDs(k)), id) {
+				merged = append(merged, id)
+			}
+		}
+		ledger.Seen[k] = strings.Join(merged, ",")
 	}
 	writeJSONFile(ledgerPath(), ledger)
 	ledger.dirty = false

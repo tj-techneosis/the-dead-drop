@@ -333,3 +333,8 @@ exec {BIN} "$@"
         self.rdd("send", "--to", "alice,carol", "--reply-to", bobs, input="# Yes\n\nx\n", env=self.signed_env("bob"))
         t = json.loads(self.rdd("threads", "--json", env=dict(DEADDROP_FROM="carol")).stdout)["topics"]
         self.assertEqual([(x["subject"], x["count"]) for x in t], [("Council", 2)])
+
+    def test_the_helper_hint_over_ssh(self):
+        self.rdd("send", "--to", "bob", "--for", "planner", input="# For the planner\n\nx\n")
+        out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
+        self.assertIn("unread for helpers: planner 1", out)

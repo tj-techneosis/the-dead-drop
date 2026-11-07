@@ -179,7 +179,7 @@ Panel {
   function loadTopics(raw) {
     if (threadLister.askedFor !== root.hole) { root.threadsStale = true; return } // for another pigeonhole: asked again on exit
     var data
-    try { data = JSON.parse(raw) } catch (e) { root.topics = []; root.speakers = []; root.threadsNote = "Couldn't read the threads."; return }
+    try { data = JSON.parse(raw) } catch (e) { root.topics = []; root.speakers = []; root.who = ""; root.threadsNote = "Couldn't read the threads."; return }
     var notes = []
     if (data.sent_missing) notes.push(String(data.sent_missing))
     if ((data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads, and the speakers in them.")
@@ -435,7 +435,7 @@ Panel {
     }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.readingNote = text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: if (text.trim() !== "" && root.reading && String(root.reading.id) === reader.askedFor) root.readingNote = text.trim().replace(/^deaddrop: /, "")
     }
     onExited: function(exitCode) {
       var asked = reader.askedFor
