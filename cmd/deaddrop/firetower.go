@@ -21,8 +21,8 @@ import (
 // subject and no sender (and so the value is a hash of the id, which names its
 // sender). A box named in board_detail also gets what's waiting (whatsWaiting).
 func cmdFiretower(args []string) error {
-	const u = "firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]"
-	f, err := parseFlags(args, map[string]bool{"next": true, "box": true, "smoke-after": true, "fire-after": true, "ring": false})
+	const u = "firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]"
+	f, err := parseFlags(args, map[string]bool{"next": true, "box": true, "smoke-after": true, "fire-after": true, "ring": false, "pigeonholes": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -100,8 +100,26 @@ func cmdFiretower(args []string) error {
 			ringUrgent = c.RingUrgent
 		}
 	}
+	// Each box's own mail, and with --pigeonholes each helper's pigeonhole
+	// in it too, as a lookout of its own: mail/<box>/inbox, mail/<box>/for/<h>.
+	type slot struct{ box, helper string }
+	var slots []slot
 	for _, box := range list {
-		s := statusOf(dir, box)
+		slots = append(slots, slot{box, ""})
+		if f.has("pigeonholes") {
+			for _, h := range helpers(dir, box) {
+				slots = append(slots, slot{box, h})
+			}
+		}
+	}
+	for _, sl := range slots {
+		box := sl.box
+		name, label := "mail/"+box+"/inbox", "Mail: "+box
+		mark := box // the fire list's key
+		if sl.helper != "" {
+			name, label, mark = "mail/"+box+"/for/"+sl.helper, "Mail: "+box+" (for "+sl.helper+")", box+"/for/"+sl.helper
+		}
+		s := slotStatus(dir, box, sl.helper)
 		status, msg, value := "green", "No mail.", "none"
 		redByAge := false
 		switch {
@@ -117,7 +135,7 @@ func cmdFiretower(args []string) error {
 			// By what's unheard: mail that's arrived since anyone last read
 			// the box. Readers who pull and don't mark stay clear; a box
 			// nobody reads goes to fire on its own.
-			unheard, waited := unheardWait(dir, box, false)
+			unheard, waited := unheardWait(dir, box, sl.helper, false)
 			switch {
 			case s.Urgent > 0:
 				// Urgent is fire either way; the line still says how
@@ -130,7 +148,7 @@ func cmdFiretower(args []string) error {
 			// Red by age from the letters that aren't urgent: an old urgent
 			// letter is ring_urgent's, already rung.
 			if fireAfter > 0 {
-				if n, w := unheardWait(dir, box, true); n > 0 && w >= fireAfter {
+				if n, w := unheardWait(dir, box, sl.helper, true); n > 0 && w >= fireAfter {
 					redByAge = true
 				}
 			}
@@ -140,45 +158,45 @@ func cmdFiretower(args []string) error {
 		}
 		if s.Newest != nil {
 			value = boardValue(s.Newest.ID)
-			if detailed(box) {
+			if detailed(box) && sl.helper == "" {
 				msg = whatsWaiting(msg, dir, box, s)
 			}
 		}
-		a := []string{"set", "mail/" + box + "/inbox", status, msg, "--value", value, "--label", "Mail: " + box, "--tag", "mail"}
+		a := []string{"set", name, status, msg, "--value", value, "--label", label, "--tag", "mail"}
 		if next != "" {
 			a = append(a, "--next", next)
 		}
 		out, err := exec.Command(tower, a...).CombinedOutput()
 		if err != nil {
-			failed = append(failed, box+": "+strings.TrimSpace(string(out)))
-			if wasOnFire[box] || (firstRing && status == "red") {
+			failed = append(failed, mark+": "+strings.TrimSpace(string(out)))
+			if wasOnFire[mark] || (firstRing && status == "red") {
 				// Not reported, so not known to be out; and on the first run a
 				// fire is noted whether or not the board took it.
-				onFire[box] = true
+				onFire[mark] = true
 			}
 			continue
 		}
 		if status == "red" {
 			switch {
-			case !f.has("ring"), wasOnFire[box]:
-				onFire[box] = true
+			case !f.has("ring"), wasOnFire[mark]:
+				onFire[mark] = true
 			case firstRing:
 				// The first --ring run on this machine: what's on fire now is
 				// noted, not rung (it may have been burning for days).
-				onFire[box] = true
+				onFire[mark] = true
 			case ringUrgent && !redByAge:
 				// Red only because of urgent mail, which ring_urgent has
 				// already rung as it arrived: not again.
-				onFire[box] = true
+				onFire[mark] = true
 			default:
-				if err := ringFire(box, msg); err != nil {
-					failed = append(failed, box+": could not ring: "+err.Error())
+				if err := ringFire(box, sl.helper, msg); err != nil {
+					failed = append(failed, mark+": could not ring: "+err.Error())
 				} else {
-					onFire[box] = true // marked only once it's really rung
+					onFire[mark] = true // marked only once it's really rung
 				}
 			}
 		}
-		fmt.Printf("mail/%s/inbox  %s  %s\n", box, status, msg)
+		fmt.Printf("%s  %s  %s\n", name, status, msg)
 	}
 	if f.has("ring") {
 		// Boxes not reported this run because --box named others keep their
@@ -186,7 +204,7 @@ func cmdFiretower(args []string) error {
 		// that's gone goes with it (a new box of that name rings afresh).
 		if f.has("box") {
 			for b := range wasOnFire {
-				if !contains(list, b) {
+				if owner, _, _ := strings.Cut(b, "/"); !contains(list, owner) {
 					onFire[b] = true
 				}
 			}
@@ -202,6 +220,23 @@ func cmdFiretower(args []string) error {
 		fmt.Println("No boxes yet: nothing to report.")
 	}
 	return nil
+}
+
+// slotStatus is a box's own counts (statusOf), or one pigeonhole's.
+func slotStatus(dir, box, helper string) boxStatus {
+	if helper == "" {
+		return statusOf(dir, box)
+	}
+	s := boxStatus{Box: box}
+	unread := loadSlot(dir, box, helper, []string{"unread"}, false)
+	s.Unread = len(unread)
+	for _, m := range unread {
+		if m.Urgency == urgent {
+			s.Urgent++
+		}
+	}
+	s.Newest = newest(unread)
+	return s
 }
 
 // The boxes on fire at the last --ring run, so each rings once per fire.
@@ -244,12 +279,16 @@ func writeFireList(on map[string]bool) error {
 
 // ringFire rings for a box that's gone to fire: the box and the board's own
 // line (counts, unless the box is in board_detail), tagged deaddrop-box=<box>.
-func ringFire(box, line string) error {
+func ringFire(box, helper, line string) error {
 	cron, err := crontinental()
 	if err != nil {
 		return err
 	}
-	if out, err := exec.Command(cron, "notify", "--urgent", "--tag", "deaddrop-box="+box, "--title", "Dead Drop: "+box, line).CombinedOutput(); err != nil {
+	a := []string{"notify", "--urgent", "--tag", "deaddrop-box=" + box, "--title", "Dead Drop: " + box}
+	if helper != "" {
+		a = []string{"notify", "--urgent", "--tag", "deaddrop-box=" + box, "--tag", "deaddrop-for=" + helper, "--title", "Dead Drop: " + box + " (for " + helper + ")"}
+	}
+	if out, err := exec.Command(cron, append(a, line)...).CombinedOutput(); err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("%s", msg)
 		}
@@ -263,11 +302,11 @@ func ringFire(box, line string) error {
 // the earlier of the store's time for its file and the date it gives
 // itself: a letter can make itself look older (louder on the board), never
 // fresher (hidden).
-func unheardWait(dir, box string, skipUrgent bool) (int, time.Duration) {
-	at, heard := now(), heardAt(dir, box, "")
+func unheardWait(dir, box, helper string, skipUrgent bool) (int, time.Duration) {
+	at, heard := now(), heardAt(dir, box, helper)
 	n := 0
 	var most time.Duration
-	for _, m := range loadBox(dir, box, []string{"unread"}, false) {
+	for _, m := range loadSlot(dir, box, helper, []string{"unread"}, false) {
 		if skipUrgent && m.Urgency == urgent {
 			continue
 		}

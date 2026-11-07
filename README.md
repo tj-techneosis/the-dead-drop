@@ -569,8 +569,10 @@ rings nothing; a ring that fails is said (the run exits non-zero) and tried
 again next run. With `ring_urgent` on too, a box red only from urgent mail
 isn't rung again: `ring_urgent` already rang it as it arrived.
 
-The board counts a box's own mail, not its helpers' pigeonholes: watch a
-helper's pigeonhole with `watch --for`, or give a helper a box of its own.
+The board counts a box's own mail. With `--pigeonholes`, each helper's
+pigeonhole in it gets a lookout of its own too, `mail/<box>/for/<helper>`,
+by the same rules, heard when that pigeonhole is read (`pull --for
+<helper>`), and rung (with `--ring`) tagged `deaddrop-for=<helper>` as well.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -641,7 +643,7 @@ deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
 deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
-deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]
+deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]

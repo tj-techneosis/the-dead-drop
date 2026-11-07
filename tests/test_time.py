@@ -145,6 +145,26 @@ class Firetower(DeadDrop):
         self.assertEqual(stamp.stat().st_mtime, epoch - 1)
         self.dd("send", "--to", "bob,,carol", input="x\n", ok=False)  # a stray comma: said, not guessed
 
+    def test_pigeonholes_on_the_board(self):
+        self.send("a\n", "--to", "bob", "--for", "planner")
+        self.dd("firetower", "--box", "bob")
+        self.assertNotIn("mail/bob/for/planner", self.reports())  # only when asked
+        ages = ("--box", "bob", "--pigeonholes", "--smoke-after", "30m", "--fire-after", "3h", "--ring")
+        self.dd("firetower", *ages)  # first --ring run: notes
+        self.clock = at(200)
+        self.dd("firetower", *ages)
+        r = self.calls(self.tower_calls)
+        last = {c[1]: c for c in r}
+        self.assertEqual(last["mail/bob/inbox"][2], "green")       # bob's own: nothing waiting
+        self.assertEqual(last["mail/bob/for/planner"][2], "red")   # the planner's: waited 3h unheard
+        rings = self.rings()
+        self.assertEqual(len(rings), 1)
+        self.assertIn("deaddrop-for=planner", rings[0])
+        # The planner's pull hears its pigeonhole, not bob's.
+        self.dd("pull", "bob", "--for", "planner")
+        self.dd("firetower", *ages)
+        self.assertEqual({c[1]: c for c in self.calls(self.tower_calls)}["mail/bob/for/planner"][2], "green")
+
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
         self.dd("firetower")
