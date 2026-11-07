@@ -85,21 +85,31 @@ func TestSSHReuse(t *testing.T) {
 	t.Setenv("DEADDROP_CONFIG", home+"/none.toml")
 	cachedConfig = nil
 	defer func() { cachedConfig = nil }()
-	if got := reuseArgs(); got != nil {
+	if got := reuseArgs(""); got != nil {
 		t.Fatalf("no ~/.ssh, no reuse: %v", got)
 	}
 	os.Mkdir(home+"/.ssh", 0o700)
-	if got := strings.Join(reuseArgs(), " "); !strings.Contains(got, "ControlMaster=auto") || !strings.Contains(got, home+"/.ssh/deaddrop-%C") {
+	got := strings.Join(reuseArgs(""), " ")
+	if len(home)+50 <= 100 && (!strings.Contains(got, "ControlMaster=auto") || !strings.Contains(got, "ConnectTimeout=10")) {
 		t.Fatalf("reuse: %q", got)
 	}
+	os.Chmod(home+"/.ssh", 0o777)
+	if got := reuseArgs(""); got != nil {
+		t.Fatalf("a ~/.ssh others can write: %v", got)
+	}
+	os.Chmod(home+"/.ssh", 0o700)
 	os.WriteFile(home+"/none.toml", []byte("ssh_reuse = false\n"), 0o600)
 	cachedConfig = nil
-	if got := reuseArgs(); got != nil {
+	if got := reuseArgs(""); got != nil {
 		t.Fatalf("ssh_reuse = false: %v", got)
 	}
-	t.Setenv("DEADDROP_SSH", "/bin/true")
-	cachedConfig = nil
-	if got := reuseArgs(); got != nil {
-		t.Fatalf("a command of its own: %v", got)
+}
+
+func TestOwnSharing(t *testing.T) {
+	if ownSharing("user tec\ncontrolmaster false\ncontrolpath none\n") {
+		t.Fatal("ssh's defaults are nobody's own")
+	}
+	if !ownSharing("controlmaster auto\ncontrolpath none\n") || !ownSharing("controlmaster false\ncontrolpath ~/.ssh/cm-%C\n") {
+		t.Fatal("the person's own ControlMaster or ControlPath wins")
 	}
 }

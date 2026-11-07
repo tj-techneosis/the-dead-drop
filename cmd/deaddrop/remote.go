@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Remote mode: on a machine without the store, every command runs on the
@@ -63,11 +64,14 @@ func remoteHost() (string, error) {
 }
 
 // reuseArgs keep one ssh connection to the store open for a minute and run
-// each command over it, so a click costs a round trip, not a handshake.
-// Off with ssh_reuse = false in the config, or when $DEADDROP_SSH names a
-// command of its own.
-func reuseArgs() []string {
-	if os.Getenv("DEADDROP_SSH") != "" {
+// each command over it, so a click costs a round trip, not a handshake. It
+// steps aside whenever the person's own ssh setup speaks for the host (their
+// own ControlMaster or ControlPath, which our options would otherwise
+// override), on a relay, when $DEADDROP_SSH names a command of its own, with
+// ssh_reuse = false, when ~/.ssh isn't a private folder of the person's own,
+// and when the socket's path would be too long for one.
+func reuseArgs(host string) []string {
+	if os.Getenv("DEADDROP_SSH") != "" || hops() > 0 {
 		return nil
 	}
 	if c, err := loadConfig(); err == nil && c.SSHReuse != nil && !*c.SSHReuse {
@@ -78,10 +82,51 @@ func reuseArgs() []string {
 		return nil
 	}
 	dir := filepath.Join(home, ".ssh")
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
 		return nil
 	}
-	return []string{"-o", "ControlMaster=auto", "-o", "ControlPath=" + filepath.Join(dir, "deaddrop-%C"), "-o", "ControlPersist=60"}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return nil
+	}
+	path := filepath.Join(dir, "dd-%C") // %C is a 40-character hash
+	if len(dir)+44 > 100 {
+		return nil // past what a unix socket's path can hold
+	}
+	if host != "" && sshSpeaksFor(host) {
+		return nil
+	}
+	return []string{"-o", "ControlMaster=auto", "-o", "ControlPath=" + path, "-o", "ControlPersist=60",
+		"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"}
+}
+
+// sshSpeaksFor says the person's own ssh config already sets connection
+// sharing for host: ssh -G prints what it would use, without connecting.
+func sshSpeaksFor(host string) bool {
+	out, err := exec.Command("ssh", "-G", host).Output()
+	if err != nil {
+		return true // can't tell: leave their setup alone
+	}
+	return ownSharing(string(out))
+}
+
+// ownSharing reads ssh -G's output for a ControlMaster or ControlPath of
+// the person's own.
+func ownSharing(g string) bool {
+	for _, line := range strings.Split(g, "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch strings.ToLower(k) {
+		case "controlmaster":
+			if v != "false" && v != "no" {
+				return true
+			}
+		case "controlpath":
+			if v != "none" && v != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -211,7 +256,7 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 		ssh = "ssh"
 	}
 	sshArgs := []string{"-T", "-o", "BatchMode=yes"}
-	sshArgs = append(sshArgs, reuseArgs()...)
+	sshArgs = append(sshArgs, reuseArgs(host)...)
 	if stdin == nil {
 		sshArgs = append(sshArgs, "-n")
 	}

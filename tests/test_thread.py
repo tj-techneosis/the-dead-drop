@@ -184,3 +184,15 @@ class Threads(DeadDrop):
         ps = {(p["box"], p.get("persona"), p.get("tagged", False)) for p in json.loads(self.dd("people", "--json", **env).stdout)}
         self.assertIn(("bob", "Planner", False), ps)
         self.assertIn(("bob", "Reviewer", True), ps)
+        rows = json.loads(self.dd("people", "--json", **env).stdout)
+        self.assertTrue(all(p["verified"] for p in rows if p["box"] == "bob"))
+
+    def test_people_marks_an_unverified_sender_and_a_blank_persona_tag(self):
+        # An unsigned letter claiming to be from carol, with persona-- : its
+        # own row, marked unverified, and no blank persona.
+        self.send("# C\n\nx\n", "--to", "alice", "--tag", "persona--", DEADDROP_FROM="carol")
+        rows = [p for p in json.loads(self.dd("people", "--json").stdout) if p["box"] == "carol"]
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["verified"])
+        self.assertNotIn("persona", rows[0])
+        self.assertIn("carol (unverified)", self.dd("people").stdout)

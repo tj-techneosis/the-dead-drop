@@ -730,20 +730,23 @@ func cmdAsks(args []string) error {
 
 // Person is one sender, or one persona of a sender, in your mail.
 type Person struct {
-	Box     string    `json:"box"`
-	Persona string    `json:"persona,omitempty"`
-	Tagged  bool      `json:"tagged,omitempty"` // the persona comes from a persona-<name> tag, not the seal
-	Letters int       `json:"letters"`
-	Unread  int       `json:"unread"`
-	Last    time.Time `json:"last"`
+	Box      string    `json:"box"`
+	Persona  string    `json:"persona,omitempty"`
+	Verified bool      `json:"verified"`         // every letter in this row verifies; otherwise the sender is only a claim
+	Tagged   bool      `json:"tagged,omitempty"` // the persona comes only from persona-<name> tags, never the seal
+	Letters  int       `json:"letters"`
+	Unread   int       `json:"unread"`
+	Last     time.Time `json:"last"`
 }
 
 // personaTag is a letter's persona-<name> tag, as a name ("persona-release-
 // manager" is "Release manager"), or "".
 func personaTag(l *Letter) string {
 	for _, t := range l.Tags {
-		if strings.HasPrefix(t, "persona-") && len(t) > 8 {
-			w := strings.ReplaceAll(t[8:], "-", " ")
+		if !strings.HasPrefix(t, "persona-") {
+			continue
+		}
+		if w := strings.TrimSpace(strings.ReplaceAll(t[8:], "-", " ")); w != "" {
 			return strings.ToUpper(w[:1]) + w[1:]
 		}
 	}
@@ -764,8 +767,9 @@ func cmdPeople(args []string) error {
 	if err != nil {
 		return err
 	}
-	// A persona counts only where it's trustworthy: sealed, or a tag on a
-	// letter that verifies. Anything else is its box.
+	// A sender is who a verified letter says. A letter that doesn't verify
+	// (unsigned, unchecked, or bad) is counted under its claimed box, in a
+	// row of its own marked unverified, and never lends a persona.
 	byKey := map[string]*Person{}
 	var out []*Person
 	for _, l := range ls {
@@ -773,20 +777,25 @@ func cmdPeople(args []string) error {
 		if l.Mine {
 			box = me
 		}
-		p := Person{Box: box}
-		if l.Signature == sigVerified || l.Signature == "" {
+		ok := l.Signature == sigVerified
+		p := Person{Box: box, Verified: ok}
+		sealed := false
+		if ok {
 			if l.Persona != "" {
-				p.Persona = l.Persona
+				p.Persona, sealed = l.Persona, true
 			} else if t := personaTag(l); t != "" {
-				p.Persona, p.Tagged = t, true
+				p.Persona = t
 			}
 		}
-		k := p.Box + "\x00" + p.Persona
+		k := fmt.Sprintf("%s\x00%s\x00%v", p.Box, p.Persona, ok)
 		e := byKey[k]
 		if e == nil {
-			e = &Person{Box: p.Box, Persona: p.Persona, Tagged: p.Tagged}
+			e = &Person{Box: p.Box, Persona: p.Persona, Verified: ok, Tagged: p.Persona != "" && !sealed}
 			byKey[k] = e
 			out = append(out, e)
+		}
+		if sealed {
+			e.Tagged = false // sealed once is sealed
 		}
 		e.Letters++
 		if !l.Mine && l.State == "unread" {
@@ -800,6 +809,9 @@ func cmdPeople(args []string) error {
 	if f.has("json") {
 		if out == nil {
 			out = []*Person{}
+		}
+		if missing != "" {
+			fmt.Fprintln(os.Stderr, "deaddrop: "+missing)
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -815,6 +827,9 @@ func cmdPeople(args []string) error {
 		who := p.Box
 		if p.Persona != "" {
 			who += ", as " + cleanLine(p.Persona, 40)
+		}
+		if !p.Verified {
+			who += " (unverified)"
 		}
 		unread := "-"
 		if p.Unread > 0 {

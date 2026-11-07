@@ -111,6 +111,7 @@ Panel {
   property string listerNote: ""     // finding the pigeonholes went wrong
   property bool holeStale: false     // a fetch came back for another pigeonhole
   property bool threadsStale: false
+  property bool peopleStale: false
   property var holeUnread: ({})      // helper -> unread count, for the chips
   property var pending: []           // actions waiting for the one running
   readonly property int threadLimit: 80
@@ -163,17 +164,18 @@ Panel {
   // Only a verified letter's persona or tag says who spoke: anyone can write
   // either onto a letter that doesn't verify.
   function speakerOf(l, box) {
-    if (l.signature !== "verified") return l.mine ? box : String(l.from || "")
-    if (l.persona) return String(l.persona)
+    var who = l.mine ? box : String(l.from || "")
+    if (l.signature !== "verified") return who
+    if (l.persona) return String(l.persona) + " · " + who
     var tags = l.tags || []
     for (var i = 0; i < tags.length; i++) {
       var t = String(tags[i])
-      if (t.indexOf("persona-") === 0 && t.length > 8) {
-        var w = t.slice(8).replace(/-/g, " ")
-        return w.charAt(0).toUpperCase() + w.slice(1)
+      if (t.indexOf("persona-") === 0) {
+        var w = t.slice(8).replace(/-/g, " ").trim()
+        if (w !== "") return w.charAt(0).toUpperCase() + w.slice(1) + " · " + who
       }
     }
-    return l.mine ? box : String(l.from || "")
+    return who
   }
 
   function loadTopics(raw) {
@@ -184,6 +186,7 @@ Panel {
     var notes = []
     if (data.sent_missing) notes.push(String(data.sent_missing))
     if (root.who === "" && (data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads; pick someone to see all of theirs.")
+    if (root.who !== "" && (data.topics || []).length >= 1000) notes.push("The newest 1000 threads.")
     root.threadsNote = notes.join(" ")
     var count = {}
     var list = data.topics || []
@@ -205,11 +208,15 @@ Panel {
   // Everyone in the mail, from `deaddrop people`: the dropdown lists them
   // all, newest first, not only those in the threads on screen.
   function loadPeople(raw) {
+    if (peopleLister.askedFor !== root.hole) { root.peopleStale = true; return }
     var list
-    try { list = JSON.parse(raw) } catch (e) { return }
+    try { list = JSON.parse(raw) } catch (e) { root.threadsNote = "Couldn't list who's in your mail."; return }
     var names = []
     for (var i = 0; i < list.length; i++) {
-      var n = list[i].persona ? String(list[i].persona) : String(list[i].box)
+      // Verified senders only, by persona and box, so two boxes' personas
+      // with one name stay two.
+      if (!list[i].verified) continue
+      var n = list[i].persona ? String(list[i].persona) + " · " + String(list[i].box) : String(list[i].box)
       if (names.indexOf(n) < 0) names.push(n)
     }
     root.speakers = names
@@ -265,6 +272,7 @@ Panel {
       holeReader.running = true
     }
     if (root.view === "threads" && !peopleLister.running) {
+      peopleLister.askedFor = root.hole
       peopleLister.command = [root.deaddrop, "people", "--json"].concat(root.forArgs())
       peopleLister.running = true
     }
@@ -487,7 +495,12 @@ Panel {
 
   Process {
     id: peopleLister
+    property string askedFor: ""
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadPeople(text) }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && peopleLister.askedFor === root.hole) root.threadsNote = "Couldn't list who's in your mail."
+      if (root.peopleStale || peopleLister.askedFor !== root.hole) { root.peopleStale = false; Qt.callLater(root.refreshViews) }
+    }
   }
 
   Process {
@@ -623,6 +636,7 @@ Panel {
         var k = String(t).toLowerCase()
         var m = root.reading || (root.cursorActive && root.view === "inbox" ? root.shown[root.cursor] : null)
         if (k === "v" && !root.reading) root.pickView(root.view === "inbox" ? "threads" : "inbox")
+        else if (k === "w" && !root.reading && root.view === "threads" && root.speakers.length > 0) { whoBox.forceActiveFocus(); whoBox.popup.open() }
         else if (k === "r") { root.checkNow(); root.refreshViews() }
         else if (k === "a" && m) root.archiveMessage(m)
         else if (k === "u" && m) root.putBackMessage(m)
@@ -746,7 +760,9 @@ Panel {
               onActivated: function(index) {
                 root.who = index <= 0 ? "" : root.speakers[index - 1]
                 root.cursor = 0
-                root.refreshViews()
+                // A fetch already running is for the old choice: ask again after it.
+                if (threadLister.running) root.threadsStale = true
+                else root.refreshViews()
               }
             }
           }

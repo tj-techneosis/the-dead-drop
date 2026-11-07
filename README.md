@@ -325,10 +325,13 @@ host = "store-box"
 ```
 
 Remote mode keeps one ssh connection open for a minute and runs each
-command over it (ssh's ControlMaster), so a command costs a round trip, not
-a new connection; `ssh_reuse = false` turns that off. Bodies and attachments
+command over it (ssh's ControlMaster, its socket in `~/.ssh/dd-…`), so a
+command costs a round trip, not a new connection. It steps aside when your
+own ssh config shares connections for that host, and `ssh_reuse = false`
+turns it off. Bodies and attachments
 go over ssh's stdin; nothing is written on the
-calling machine except what `pull` prints, the reader's ledger of seals it
+calling machine except what `pull` prints, the ssh connection's socket in
+`~/.ssh` (while it's open), the reader's ledger of seals it
 has seen (hashes and ids, so a signed letter copied under a new id reads as
 delivered again), and, if you run `deaddrop watch`, the inbox file. Never a
 letter's text. Everyone may log in to the
