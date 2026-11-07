@@ -36,6 +36,8 @@ type draft struct {
 	signedBy, signedAt, sig string
 }
 
+const replyUsage = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+
 const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
 
 var sendFlags = map[string]bool{
@@ -283,7 +285,7 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	const u = replyUsage
 	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return bad(u, err)

@@ -54,6 +54,20 @@ class Signed(DeadDrop):
         for line in ("signed_by: alice", "recipients: [bob]", "attachment_sha256: ["):
             self.assertIn(line, text)
 
+    def test_a_line_signing_cant_read_is_refused_not_sent_unsigned(self):
+        # Someone with a key never sends unsigned in silence.
+        p = self.dd("send", "--to", "bob", "--attach", "--", ok=False, input="# Hi\n\nx\n", **self.as_("alice"))
+        self.assertIn("got --", p.stderr)
+        self.assertEqual(list((self.dir / "bob" / "new").glob("*.md")) if (self.dir / "bob").exists() else [], [])
+        p = self.dd("send", "--to", "bob", "--to", "--", ok=False, input="# Hi\n\nx\n", **self.as_("alice"))
+        self.assertIn("isn't one", p.stderr)  # a -- isn't a name: no =-- advice
+        self.assertNotIn("--to=--", p.stderr)
+
+    def test_a_subject_of_dashes_is_signed(self):
+        self.send("x\n", "--to", "bob", "--subject=--", **self.as_("alice"))
+        m = self.one()
+        self.assertEqual((m["subject"], m["signature"]), ("--", "verified"))
+
     def test_unsigned_mail_says_so(self):
         att = self.tmp / "run.log"
         att.write_text("x\n")

@@ -179,13 +179,13 @@ func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, 
 	var err error
 	if !heardAt.IsZero() && cmd == "pull" {
 		// Read from the mirror: heard as of the answer the reader was shown.
-		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--heard-at", heardAt.UTC().Format(time.RFC3339Nano)))
+		out, err = remoteBytes(host, cmd, beforeDashes(args, "--heard-at", heardAt.UTC().Format(time.RFC3339Nano)))
 		if err != nil && strings.Contains(err.Error(), "--heard-at") {
-			out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard")) // an older store
+			out, err = remoteBytes(host, cmd, beforeDashes(args, "--unheard")) // an older store
 		}
 	} else if (unheard || !heardAt.IsZero()) && (cmd == "pull" || cmd == "show") {
 		// Keeping a copy isn't reading it: the box isn't stamped heard.
-		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard"))
+		out, err = remoteBytes(host, cmd, beforeDashes(args, "--unheard"))
 		if err != nil && strings.Contains(err.Error(), "--unheard") {
 			out, err = remoteBytes(host, cmd, args) // an older store
 		}

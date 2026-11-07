@@ -269,7 +269,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
     def test_an_older_store_says_to_upgrade_it(self):
         # What a deaddrop from before 0.3 says to flags it doesn't know.
         old = script(self.tmp / "old-deaddrop", """
-for a; do case "$a" in --signed-by|--raw) echo "deaddrop: unknown flag $a" >&2; echo "usage: deaddrop ..." >&2; exit 2;; esac; done
+for a; do case "$a" in --signed-by|--signed-by=*|--raw) echo "deaddrop: unknown flag ${a%%=*}" >&2; echo "usage: deaddrop ..." >&2; exit 2;; esac; done
 exit 0
 """)
         env = dict(DEADDROP_REMOTE_BIN=str(old))
@@ -342,6 +342,15 @@ exec {BIN} "$@"
         self.rdd("send", "--to", "bob", "--for", "planner", input="# For the planner\n\nx\n")
         out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
         self.assertIn("unread for helpers: planner 1", out)
+
+
+class RemoteDashes(RemoteBase):
+    def test_reads_after_a_double_dash_still_reach_the_store_as_reads(self):
+        # The flags remote mode adds go before a person's "--", not after.
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        for cmd in ("inbox", "pull"):
+            p = self.rdd(cmd, "--", "bob", env=dict(DEADDROP_FROM="bob"))
+            self.assertIn(a[-4:], p.stdout, (cmd, p.stderr))
 
 
 class Mirror(RemoteBase):

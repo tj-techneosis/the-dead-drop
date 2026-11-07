@@ -63,7 +63,8 @@ The body.
         self.me = "bob"
         self.assertEqual([m["subject"] for m in self.inbox()], ["--"])
         p = self.dd("show", id, "--box", "--", ok=False, DEADDROP_BOX="bob")
-        self.assertIn("--box=--", p.stderr)
+        self.assertIn("isn't one", p.stderr)  # a box is never --: no =-- advice
+        self.assertNotIn("--box=--", p.stderr)
 
     def test_subject_from_the_document(self):
         self.send("Just a first line here\nand more\n", "--to", "bob")
