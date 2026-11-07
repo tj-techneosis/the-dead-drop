@@ -493,7 +493,7 @@ func withFor(cmd string, args []string) []string {
 			return args
 		}
 	}
-	return append(append([]string{}, args...), "--for", h)
+	return withFlag(args, "--for", h)
 }
 
 // boxFlagged are the commands that name a box with --box; withBox adds the
@@ -508,7 +508,21 @@ func withBox(cmd string, args []string) []string {
 	if b == "" || !boxFlagged[cmd] || hasFlag(args, "box") {
 		return args
 	}
-	return append(append([]string{}, args...), "--box", b)
+	return withFlag(args, "--box", b)
+}
+
+// withFlag adds a flag and its value before any "--", so it's never read
+// as one of the words after it.
+func withFlag(args []string, flag, value string) []string {
+	out := make([]string, 0, len(args)+2)
+	for i, a := range args {
+		if a == "--" {
+			out = append(out, flag, value)
+			return append(out, args[i:]...)
+		}
+		out = append(out, a)
+	}
+	return append(out, flag, value)
 }
 
 // hasFlag says args name --flag (before any --).

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
@@ -151,5 +152,36 @@ func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
 	systemSigners = d + "/pin"
 	if vcacheAllowed(list) {
 		t.Fatal("a pinned list (a shared login): no cache")
+	}
+}
+
+func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
+	d := t.TempDir()
+	t.Setenv("DEADDROP_STATE", d+"/state")
+	t.Setenv("DEADDROP_NO_VCACHE", "")
+	t.Setenv("HOME", d)
+	was := systemSigners
+	defer func() { systemSigners = was }()
+	systemSigners = d + "/no-pin"
+	list := d + "/allowed_signers"
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	plant := func(mode os.FileMode) {
+		vcache, vcacheOKMemo, signersHashMemo = nil, map[string]bool{}, map[string]string{}
+		k := vkey(signersHash(list), keygenID(), "alice", "SIG", "TEXT")
+		b, _ := json.Marshal(map[string]any{"checks": map[string]bool{k: true}})
+		os.MkdirAll(d+"/state", 0o700)
+		os.WriteFile(vcachePath(), b, 0o600)
+		os.Chmod(vcachePath(), mode)
+	}
+	checked := false
+	check := func() bool { checked = true; return false }
+	plant(0o600)
+	if !cachedCheck(list, "alice", "SIG", []byte("TEXT"), check) || checked {
+		t.Fatal("the person's own private cache is used")
+	}
+	plant(0o666)
+	checked = false
+	if cachedCheck(list, "alice", "SIG", []byte("TEXT"), check) || !checked {
+		t.Fatal("a verdict in a cache others can write is checked again, never trusted")
 	}
 }

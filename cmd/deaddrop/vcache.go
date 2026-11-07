@@ -82,6 +82,21 @@ func vcacheAllowed(signers string) bool {
 	if !mine(signers) || !mine(filepath.Dir(signers)) || !mine(stateDir()) {
 		return false
 	}
+	// The cache file itself, if it's there, and every folder above the state
+	// folder up to home: the person's (or root's), writable by nobody else.
+	if _, err := os.Lstat(vcachePath()); err == nil && !mine(vcachePath()) {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	for d := filepath.Dir(stateDir()); d != "/" && d != "." && strings.HasPrefix(d, home) && d != home; d = filepath.Dir(d) {
+		info, err := os.Stat(d)
+		if err != nil || info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || (int(st.Uid) != os.Getuid() && st.Uid != 0) {
+			return false
+		}
+	}
 	b, err := os.ReadFile(signers)
 	if err != nil {
 		return false
@@ -205,7 +220,7 @@ func saveVCache() {
 		}
 	}
 	// Bounded: a cache that only grows would be the slow part one day.
-	if len(vcache.Checks) > 20000 {
+	if len(vcache.Checks)+len(vcache.Owners) > 20000 {
 		vcache.Checks = map[string]bool{}
 		vcache.Owners = map[string][]string{}
 	}

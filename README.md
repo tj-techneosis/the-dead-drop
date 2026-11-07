@@ -437,7 +437,9 @@ at once.
 **Hooks** are the executables in `~/.config/deaddrop/new.d/` (beside the
 config). `watch` runs each once per newly arrived message, with
 `DEADDROP_MSG_ID`, `_SENDER`, `_SUBJECT`, `_TAGS`, `_URGENCY`, `_SENT`,
-`_BOX` and `_ATTACHMENTS` set, and the message's entry as JSON on stdin:
+`_BOX`, `_ATTACHMENTS`, `_SIGNATURE`, `_SIGNED_BY`, `_PERSONA`, `_FOR` (the
+helper, with `watch --for`) and `_SIDE_BOX` (the box, with `watch --box` on
+a box not your own) set, and the message's entry as JSON on stdin:
 never the text. What's been announced is remembered, so a restart doesn't
 announce everything again, and the very first `watch` announces nothing.
 [`examples/new.d/notify`](examples/new.d/notify) is a desktop notification:
@@ -493,8 +495,10 @@ clear until the oldest unheard letter has waited 30 minutes, smoke after
 that, fire after 3 hours ("3 unread, 1 unheard, the oldest 45m"). So a reader
 who pulls and hasn't marked yet stays clear, and a box nobody reads goes to
 fire on its own. Urgent mail is fire either way. `inbox`, `watch` and
-`watch --mirror`'s copies don't count as reading. Either flag can be used
-alone. Every lookout is tagged `mail`.
+`watch --mirror`'s copies don't count as reading. Either flag alone works:
+`--smoke-after` alone keeps fresh unheard mail clear and never goes to fire
+for age; `--fire-after` alone is smoke as soon as anything's unheard, fire
+once it's waited that long. Every lookout is tagged `mail`.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens

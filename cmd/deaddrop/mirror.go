@@ -37,7 +37,7 @@ const (
 
 // mirrored are the reading commands whose answers may be kept: never `file`
 // (attachments' bytes), never anything that changes the store.
-var mirrored = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "sent": true, "status": true}
+var mirrored = map[string]bool{"inbox": true, "pull": true, "show": true, "sent": true}
 
 type mirrorEntry struct {
 	Host      string    `json:"host"`
@@ -52,22 +52,39 @@ func mirrorDir() string { return filepath.Join(stateDir(), "mirror") }
 
 func cachedMode() bool { return os.Getenv("DEADDROP_CACHED") == "1" }
 
-// takeCached strips --cached from a command's flags (before any "--") and
-// turns the mirror on for this command and everything it runs.
-func takeCached(args []string) []string {
+// readsCached are the commands --cached is a flag of: those that read.
+var readsCached = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "sent": true,
+	"thread": true, "threads": true, "with": true, "asks": true, "people": true}
+
+// takeCached strips --cached from a reading command's flags (before any
+// "--", and never a flag's value) and turns the mirror on for this command
+// and everything it runs.
+func takeCached(cmd string, args []string) []string {
+	if !readsCached[cmd] {
+		return args
+	}
 	out := make([]string, 0, len(args))
 	for i, a := range args {
 		if a == "--" {
 			out = append(out, args[i:]...)
 			break
 		}
-		if a == "--cached" {
+		if a == "--cached" && (i == 0 || !takesValue(args[i-1])) {
 			os.Setenv("DEADDROP_CACHED", "1")
 			continue
 		}
 		out = append(out, a)
 	}
 	return out
+}
+
+// takesValue says a reading command's flag is followed by its value.
+func takesValue(flag string) bool {
+	switch flag {
+	case "--tag", "--from", "--since", "--for", "--box", "--to", "--limit", "--thread", "--with":
+		return true
+	}
+	return false
 }
 
 func mirrorKey(host, cmd string, args []string, me string) string {
@@ -115,7 +132,7 @@ func mirroredBytes(host, cmd string, args []string) ([]byte, error) {
 			return e.Answer, nil
 		}
 	}
-	return fetchIntoMirror(path, host, cmd, args, me, false)
+	return fetchIntoMirror(path, host, cmd, args, me, false, false)
 }
 
 func equalArgs(a, b []string) bool {
@@ -130,13 +147,16 @@ func equalArgs(a, b []string) bool {
 	return true
 }
 
-func fetchIntoMirror(path, host, cmd string, args []string, me string, refresh bool) ([]byte, error) {
+// fetchIntoMirror asks the store and keeps the answer. unheard: only
+// keeping a copy, so the store doesn't stamp the box heard. fromRefresh: a
+// watch's pass, which prunes once itself.
+func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, fromRefresh bool) ([]byte, error) {
 	// Stamped when the fetch starts: a write from here while it's in flight
 	// is later than this, so the answer reads as stale.
 	started := time.Now()
 	var out []byte
 	var err error
-	if refresh && (cmd == "pull" || cmd == "show") {
+	if unheard && (cmd == "pull" || cmd == "show") {
 		// Keeping a copy isn't reading it: the box isn't stamped heard.
 		out, err = remoteBytes(host, cmd, append(append([]string{}, args...), "--unheard"))
 		if err != nil && strings.Contains(err.Error(), "--unheard") {
@@ -151,10 +171,12 @@ func fetchIntoMirror(path, host, cmd string, args []string, me string, refresh b
 	if os.MkdirAll(mirrorDir(), 0o700) == nil {
 		os.Chmod(mirrorDir(), 0o700)
 		e := mirrorEntry{Host: host, Cmd: cmd, Args: args, Me: me, FetchedAt: started, Answer: out}
-		if b, err := json.Marshal(e); err == nil {
-			writeAtomic(path, b, 0o600)
+		if b, err := json.Marshal(e); err == nil && writeAtomic(path, b, 0o600) == nil {
+			// Last read when fetched: a later read from the mirror is
+			// what tells a refresh someone has read it since.
+			os.Chtimes(path, started, started)
 		}
-		if !refresh {
+		if !fromRefresh {
 			pruneMirror()
 		}
 	}
@@ -213,8 +235,12 @@ func refreshMirror() (int, error) {
 	// Only answers from the store this machine reaches now: an entry naming
 	// another host (planted, or from an old config) is never asked again.
 	host, err := remoteHost()
-	if err != nil || host == "" {
+	if err != nil {
 		return 0, err
+	}
+	if host == "" {
+		os.RemoveAll(mirrorDir()) // the store is here: nothing to keep a copy of
+		return 0, nil
 	}
 	n := 0
 	for _, path := range pruneMirror() {
@@ -233,7 +259,11 @@ func refreshMirror() (int, error) {
 		if e.Me != me {
 			continue // someone else's on this machine
 		}
-		if _, err := fetchIntoMirror(path, e.Host, e.Cmd, e.Args, e.Me, true); err != nil {
+		// Read from the mirror since it was last fetched: someone read it,
+		// so this fetch tells the store the box was heard. Otherwise it's
+		// only keeping a copy (--unheard).
+		quiet := !used.After(e.FetchedAt)
+		if _, err := fetchIntoMirror(path, e.Host, e.Cmd, e.Args, e.Me, quiet, true); err != nil {
 			return n, err // the store isn't answering: one try a pass, not 64
 		}
 		os.Chtimes(path, used, used) // a refresh isn't a read

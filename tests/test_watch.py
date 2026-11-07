@@ -123,6 +123,14 @@ class Watch(DeadDrop):
         self.assertFalse((self.state / "inbox@alice.json").exists())
         self.dd("watch", "--box", "a", "--box", "b", ok=False)
 
+    def test_a_sessions_box_never_fills_the_persons_own_file(self):
+        self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.send("# Side\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")
+        self.dd("watch", "--box", "me", DEADDROP_REPLY_BOX="alice-helper")
+        f = self.inbox_file()
+        self.assertEqual(f["box"], "alice")
+        self.assertEqual([m["subject"] for m in f["messages"]], ["Mine"])
+
     def test_a_failing_hook_does_not_stop_the_others_or_refire(self):
         self.hook("a-broken", "echo broken >&2; exit 3\n")
         self.hook("b-log")

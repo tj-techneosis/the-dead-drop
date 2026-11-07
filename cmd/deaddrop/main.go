@@ -122,7 +122,7 @@ func main() {
 			return
 		}
 	}
-	err := dispatch(cmd, takeCached(args))
+	err := dispatch(cmd, takeCached(cmd, args))
 	if err == nil {
 		return
 	}
@@ -251,6 +251,9 @@ func refreshInbox(args []string) {
 		} else if strings.HasPrefix(a, "--box=") {
 			marked = strings.ToLower(strings.TrimPrefix(a, "--box="))
 		}
+	}
+	if marked == "me" || marked == "" {
+		marked = me
 	}
 	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
 	for _, path := range files {

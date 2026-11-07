@@ -198,10 +198,9 @@ func watchPass(hooks bool) (passResult, error) {
 
 	at := now().UTC()
 	prev := readInbox()
-	fetch := []string{"inbox", "--read", "--json"}
-	if watchBox != "" {
-		fetch = append(fetch, watchBox)
-	}
+	// The box is always named: the caller's own included, so a session's
+	// default box (DEADDROP_BOX) never fills the person's own file.
+	fetch := []string{"inbox", box, "--read", "--json"}
 	if watchFor != "" {
 		fetch = append(fetch, "--for", watchFor)
 	}
@@ -652,6 +651,9 @@ func cmdOpen(args []string) error {
 	if err := os.MkdirAll(openedDir(), 0o700); err != nil {
 		return err
 	}
+	if watchBox != "" {
+		name = watchBox + "-" + name // two boxes' pages never share a name
+	}
 	path := filepath.Join(openedDir(), name+".html")
 	if err := writeAtomic(path, page, 0o600); err != nil {
 		return err
@@ -721,7 +723,10 @@ const staleAfter = 10 * time.Minute
 func barText(in *InboxFile) string {
 	if in == nil {
 		if watchFor != "" {
-			return "Not watching " + watchFor + "'s pigeonhole yet (deaddrop watch --for " + watchFor + ")."
+			return "Not watching " + watchFor + "'s pigeonhole yet (deaddrop watch " + strings.Join(watchArgs(), " ") + ")."
+		}
+		if watchBox != "" {
+			return "Not watching " + watchBox + " yet (deaddrop watch --box " + watchBox + ")."
 		}
 		return "Not watching yet (deaddrop watch)."
 	}
