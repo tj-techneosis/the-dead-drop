@@ -394,9 +394,10 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 - it's exactly the shape remote mode writes (single-quoted words), or a plain
   `deaddrop <command> <words>` a person types, with nothing a shell would
   read, so a shell, `scp`, `sftp` or a pipe gets nothing;
-- reads are as stored (`--raw`, as remote mode always asks), so the store
-  never checks signatures or keeps a ledger on the key's behalf; files come
-  only as remote mode sends them (`--bundle`), never `--attach` paths;
+- reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
+  mode always asks), so the store doesn't check signatures or keep a ledger
+  on the key's behalf; files come only as remote mode sends them
+  (`--bundle`), never `--attach` paths;
 - it's one of the store's commands (`send`, `reply`, `inbox`, `pull`, `show`,
   `file`, `mark`, `status --box`, `sent`), not `gc`, `firetower` or a
   follow-up job;
@@ -404,7 +405,13 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   the store holds no other box: `sent`, thread fingerprints and every hint
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
-  signs as no one else.
+  signs as no one else;
+- no `DEADDROP_` setting from the environment reaches it: the store's own
+  settings come from its config file.
+
+What that costs the key's holder, by design: `sent` lists only letters with
+a copy in a box the key reads, and a letter whose thread starts in a box it
+can't read shows no thread link.
 
 It runs only on the store's own machine (never one that passes commands on).
 Use the full path in `command=` (the gate refuses to run otherwise), and

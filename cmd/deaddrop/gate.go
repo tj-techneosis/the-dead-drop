@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -72,17 +73,30 @@ func cmdGate(args []string) error {
 			read[b] = true
 		}
 	}
+	// No DEADDROP_ setting from the environment sshd built reaches the
+	// command (AcceptEnv, environment= in authorized_keys, a profile): some
+	// pick programs that run as the store's login. The store's own settings
+	// come from its config file, at its usual place; the gate says who's
+	// asking.
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "DEADDROP_") {
+			os.Unsetenv(k)
+		}
+	}
+	cachedConfig = nil
 	// Started by its full path, as authorized_keys names it: never found
 	// through a PATH that someone else's setup decides.
 	if !filepath.IsAbs(os.Args[0]) {
 		return fmt.Errorf("the gate runs only by its full path (command=\"/home/…/.local/bin/deaddrop gate …\")")
 	}
 	// A store that passes commands on would hand the line to another machine
-	// before any check here ran: the gate runs only where the store is.
+	// before any check here ran, and one with a host of its own isn't the
+	// store: the gate runs only where the store is. (Which host is nobody's
+	// business who holds a key.)
 	if c, err := loadConfig(); err != nil {
-		return err
+		return fmt.Errorf("the store's config can't be read")
 	} else if c.Host != "" {
-		return fmt.Errorf("the gate runs only on the store's own machine, and this one passes commands on to %s", c.Host)
+		return fmt.Errorf("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
 	}
 	line, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND")
 	if !ok {
@@ -97,7 +111,7 @@ func cmdGate(args []string) error {
 		if len(words) > 0 {
 			what = cleanLine(words[0], 40)
 		}
-		return fmt.Errorf("this key can't run %s: only send, reply, inbox, pull, show, file, mark, status and sent", what)
+		return fmt.Errorf("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
 	}
 	cmd, rest := words[0], words[1:]
 	if err := gateCheck(cmd, rest, as); err != nil {
@@ -105,12 +119,6 @@ func cmdGate(args []string) error {
 	}
 	if hops > maxHops {
 		return fmt.Errorf("this command has come through %d machines; %d is the limit", hops, maxHops)
-	}
-	// Whatever said who's asking, or for whom, is replaced: the gate says
-	// it. The store's own settings (its folders, Crontinental, its list of
-	// signers) stay.
-	for _, k := range []string{"DEADDROP_FROM", "DEADDROP_AS", "DEADDROP_FOR", "DEADDROP_REPLY_BOX", "DEADDROP_BOX", "DEADDROP_HOPS", "DEADDROP_CACHED", "DEADDROP_SIGN_KEY"} {
-		os.Unsetenv(k)
 	}
 	os.Setenv("DEADDROP_FROM", as)
 	os.Setenv("DEADDROP_HOPS", fmt.Sprint(max(hops, 1)))
@@ -121,32 +129,10 @@ func cmdGate(args []string) error {
 // gateCheck is what a gated command line may not say, beyond the boxes
 // (which resolveBox checks): who it's from, and status of every box.
 func gateCheck(cmd string, args []string, as string) error {
-	// Every word is looked at: remote mode never sends "--", so a "--" (as a
-	// word or a flag's value) is refused rather than reasoned about.
-	for i, a := range args {
-		if a == "--" {
-			return fmt.Errorf("this key's commands don't take \"--\"")
-		}
-		name, val, hasVal := strings.Cut(a, "=")
-		if !hasVal && i+1 < len(args) {
-			val = args[i+1]
-		}
-		who := strings.ToLower(val)
-		switch name {
-		case "--from":
-			if who != as && who != "me" {
-				return fmt.Errorf("this key sends only as %s", as)
-			}
-		case "--signed-by":
-			if who != as {
-				return fmt.Errorf("this key signs only as %s", as)
-			}
-		case "--attach":
-			// Paths here would be the store's files. Remote mode sends
-			// attachments as one stream (--bundle), never paths.
-			return fmt.Errorf("this key sends attachments the way remote mode does (--bundle), never --attach")
-		}
-	}
+	// Who a letter is from, who signs it and its attachments are checked by
+	// send itself, on its own parse of the flags (draftOf), so a "--" or a
+	// flag's value can't read differently here and there. Here: status names
+	// its boxes, and reads come as stored.
 	switch cmd {
 	case "status":
 		if !hasFlag(args, "box") {
@@ -185,7 +171,11 @@ func gateWords(line string) ([]string, int, error) {
 	rest, hops := line, 0
 	if m := gatePrefix.FindStringSubmatch(rest); m != nil {
 		rest = rest[len(m[0]):]
-		fmt.Sscan(m[1], &hops)
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nil, 0, fmt.Errorf("a hop count that isn't one")
+		}
+		hops = n
 	} else if rest == "deaddrop" {
 		return nil, 0, nil
 	} else if strings.HasPrefix(rest, "deaddrop ") {

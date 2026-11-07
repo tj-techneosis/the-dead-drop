@@ -177,6 +177,20 @@ func draftOf(f flags) (draft, error) {
 	if d.from, err = senderOf(f); err != nil {
 		return d, bad(u, err)
 	}
+	// Behind the gate, checked here, on the flags as send itself reads them:
+	// the key sends as itself only, signs as itself only, and never names a
+	// file on the store (attachments come as remote mode sends them).
+	if gateRead != nil {
+		if d.from != gateAs {
+			return d, fmt.Errorf("this key sends only as %s", gateAs)
+		}
+		if d.signedBy != "" && strings.ToLower(d.signedBy) != gateAs {
+			return d, fmt.Errorf("this key signs only as %s", gateAs)
+		}
+		if len(d.attach) > 0 {
+			return d, fmt.Errorf("this key sends attachments the way remote mode does (--bundle), never --attach")
+		}
+	}
 	for _, w := range f.all("to") {
 		for _, w := range strings.Split(w, ",") {
 			who, err := resolveBox("--to", strings.TrimSpace(w))
@@ -558,6 +572,9 @@ func deliver(dir string, d draft) error {
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
 	// not even whether they exist.
+	if d.replyBox != "" && !gateReadable(d.replyBox) {
+		fmt.Fprintf(os.Stderr, "deaddrop: answers to this go to %s, a box this key can't read\n", d.replyBox)
+	}
 	if d.replyBox != "" && gateReadable(d.replyBox) {
 		if _, err := os.Stat(filepath.Join(dir, d.replyBox)); os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "deaddrop: there's no box %s yet, so answers to this will start one (a typo?)\n", d.replyBox)

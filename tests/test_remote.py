@@ -517,7 +517,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.rdd("send", "--to", "alice-helper", "--to", "carol", input="# To two\\n\\nx\\n")
         rows = json.loads(self.rdd("sent", "--json").stdout)
         boxes = {c["box"] for r in rows for c in r.get("copies", [])}
-        self.assertNotIn("carol", boxes)
+        self.assertEqual(boxes, {"alice-helper"})  # the readable copy, and only it
+        p = self.gate("deaddrop sent --raw --json")
+        self.assertIn("only letters with a copy in a box this key reads", p.stderr)
 
     def test_attach_never_reads_the_stores_files(self):
         secret = self.far / "secret.txt"
@@ -531,22 +533,51 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         cfg.mkdir(parents=True, exist_ok=True)
         (cfg / "config.toml").write_text('host = "elsewhere"\nrelay = true\n')
         p = self.gate("deaddrop inbox carol --raw --json")
-        self.assertIn("only on the store's own machine", p.stderr)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("isn't the store", p.stderr)
+        self.assertNotIn("elsewhere", p.stderr)  # which host is nobody's business
 
     def test_nothing_is_said_about_other_boxes(self):
+        self.far_send("alice", "# Alice's own\\n\\nx\\n")
         c = self.far_send("carol", "# Carol's\\n\\nx\\n")
         # (The id names its sender; what mustn't show is where it is.)
         p = self.gate(f"deaddrop show {c} --fingerprint")
+        self.assertNotEqual(p.returncode, 0)
         self.assertEqual(p.stdout.strip(), "")
+        self.assertIn("anywhere in the store", p.stderr)
         self.assertNotIn("carol's box", p.stderr)
         p = self.gate(f"deaddrop mark read {c} --box alice")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no message", p.stderr)
         self.assertNotIn("carol's box", p.stderr)
-        p = self.gate("deaddrop send --to dave --reply-box zed --subject x", input="x\\n")
+        p = self.gate("deaddrop send --to dave --reply-box zed --subject x", input="x\n")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("a box this key can't read", p.stderr)  # said, without saying whether it exists
         self.assertNotIn("no box zed", p.stderr)
 
     def test_a_flag_value_of_dashes_cant_hide_a_from(self):
-        p = self.gate("deaddrop send --to bob --subject -- --from carol", input="x\\n")
+        p = self.gate("deaddrop send --to bob --subject -- --from carol", input="x\n")
         self.assertNotEqual(p.returncode, 0)
+        self.assertRegex(p.stderr, r"sends only as alice|send as yourself \(alice\)")
+
+    def test_a_bare_dashes_and_from_as_a_filter_are_honest_use(self):
+        self.far_send("alice", "# From carol\n\nx\n")
+        p = self.gate("deaddrop pull --raw --json --from carol --")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(json.loads(p.stdout)), 1)
+
+    def test_the_environment_says_nothing(self):
+        elsewhere = self.tmp / "elsewhere-store"
+        p = self.gate("deaddrop send --to alice --subject x", input="x\n",
+                      extra_env={"DEADDROP_DIR": str(elsewhere), "DEADDROP_CRONTINENTAL": "/bin/false", "DEADDROP_FROM": "carol"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(elsewhere.exists())
+        self.assertRegex(p.stdout, r"-alice-")
+        self.assertTrue(list((self.far_store / "alice" / "new").glob("*-alice-*.md")))
+
+    def test_too_many_hops_is_refused(self):
+        line = """d="$HOME/.local/bin/deaddrop"; [ -x "$d" ] || d=deaddrop; DEADDROP_HOPS=7 DEADDROP_FROM='x' exec "$d" 'inbox' '--raw' '--json'"""
+        self.assertIn("is the limit", self.gate(line).stderr)
 
     def test_reads_are_raw_and_the_plain_form_works(self):
         self.far_send("alice", "# Hi\\n\\nx\\n")
