@@ -236,15 +236,15 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] [--for HELPER]... < doc.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... < doc.md
+deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]
-deaddrop show ID [--json] [--for H]
-deaddrop sent [--to WHO]... [--tag T]... [--json]
+deaddrop show ID [--json|--html] [--box WHO] [--for H]
+deaddrop sent [--to WHO]... [--tag T]... [--since 7d] [--box WHO] [--json]
 deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
 deaddrop threads [--for H] [--json]                # every thread, newest activity first
-deaddrop file ID [NAME] [--for H]
+deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--json]                 # per box, with helpers' unread
 deaddrop watch [--every 1m] [--for H]    # on the person's own machine

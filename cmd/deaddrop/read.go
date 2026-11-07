@@ -57,7 +57,31 @@ func prepare(ms []*Message, raw bool, dir string) {
 			continue
 		}
 		verify(m)
-		m.Sig = ""
+	}
+	// The same signed letter twice in one pigeonhole is a copy delivered
+	// again: the first stands, the rest say so.
+	firstOf := map[string]*Message{}
+	for _, m := range ms {
+		if raw || m.Sig == "" {
+			continue
+		}
+		k := m.Box + "/" + m.Pigeonhole + "/" + m.Sig
+		if f, ok := firstOf[k]; !ok || m.Sent.Before(f.Sent) || (m.Sent.Equal(f.Sent) && m.ID < f.ID) {
+			firstOf[k] = m
+		}
+	}
+	for _, m := range ms {
+		if raw || m.Sig == "" {
+			continue
+		}
+		if f := firstOf[m.Box+"/"+m.Pigeonhole+"/"+m.Sig]; f != m && m.Signature == sigVerified {
+			m.Signature, m.SignatureNote = sigBad, "the same signed letter as "+f.ID+": delivered again"
+		}
+	}
+	for _, m := range ms {
+		if !raw {
+			m.Sig = ""
+		}
 	}
 }
 
@@ -86,13 +110,14 @@ func fingerprint(dir string, ms []*Message) {
 	}
 	if storeIndex == nil {
 		storeIndex = map[string]string{}
+		clash := map[string]bool{}
 		for _, box := range boxes(dir) {
 			for _, x := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
 				// Ids are unique within a box; one that two boxes share
-				// for different letters names neither.
+				// for different letters names neither, for good.
 				fp := letterOf(x)
-				if was, ok := storeIndex[x.ID]; ok && was != fp {
-					fp = ""
+				if was, ok := storeIndex[x.ID]; (ok && was != fp) || clash[x.ID] {
+					clash[x.ID], fp = true, ""
 				}
 				storeIndex[x.ID] = fp
 			}

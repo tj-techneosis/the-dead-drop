@@ -115,9 +115,9 @@ and checked where the reader is:
   sign`, namespace `deaddrop`), through the agent if they like. The key
   never reaches the store, so the store and its login can't sign.
 - **What's signed** is a canonical text of what the sender chose: from (and
-  persona, in v2 of the text, and the helpers it's for, in v3; each is used
-  only when there's something to say, so older letters verify as they
-  always did), the
+  persona, in v2 of the text; the helpers it's for, in v3; a reply box, in
+  v4; a follow-up time, in v5; each is used only when there's something to
+  say, so older letters verify as they always did), the
   recipients, subject, tags, urgency, thread, each attachment's name and
   sha256, when it was signed, and the body. The sender works it out with
   the same code the store uses, and the store checks the signature is of

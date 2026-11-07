@@ -36,7 +36,7 @@ type draft struct {
 	signedBy, signedAt, sig string
 }
 
-const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] < body.md`
+const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
 
 var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
@@ -92,9 +92,17 @@ func loadFor(dir, box, helper string, all bool, states []string, withBody bool) 
 // forArgs passes a reading command's --for on, to the store's machine.
 func forArgs(f flags) []string {
 	if f.has("for") {
-		return []string{"--for", f.get("for")}
+		return []string{"--for", strings.ToLower(strings.TrimSpace(f.get("for")))}
 	}
 	return nil
+}
+
+// followUpText is a follow-up time as the header and the signature hold it.
+func followUpText(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // helperSlug is the pigeonhole a persona answers at: "Release manager" is
@@ -159,6 +167,9 @@ func draftOf(f flags) (draft, error) {
 	if f.has("reply-box") {
 		d.replyBox = strings.ToLower(strings.TrimSpace(f.get("reply-box")))
 		if err := checkBox("--reply-box", d.replyBox); err != nil || d.replyBox == automation {
+			if env := os.Getenv("DEADDROP_REPLY_BOX"); env != "" && strings.EqualFold(strings.TrimSpace(env), d.replyBox) {
+				return d, badf(u, "$DEADDROP_REPLY_BOX (%q) isn't a box name, like alice-helper", env)
+			}
 			return d, badf(u, "--reply-box: a box, like alice-helper")
 		}
 	}
@@ -313,6 +324,8 @@ func cmdReply(args []string) error {
 	return deliver(dir, d)
 }
 
+var warnedReplyBox bool
+
 // replyTo is the box a reply goes to: the letter's reply box, when it has
 // one and verifies (anyone could write one onto an unsigned letter), else its
 // sender's.
@@ -321,7 +334,10 @@ func replyTo(orig *Message) string {
 		return orig.From
 	}
 	if orig.Signature != sigVerified {
-		fmt.Fprintf(os.Stderr, "deaddrop: %s asks for answers at %s, but isn't verified, so this goes to %s\n", orig.ID, orig.ReplyBox, orig.From)
+		if !warnedReplyBox {
+			warnedReplyBox = true
+			fmt.Fprintf(os.Stderr, "deaddrop: %s asks for answers at %s, but isn't verified, so this goes to %s\n", orig.ID, orig.ReplyBox, orig.From)
+		}
 		return orig.From
 	}
 	return orig.ReplyBox
@@ -490,7 +506,7 @@ func deliver(dir string, d draft) error {
 		for i := range attached {
 			as[i] = attachSum{attached[i], sums[i]}
 		}
-		payload := signedPayload(d.from, d.persona, d.helpers, d.replyBox, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
+		payload := signedPayload(d.from, d.persona, d.helpers, d.replyBox, followUpText(d.followUp), d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
@@ -512,6 +528,11 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	rung := map[string]bool{}
+	if d.replyBox != "" {
+		if _, err := os.Stat(filepath.Join(dir, d.replyBox)); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "deaddrop: there's no box %s yet, so answers to this will start one (a typo?)\n", d.replyBox)
+		}
+	}
 	for _, h := range d.helpers {
 		for _, to := range d.to {
 			if _, err := os.Stat(slotDir(dir, to, h)); os.IsNotExist(err) {
@@ -519,23 +540,27 @@ func deliver(dir string, d draft) error {
 			}
 		}
 	}
-	locked := map[string]func(){}
+	// Hold every box while its copies go in, so gc never takes a new
+	// letter's attachments for leftovers. All of them, in name order, before
+	// anything is written: two sends to the same boxes can't wait on each
+	// other.
+	order := append([]string{}, d.to...)
+	sort.Strings(order)
+	var unlocks []func()
 	defer func() {
-		for _, unlock := range locked {
-			unlock()
+		for _, u := range unlocks {
+			u()
 		}
 	}()
+	for _, to := range order {
+		u, err := lockBox(dir, to)
+		if err != nil {
+			return err
+		}
+		unlocks = append(unlocks, u)
+	}
 	for _, at := range copies {
 		to := at.box
-		// Hold the box while its copies go in, so gc never takes a new
-		// letter's attachments for leftovers.
-		if locked[to] == nil {
-			unlock, err := lockBox(dir, to)
-			if err != nil {
-				return err
-			}
-			locked[to] = unlock
-		}
 		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, ReplyBox: d.replyBox, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
 			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
 		// Who it went to, in every copy (deaddrop sent puts them together).
@@ -546,9 +571,7 @@ func deliver(dir string, d draft) error {
 		if m.Tags == nil {
 			m.Tags = []string{}
 		}
-		if !d.followUp.IsZero() {
-			m.FollowUp = d.followUp.Format(time.RFC3339)
-		}
+		m.FollowUp = followUpText(d.followUp)
 		var path string
 		for {
 			m.ID = newID(d.from, sent)
@@ -1047,6 +1070,9 @@ func handOver(m *Message, name string, data []byte) error {
 	if !fileRE.MatchString(name) || filepath.Base(name) != name {
 		return fmt.Errorf("%q isn't a plain file name, so it's not handed out", name)
 	}
+	if !contains(m.Attachments, name) {
+		return fmt.Errorf("%s has no attachment %q", m.ID, name)
+	}
 	verify(m)
 	if err := checkAttachment(m, name, data); err != nil {
 		return err
@@ -1087,6 +1113,27 @@ func boxFlag(f flags) []string {
 	return out
 }
 
+// letterFileThere says a letter's file is in a pigeonhole, readable or not:
+// gc never takes a damaged letter's attachments for leftovers.
+func letterFileThere(dir, box, helper, id string) bool {
+	for _, s := range stateDirs {
+		if _, err := os.Stat(filepath.Join(slotDir(dir, box, helper), s.dir, id+".md")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// slotEmpty says a pigeonhole holds nothing at all.
+func slotEmpty(dir, box, helper string) bool {
+	for _, sub := range []string{"new", "read", "archive", "files"} {
+		if ents, err := os.ReadDir(filepath.Join(slotDir(dir, box, helper), sub)); err == nil && len(ents) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // helperHint says, under a person's own inbox, that their helpers have
 // unread mail of their own (with the store here; status says it anywhere).
 func helperHint(dir, box string, f flags) {
@@ -1112,7 +1159,17 @@ func findFor(dir, box string, f flags, id string, withBody bool) (*Message, erro
 		return nil, err
 	}
 	if helper != "" && !all {
-		return findIn(dir, box, helper, id, withBody)
+		m, err := findIn(dir, box, helper, id, withBody)
+		if err != nil {
+			if other, err2 := findAnywhere(dir, box, id, false); err2 == nil {
+				where := "the person's own pigeonhole"
+				if other.Pigeonhole != "" {
+					where = other.Pigeonhole + "'s pigeonhole"
+				}
+				return nil, fmt.Errorf("%s isn't in %s's pigeonhole; it's in %s", id, helper, where)
+			}
+		}
+		return m, err
 	}
 	return findAnywhere(dir, box, id, withBody)
 }
@@ -1340,15 +1397,14 @@ func cmdGc(args []string) error {
 			files := filepath.Join(slotDir(dir, box, h), "files")
 			ents, _ := os.ReadDir(files)
 			for _, e := range ents {
-				if _, err := findIn(dir, box, h, e.Name(), false); err != nil && checkID(e.Name()) == nil {
+				if checkID(e.Name()) == nil && !letterFileThere(dir, box, h, e.Name()) {
 					os.RemoveAll(filepath.Join(files, e.Name()))
 				}
 			}
-			// A helper's pigeonhole with nothing left in it goes too.
-			if h != "" && len(loadSlot(dir, box, h, []string{"unread", "read", "archived"}, false)) == 0 {
-				if ents, _ := os.ReadDir(files); len(ents) == 0 {
-					os.RemoveAll(slotDir(dir, box, h))
-				}
+			// A helper's pigeonhole with nothing at all left in it goes too:
+			// not one file, readable or not.
+			if h != "" && slotEmpty(dir, box, h) {
+				os.RemoveAll(slotDir(dir, box, h))
 			}
 		}
 		unlock()

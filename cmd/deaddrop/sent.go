@@ -85,17 +85,37 @@ func gatherSent(dir, who string) []*SentMessage {
 		// copy sitting where it says it was sent.
 		count := map[string]int{}
 		for _, f := range fs {
-			count[contentKey(f.m)]++
+			if placedRight(f.m) {
+				count[contentKey(f.m)]++
+			}
+		}
+		// Copies that disagree: one that verifies is the letter, whatever
+		// the others say (planting more copies wins nothing). Failing that,
+		// the most copies sitting where they say they were sent.
+		verified := map[string]bool{}
+		if len(count) > 1 {
+			for _, f := range fs {
+				k := contentKey(f.m)
+				if _, done := verified[k]; !done && placedRight(f.m) {
+					c := *f.m
+					verify(&c)
+					verified[k] = c.Signature == sigVerified
+				}
+			}
 		}
 		best := ""
 		bestRank := -1
 		for _, f := range fs {
-			rank := count[contentKey(f.m)] * 2
+			k := contentKey(f.m)
+			rank := count[k] * 2
+			if verified[k] {
+				rank += 1000
+			}
 			if placedRight(f.m) {
 				rank++
 			}
 			if rank > bestRank {
-				best, bestRank = contentKey(f.m), rank
+				best, bestRank = k, rank
 			}
 		}
 		s := &SentMessage{}
@@ -138,7 +158,7 @@ func contentKey(m *Message) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00",
 		m.From, m.Persona+"\x00"+m.ReplyBox, strings.Join(m.For, ","), strings.Join(m.Recipients, ","), m.Subject,
-		strings.Join(m.Tags, ","), m.UrgencyWas, m.Thread, strings.Join(m.Attachments, ","),
+		strings.Join(m.Tags, ","), m.FollowUp, m.Thread, strings.Join(m.Attachments, ","),
 		strings.Join(m.AttachmentSums, ","), m.SignedBy, m.SignedAt)
 	h.Write([]byte(canonicalBody(m.Body)))
 	return hex.EncodeToString(h.Sum(nil))

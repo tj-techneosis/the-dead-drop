@@ -176,7 +176,12 @@ func watchPass(hooks bool) (passResult, error) {
 	if err != nil {
 		return r, err
 	}
-	defer unlock()
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
 
 	at := now().UTC()
 	prev := readInbox()
@@ -264,6 +269,10 @@ func watchPass(hooks bool) (passResult, error) {
 		return r, err
 	}
 	sort.Slice(r.announced, func(i, j int) bool { return r.announced[i].Sent.Before(r.announced[j].Sent) })
+	// The hooks run with the lock let go: one that marks or opens mail
+	// refreshes the inbox file, which takes the lock again.
+	unlock()
+	locked = false
 	for _, e := range r.announced {
 		runHooks(box, e)
 	}
@@ -529,8 +538,8 @@ func cmdOpen(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
-	if err := setWatchFor(f); err != nil && f.get("for") != "*" {
-		return bad(u, err)
+	if err := setWatchFor(f); err != nil {
+		return bad(u, err) // one pigeonhole, never '*': open marks what it shows
 	}
 	var page []byte
 	var name, id string

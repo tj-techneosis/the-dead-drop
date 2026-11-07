@@ -228,7 +228,9 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
   pigeonhole, or with a `for` added or taken off, reads as bad.
 - **Your own inbox and `status` say when a helper has unread mail,** and
   sending to a pigeonhole nobody has used yet says so (a typo?).
-- **Replies find their way back.** Answering "bob, as Release manager"
+- **Replies find their way back.** A letter with a reply box
+  (`--reply-box`, signed and verified) is answered there. Otherwise,
+  answering "bob, as Release manager"
   (when that persona is signed and verified: anyone can claim one on an
   unsigned letter) goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
   name, lowercase, with dashes), unless you say `--for`. What a letter was
@@ -336,7 +338,8 @@ letter shows who it's from (and as whom), its signature, whether yours have
 been read, and its gist, the first real paragraph; the whole letter opens
 beneath it. `--json` gives the same to a program (`letters`, each with
 `mine`, `gist` and, for yours, `copies`). They mark nothing. Against a store
-from before 0.4 they show the other side only, and say so.
+from before 0.4 they show the other side only, and say so; against one from before 0.6,
+a helper's `thread`, `with` and `threads` say the store needs upgrading.
 
 Run `deaddrop watch` every minute or so with whatever your machine has:
 Crontinental, launchd, systemd, cron, or `--every` in a terminal or a
@@ -482,22 +485,23 @@ deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to I
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
               [--reply-box BOX] < body.md
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
-deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
-deaddrop show ID [--json|--html [--fragment]] [--box WHO]
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--for H] [--json]
+deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--for H] [--json]
+deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
-deaddrop file ID [NAME] [--box WHO]
+deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
-deaddrop watch [--every 1m] [--no-hooks]
-deaddrop open ID [--keep-unread] | --thread ID | --with WHO
+deaddrop watch [--every 1m] [--no-hooks] [--for H]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json]
 deaddrop with WHO [--tag T]... [--for H] [--json|--html]
-deaddrop bar [--format text|swiftbar]
+deaddrop bar [--format text|swiftbar] [--for H]
+# --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with and threads: every one)
 deaddrop upgrade [--check] | version | help
 ```
 

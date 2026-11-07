@@ -248,10 +248,27 @@ class Signed(DeadDrop):
         self.assertEqual(self.one()["signature"], "bad")  # the sender said normal
         path.write_text(good.replace("urgency: normal", "urgency: fyi\nraised: 2026-01-01T00:00:00Z"))
         self.assertEqual(self.one()["signature"], "bad")  # raised, but not to urgent
+        # Even naming the right urgency: the sender never asked for a
+        # follow-up, so nothing could have raised it.
         path.write_text(good.replace("urgency: normal", "urgency: urgent\nraised: 2026-01-01T00:00:00Z\nurgency_was: normal"))
         m = self.one()
-        self.assertEqual(m["signature"], "verified")
-        self.assertIn("raised to urgent by a follow-up", m["signature_note"])
+        self.assertEqual(m["signature"], "bad")
+        self.assertIn("never asked for", m["signature_note"])
+        # A follow-up added by hand to a signed letter breaks its seal.
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nfollow_up: 2026-01-01T00:00:00Z\nraised: 2026-01-02T00:00:00Z\nurgency_was: normal"))
+        self.assertEqual(self.one()["signature"], "bad")
+
+    def test_a_copy_delivered_again_says_so(self):
+        self.send("# Pay\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        self.dd("mark", "read", path.stem, DEADDROP_FROM="bob")
+        read = next((self.dir / "bob" / "read").glob("*.md"))
+        again = self.dir / "bob" / "new" / (read.stem[:-4] + "ffff.md")
+        again.write_text(read.read_text())  # its own sent line kept, so the time check can't see it
+        ms = {m["id"]: m for m in self.inbox("--read", DEADDROP_FROM="bob")}
+        self.assertEqual(ms[read.stem]["signature"], "verified")  # the first one stands
+        self.assertEqual(ms[again.stem]["signature"], "bad")
+        self.assertIn("delivered again", ms[again.stem]["signature_note"])
 
     def test_list_items_cant_be_merged(self):
         self.send("# Hi\n\nx\n", "--to", "bob", "--tag", "a", "--tag", "b", **self.as_("alice"))

@@ -166,8 +166,14 @@ func cmdFollowUp(args []string) error {
 	}
 	fmt.Printf("%s is still unread: raised to urgent\n", m.ID)
 	// One ring per letter: a letter for several helpers has a copy (and a
-	// follow-up) each, and rings for the first.
-	if len(m.For) == 0 || m.Pigeonhole == m.For[0] {
+	// follow-up) each, and rings for whichever is raised first.
+	fp, already := letterOf(m), false
+	for _, other := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
+		if other.ID != m.ID && other.Raised != "" && letterOf(other) == fp {
+			already = true
+		}
+	}
+	if !already {
 		ring(box, m)
 	}
 	return nil

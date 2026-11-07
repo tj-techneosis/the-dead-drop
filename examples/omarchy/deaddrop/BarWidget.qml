@@ -108,6 +108,9 @@ Panel {
   property string threadsNote: ""
   property string threadsErr: ""
   property string holeNote: ""       // a helper's pigeonhole: loading, or what went wrong
+  property string listerNote: ""     // finding the pigeonholes went wrong
+  property bool holeStale: false     // a fetch came back for another pigeonhole
+  property bool threadsStale: false
   property var holeUnread: ({})      // helper -> unread count, for the chips
   property var pending: []           // actions waiting for the one running
   readonly property int threadLimit: 80
@@ -171,7 +174,7 @@ Panel {
   }
 
   function loadTopics(raw) {
-    if (threadLister.askedFor !== root.hole) { root.refreshViews(); return } // a fetch for another pigeonhole
+    if (threadLister.askedFor !== root.hole) { root.threadsStale = true; return } // for another pigeonhole: asked again on exit
     var data
     try { data = JSON.parse(raw) } catch (e) { root.topics = []; root.speakers = []; root.threadsNote = "Couldn't read the threads."; return }
     var notes = []
@@ -219,7 +222,7 @@ Panel {
   }
 
   function loadHole(raw) {
-    if (holeReader.askedFor !== root.hole) { root.refreshViews(); return } // a fetch for another pigeonhole
+    if (holeReader.askedFor !== root.hole) { root.holeStale = true; return } // for another pigeonhole: asked again on exit
     var list
     try { list = JSON.parse(raw) } catch (e) { root.holeNote = root.holeNote || "Couldn't read " + root.hole + "'s pigeonhole."; return }
     root.holeNote = ""
@@ -284,7 +287,7 @@ Panel {
     root.unread = Number(data.unread || 0)
     root.urgent = Number(data.urgent || 0)
     root.messages = data.messages || []
-    if (root.cursor > root.messages.length) root.cursor = root.messages.length
+    root.clampCursor()
     // The open message, as the file now has it (or gone, once archived).
     if (root.reading) {
       var still = null
@@ -312,7 +315,13 @@ Panel {
 
   // One at a time; one asked for while another runs waits its turn.
   function runAction(cmd, note) {
-    if (actor.running) { root.pending = root.pending.concat([[cmd, note]]); return }
+    if (actor.running) {
+      var key = cmd.join(" ")
+      if (actor.command.slice(1).join(" ") === key) return
+      for (var i = 0; i < root.pending.length; i++) if (root.pending[i][0].join(" ") === key) return
+      root.pending = root.pending.concat([[cmd, note]])
+      return
+    }
     root.actionNote = ""
     actor.label = note
     actor.command = [root.deaddrop].concat(cmd)
@@ -339,9 +348,9 @@ Panel {
     root.readingNote = ""
   }
 
-  function archiveMessage(m) { root.runAction(["mark", "archive", String(m.id)], "Archive"); root.closeMessage() }
-  function putBackMessage(m) { root.runAction(["mark", "unread", String(m.id)], "Mark unread"); root.closeMessage() }
-  function markMessageRead(m) { root.runAction(["mark", "read", String(m.id)], "Mark read") }
+  function archiveMessage(m) { root.runAction(["mark", "archive", String(m.id)].concat(root.forArgs()), "Archive"); root.closeMessage() }
+  function putBackMessage(m) { root.runAction(["mark", "unread", String(m.id)].concat(root.forArgs()), "Mark unread"); root.closeMessage() }
+  function markMessageRead(m) { root.runAction(["mark", "read", String(m.id)].concat(root.forArgs()), "Mark read") }
 
   function openLink(link) {
     var l = String(link).toLowerCase()
@@ -447,13 +456,14 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHoles(text) }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") root.holeNote = "Pigeonholes: " + text.trim().replace(/^deaddrop: /, "")
+      onStreamFinished: root.listerNote = text.trim() !== "" ? "Pigeonholes: " + text.trim().replace(/^deaddrop: /, "") : ""
     }
   }
 
   Process {
     id: holeReader
     property string askedFor: ""
+    onExited: function(exitCode) { if (root.holeStale) { root.holeStale = false; root.refreshViews() } }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadHole(text) }
     stderr: StdioCollector {
       waitForEnd: true
@@ -464,6 +474,7 @@ Panel {
   Process {
     id: threadLister
     property string askedFor: ""
+    onExited: function(exitCode) { if (root.threadsStale) { root.threadsStale = false; root.refreshViews() } }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadTopics(text) }
     stderr: StdioCollector {
       waitForEnd: true
@@ -638,6 +649,19 @@ Panel {
           }
 
           // ---- what's shown: inbox or threads, whose pigeonhole, which speaker ----
+
+          Text {
+            visible: !root.reading && root.listerNote !== ""
+            width: parent.width
+            leftPadding: Style.space(10)
+            rightPadding: Style.space(10)
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.listerNote
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
 
           Flow {
             visible: !root.reading
@@ -902,7 +926,7 @@ Panel {
     signal picked()
     radius: height / 2
     implicitHeight: chipText.implicitHeight + Style.space(6)
-    implicitWidth: chipText.implicitWidth + Style.space(16)
+    implicitWidth: Math.min(chipText.implicitWidth, Style.space(180)) + Style.space(16)
     color: on ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14) : "transparent"
     border.width: 1
     border.color: on ? root.foreground : root.dim
@@ -910,6 +934,8 @@ Panel {
     Text {
       id: chipText
       anchors.centerIn: parent
+      width: Math.min(implicitWidth, Style.space(180))
+      elide: Text.ElideRight
       textFormat: Text.PlainText
       text: chip.label
       color: chip.on ? root.foreground : root.dim

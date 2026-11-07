@@ -116,6 +116,17 @@ func letters() (string, []*Letter, string, error) {
 			if helper != "" && helperSlug(s.Persona) != helper {
 				continue
 			}
+			// A note to yourself that went only to your helpers' pigeonholes
+			// isn't part of the plain view.
+			if len(lettersFor) == 0 {
+				outside := false
+				for _, c := range s.Copies {
+					outside = outside || !(c.Box == me && c.For != "")
+				}
+				if !outside {
+					continue
+				}
+			}
 			s.ID = s.Copies[0].ID
 			ls = append(ls, &Letter{Message: s.Message, Mine: true, Copies: s.Copies, Gist: gist(s.Body)})
 		}

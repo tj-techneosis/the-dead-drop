@@ -130,7 +130,7 @@ func cleanLine(s string, n int) string {
 		if r == '\n' || r == '\r' || r == '\t' {
 			return ' '
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+		if unicode.IsControl(r) || (unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d') || r == '\u2028' || r == '\u2029' {
 			return -1
 		}
 		return r

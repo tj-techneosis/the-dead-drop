@@ -288,3 +288,9 @@ class PigeonholeReview(DeadDrop):
         self.send("# Q\n\nx\n", "--to", "bob", DEADDROP_REPLY_BOX="alice-helper", **self.signed("alice"))
         self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["reply_box"], "alice-helper")
         self.dd("send", "--to", "bob", "--reply-box", "Not A Box", input="# B\n\nx\n", ok=False)
+
+    def test_a_reply_box_typo_and_a_bad_variable_say_so(self):
+        p = self.dd("send", "--to", "bob", "--reply-box", "alice-helpr", input="# Q\n\nx\n")
+        self.assertIn("no box alice-helpr yet", p.stderr)
+        p = self.dd("send", "--to", "bob", input="# Q\n\nx\n", DEADDROP_REPLY_BOX="Not A Box", ok=False)
+        self.assertIn("$DEADDROP_REPLY_BOX", p.stderr)
