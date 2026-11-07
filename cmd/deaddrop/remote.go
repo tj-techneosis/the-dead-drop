@@ -171,6 +171,9 @@ func remoteBytes(host, cmd string, args []string) ([]byte, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
+		if errors.As(err, &ee) && ee.code == exitNoBox {
+			return nil, exitError{exitNoBox, msg} // a job tells "no box yet" by its code
+		}
 		return nil, errors.New(msg)
 	}
 	return out.Bytes(), nil

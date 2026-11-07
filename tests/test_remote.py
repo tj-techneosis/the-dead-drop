@@ -95,7 +95,7 @@ class Remote(RemoteBase):
         self.rdd("send", "--to", "carol", input="x\n")
         p = self.rdd("mark", "read", "2026-11-02T153000-bob-0000", ok=False)
         self.assertIn("no box alice", p.stderr)
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)  # no such box: its own code, across ssh
         unreachable = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
         p = self.rdd("status", env=dict(DEADDROP_SSH=str(unreachable)), ok=False)
         self.assertIn("could not reach the store on store-box", p.stderr)
@@ -351,6 +351,14 @@ class RemoteDashes(RemoteBase):
         for cmd in ("inbox", "pull"):
             p = self.rdd(cmd, "--", "bob", env=dict(DEADDROP_FROM="bob"))
             self.assertIn(a[-4:], p.stdout, (cmd, p.stderr))
+
+
+    def test_a_box_nothing_was_sent_to_says_so_by_its_code_over_ssh(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        for args in (("inbox", "carol", "--json"), ("mark", "read", "--box", "carol", "--tag", "x")):
+            p = self.rdd(*args, ok=False, env=dict(DEADDROP_FROM="bob"))
+            self.assertEqual(p.returncode, 4, (args, p.stderr))
+            self.assertIn("no box carol", p.stderr)
 
 
 class Mirror(RemoteBase):

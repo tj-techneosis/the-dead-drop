@@ -109,6 +109,14 @@ type exitError struct {
 
 func (e exitError) Error() string { return e.msg }
 
+// exitNoBox is the exit code for a box nothing was ever sent to, so a job
+// can tell "no such box yet" from a failure without reading the words.
+const exitNoBox = 4
+
+func noBox(box string) error {
+	return exitError{exitNoBox, fmt.Sprintf("there's no box %s", box)}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
