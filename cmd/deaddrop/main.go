@@ -368,6 +368,12 @@ func parseFlags(args []string, spec map[string]bool) (flags, error) {
 			if flagLike.MatchString(v) {
 				return f, fmt.Errorf("--%s needs a value, and got %s (an empty variable?)", k, v)
 			}
+			// A bare "--" ends the flags everywhere else that reads them (the
+			// default box, a helper, the gate), so it's never a value: say
+			// --%s=-- for that.
+			if v == "--" {
+				return f, fmt.Errorf("--%s needs a value, and got -- (for a value of --, say --%s=--)", k, k)
+			}
 		}
 		if !takes && hasV {
 			return f, fmt.Errorf("--%s takes no value", k)

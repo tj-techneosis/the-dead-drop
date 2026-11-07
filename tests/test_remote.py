@@ -561,6 +561,10 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
     def test_a_flag_value_of_dashes_cant_hide_a_from(self):
         p = self.gate("deaddrop send --to bob --subject -- --from carol", input="x\n")
         self.assertNotEqual(p.returncode, 0)
+        self.assertRegex(p.stderr, r"sends only as alice|send as yourself \(alice\)|got -- ")
+        self.assertEqual(self.files("bob", "new"), [])
+        p = self.gate("deaddrop send --to bob --subject=-- --from carol", input="x\n")
+        self.assertNotEqual(p.returncode, 0)
         self.assertRegex(p.stderr, r"sends only as alice|send as yourself \(alice\)")
 
     def test_a_bare_dashes_and_from_as_a_filter_are_honest_use(self):
