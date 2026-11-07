@@ -321,7 +321,8 @@ func cmdSent(args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if f.has("wrapped") {
-			return enc.Encode(sentWrapped{Letters: ss, Partial: gateRead != nil})
+			// Whatever made this list partial, here or further on.
+			return enc.Encode(sentWrapped{Letters: ss, Partial: partial})
 		}
 		return enc.Encode(ss)
 	}
