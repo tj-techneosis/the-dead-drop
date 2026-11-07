@@ -207,7 +207,11 @@ func ring(box string, m *Message) {
 		text = summaryLine(box+": urgent from", m)
 	}
 	// Tagged with the message, so a viewer can fold the ring into it.
-	if out, err := exec.Command(cron, "notify", "--urgent", "--tag", "drop="+m.ID, "--title", "Dead Drop", text).CombinedOutput(); err != nil {
+	a := []string{"notify", "--urgent", "--tag", "drop=" + m.ID, "--tag", "deaddrop-box=" + box}
+	if m.Pigeonhole != "" {
+		a = append(a, "--tag", "deaddrop-for="+m.Pigeonhole) // routed like the pigeonhole's own ring
+	}
+	if out, err := exec.Command(cron, append(a, "--title", "Dead Drop", text)...).CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "deaddrop: could not ring: %s\n", strings.TrimSpace(string(out)))
 	}
 }

@@ -132,6 +132,55 @@ class Firetower(DeadDrop):
         p = self.dd("firetower", "--box", "bob", "--ring", ok=False)
         self.assertIn("can't be read", p.stderr)
 
+    def test_heard_means_shown(self):
+        id = self.send("a\n", "--to", "bob", "--tag", "x")
+        stamp = self.dir / "bob" / ".heard"
+        self.dd("pull", "bob", "--tag", "y")  # filtered: shows only some of the box
+        self.dd("show", id, "--box", "bob")  # one letter isn't the box
+        self.dd("show", id, "--box", "bob", "--heard-at", at(2))  # an older mirror's refresh: taken, changes nothing
+        self.dd("mark", "read", id, "--box", "bob")
+        self.assertFalse(stamp.exists())
+        self.dd("pull", "bob")  # the whole box: heard
+        self.assertTrue(stamp.exists())
+        self.dd("send", "--to", "bob,,carol", input="x\n", ok=False)  # a stray comma: said, not guessed
+
+    def test_a_pigeonholes_fire_mark_outlives_a_run_without_pigeonholes(self):
+        self.send("a\n", "--to", "bob", "--for", "planner")
+        ph = ("--box", "bob", "--pigeonholes", "--fire-after", "3h", "--ring")
+        self.dd("firetower", *ph)  # first run: notes
+        self.clock = at(200)
+        self.dd("firetower", *ph)
+        self.assertEqual(len(self.rings()), 1)
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")  # another job, no --pigeonholes
+        self.dd("firetower", *ph)
+        self.assertEqual(len(self.rings()), 1)  # the planner's fire isn't rung again
+
+    def test_an_urgent_ring_in_a_pigeonhole_says_so(self):
+        self.config.write_text("ring_urgent = true\n")
+        self.send("a\n", "--to", "bob", "--for", "planner", "--urgent")
+        rings = self.rings()
+        self.assertTrue(rings and "deaddrop-for=planner" in rings[-1], rings)
+
+    def test_pigeonholes_on_the_board(self):
+        self.send("a\n", "--to", "bob", "--for", "planner")
+        self.dd("firetower", "--box", "bob")
+        self.assertNotIn("mail/bob/for/planner", self.reports())  # only when asked
+        ages = ("--box", "bob", "--pigeonholes", "--smoke-after", "30m", "--fire-after", "3h", "--ring")
+        self.dd("firetower", *ages)  # first --ring run: notes
+        self.clock = at(200)
+        self.dd("firetower", *ages)
+        r = self.calls(self.tower_calls)
+        last = {c[1]: c for c in r}
+        self.assertEqual(last["mail/bob/inbox"][2], "green")       # bob's own: nothing waiting
+        self.assertEqual(last["mail/bob/for/planner"][2], "red")   # the planner's: waited 3h unheard
+        rings = self.rings()
+        self.assertEqual(len(rings), 1)
+        self.assertIn("deaddrop-for=planner", rings[0])
+        # The planner's pull hears its pigeonhole, not bob's.
+        self.dd("pull", "bob", "--for", "planner")
+        self.dd("firetower", *ages)
+        self.assertEqual({c[1]: c for c in self.calls(self.tower_calls)}["mail/bob/for/planner"][2], "green")
+
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
         self.dd("firetower")

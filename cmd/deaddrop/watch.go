@@ -478,7 +478,7 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false, "heard-at": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -515,9 +515,9 @@ func cmdShow(args []string) error {
 			return err
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
-		if !f.has("unheard") {
-			hear(dir, m.Box, m.Pigeonhole)
-		}
+		// One letter shown isn't the box heard: only a pull of the whole
+		// box stamps it. (--unheard and --heard-at are still taken, from
+		// mirrors of 0.7.2 to 0.7.4, and change nothing.)
 	}
 	switch {
 	case f.has("json"):

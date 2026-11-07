@@ -277,7 +277,7 @@ func boxHolding(dir, not, id string) string {
 	return ""
 }
 
-// heardFile stamps when a pigeonhole was last read (pull, show, mark): its
+// heardFile stamps when a pigeonhole was last shown whole (a pull): its
 // time is all it holds. A board counts mail waiting since then as unheard.
 const heardFile = ".heard"
 

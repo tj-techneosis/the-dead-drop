@@ -168,8 +168,13 @@ func equalArgs(a, b []string) bool {
 // watch's pass, which prunes once itself.
 func fetchIntoMirror(path, host, cmd string, args []string, me string, unheard, fromRefresh bool, heardAt time.Time) ([]byte, error) {
 	// Stamped when the fetch starts: a write from here while it's in flight
-	// is later than this, so the answer reads as stale.
+	// is later than this, so the answer reads as stale. The folder is made
+	// first, so even the very first fetch has somewhere for that write's
+	// stamp to land.
 	started := now()
+	if os.MkdirAll(mirrorDir(), 0o700) == nil {
+		os.Chmod(mirrorDir(), 0o700)
+	}
 	var out []byte
 	var err error
 	if !heardAt.IsZero() && cmd == "pull" {

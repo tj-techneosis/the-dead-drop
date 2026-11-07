@@ -193,6 +193,11 @@ func draftOf(f flags) (draft, error) {
 	}
 	for _, w := range f.all("to") {
 		for _, w := range strings.Split(w, ",") {
+			// A blank name would be "me" on one end and the session's box on
+			// the other: say it rather than guess.
+			if strings.TrimSpace(w) == "" {
+				return d, badf(u, "--to %q: an empty name (a stray comma?)", f.get("to"))
+			}
 			who, err := resolveBox("--to", strings.TrimSpace(w))
 			if err != nil {
 				return d, bad(u, err)
@@ -1001,6 +1006,9 @@ func cmdPull(args []string) error {
 		if err != nil {
 			return bad(u, err)
 		}
+		// Heard as of now, before the letters are read: one delivered while
+		// they're checked hasn't been shown.
+		started := now()
 		ms = fl.apply(loadFor(dir, box, helper, all, states, true))
 		sortForPull(ms)
 		prepare(ms, f.has("raw"), dir)
@@ -1008,7 +1016,7 @@ func cmdPull(args []string) error {
 		// that only keeps a copy (watch --mirror), not one who reads it.
 		// --heard-at: a mirror's refresh for a reader who was shown the
 		// box as of then (read from the mirror), not as of this fetch.
-		at := now()
+		at := started
 		if f.has("heard-at") {
 			t, err := time.Parse(time.RFC3339Nano, f.get("heard-at"))
 			if err != nil {
@@ -1016,7 +1024,8 @@ func cmdPull(args []string) error {
 			}
 			at = t
 		}
-		if !f.has("unheard") {
+		// A filtered pull showed only some of the box: it isn't heard.
+		if !f.has("unheard") && fl.describe() == "" {
 			if all {
 				hearAt(dir, box, "", at)
 				for _, h := range helpers(dir, box) {
@@ -1364,7 +1373,6 @@ func cmdMark(args []string) error {
 		if err := move(dir, m, target); err != nil {
 			return err
 		}
-		hear(dir, m.Box, m.Pigeonhole)
 		if was != target {
 			moved++
 			if was == "unread" {
