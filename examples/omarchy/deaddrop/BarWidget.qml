@@ -183,7 +183,7 @@ Panel {
     root.threadsErr = ""
     var notes = []
     if (data.sent_missing) notes.push(String(data.sent_missing))
-    if ((data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads, and the speakers in them.")
+    if (root.who === "" && (data.topics || []).length >= root.threadLimit) notes.push("The newest " + root.threadLimit + " threads; pick someone to see all of theirs.")
     root.threadsNote = notes.join(" ")
     var count = {}
     var list = data.topics || []
@@ -198,12 +198,22 @@ Panel {
       t.speakers = seen
       for (var k = 0; k < seen.length; k++) count[seen[k]] = (count[seen[k]] || 0) + 1
     }
-    var names = Object.keys(count)
-    names.sort(function(a, b) { return count[b] - count[a] || a.localeCompare(b) })
-    root.speakers = names
-    if (root.who !== "" && names.indexOf(root.who) < 0) root.who = ""
     root.topics = list
     root.clampCursor()
+  }
+
+  // Everyone in the mail, from `deaddrop people`: the dropdown lists them
+  // all, newest first, not only those in the threads on screen.
+  function loadPeople(raw) {
+    var list
+    try { list = JSON.parse(raw) } catch (e) { return }
+    var names = []
+    for (var i = 0; i < list.length; i++) {
+      var n = list[i].persona ? String(list[i].persona) : String(list[i].box)
+      if (names.indexOf(n) < 0) names.push(n)
+    }
+    root.speakers = names
+    if (root.who !== "" && names.indexOf(root.who) < 0) root.who = ""
   }
 
   function loadHoles(raw) {
@@ -254,10 +264,16 @@ Panel {
       if (root.holeMessages.length === 0) root.holeNote = "Looking in " + root.hole + "'s pigeonhole…"
       holeReader.running = true
     }
+    if (root.view === "threads" && !peopleLister.running) {
+      peopleLister.command = [root.deaddrop, "people", "--json"].concat(root.forArgs())
+      peopleLister.running = true
+    }
     if (root.view === "threads" && !threadLister.running) {
       threadLister.askedFor = root.hole
       root.threadsErr = ""
-      threadLister.command = [root.deaddrop, "threads", "--json", "--letters", "--limit", String(root.threadLimit)].concat(root.forArgs())
+      // One speaker picked: all their threads, however old. Otherwise the newest.
+      var limit = root.who === "" ? root.threadLimit : 1000
+      threadLister.command = [root.deaddrop, "threads", "--json", "--letters", "--limit", String(limit)].concat(root.forArgs())
       threadLister.running = true
     }
   }
@@ -467,6 +483,11 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.listerNote = text.trim() !== "" ? "Pigeonholes: " + text.trim().replace(/^deaddrop: /, "") : ""
     }
+  }
+
+  Process {
+    id: peopleLister
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.loadPeople(text) }
   }
 
   Process {
@@ -699,21 +720,33 @@ Panel {
             }
           }
 
-          Flow {
-            visible: !root.reading && root.view === "threads" && root.speakers.length > 1
+          // Who: a dropdown of everyone in the mail ("Everyone" first).
+          RowLayout {
+            visible: !root.reading && root.view === "threads" && root.speakers.length > 0
             width: parent.width
-            leftPadding: Style.space(10)
-            rightPadding: Style.space(10)
-            spacing: Style.space(6)
+            spacing: Style.space(8)
 
-            Chip { label: "Everyone"; on: root.who === ""; onPicked: { root.who = ""; root.cursor = 0 } }
-            Repeater {
-              model: root.speakers
-              Chip {
-                required property string modelData
-                label: modelData
-                on: root.who === modelData
-                onPicked: { root.who = (root.who === modelData ? "" : modelData); root.cursor = 0 }
+            Text {
+              Layout.leftMargin: Style.space(10)
+              textFormat: Text.PlainText
+              text: "Who"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            ComboBox {
+              id: whoBox
+              Layout.fillWidth: true
+              Layout.rightMargin: Style.space(10)
+              model: ["Everyone"].concat(root.speakers)
+              currentIndex: root.who === "" ? 0 : Math.max(0, root.speakers.indexOf(root.who) + 1)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              onActivated: function(index) {
+                root.who = index <= 0 ? "" : root.speakers[index - 1]
+                root.cursor = 0
+                root.refreshViews()
               }
             }
           }

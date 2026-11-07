@@ -247,7 +247,8 @@ deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] 
 deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--since 7d] [--box WHO] [--json]
 deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
-deaddrop threads [--for H] [--since 7d] [--limit N] [--letters [--bodies]] [--json]   # every thread, newest first
+deaddrop threads [--for H] [--since 7d] [--limit N] [--letters [--bodies]] [--json|--html]   # every thread, newest first
+deaddrop people [--json]                 # everyone in the person's mail, and their personas
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread

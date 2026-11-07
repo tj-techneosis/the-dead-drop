@@ -164,3 +164,23 @@ class Threads(DeadDrop):
         back = [m for m in self.inbox(DEADDROP_FROM="bob", **env) if m["subject"] == "Re: Q2"][0]
         self.assertNotIn("ask-alice", back["tags"])
 
+
+    def test_people_is_everyone_in_your_mail(self):
+        self.conversation()
+        ps = json.loads(self.dd("people", "--json").stdout)
+        who = {(p["box"], p.get("persona")) for p in ps}
+        self.assertIn(("alice", None), who)   # yourself, in what you sent
+        self.assertIn(("carol", None), who)
+        # bob's persona was unsigned: it counts as bob, not as the persona.
+        self.assertIn(("bob", None), who)
+        self.assertNotIn(("bob", "Release manager"), who)
+        self.assertIn("LETTERS", self.dd("people").stdout)
+
+    def test_people_counts_a_signed_persona_and_a_verified_tag(self):
+        signers(self.tmp / "s2", "alice", "bob")
+        env = dict(DEADDROP_SIGNERS=str(self.tmp / "s2"))
+        self.send("# A\n\nx\n", "--to", "alice", "--as", "Planner", DEADDROP_FROM="bob", DEADDROP_SIGN_KEY=key("bob")[0], **env)
+        self.send("# B\n\nx\n", "--to", "alice", "--tag", "persona-reviewer", DEADDROP_FROM="bob", DEADDROP_SIGN_KEY=key("bob")[0], **env)
+        ps = {(p["box"], p.get("persona"), p.get("tagged", False)) for p in json.loads(self.dd("people", "--json", **env).stdout)}
+        self.assertIn(("bob", "Planner", False), ps)
+        self.assertIn(("bob", "Reviewer", True), ps)

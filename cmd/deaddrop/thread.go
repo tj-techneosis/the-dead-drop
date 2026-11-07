@@ -725,3 +725,102 @@ func cmdAsks(args []string) error {
 	}
 	return nil
 }
+
+// ---- people: everyone in your mail ----
+
+// Person is one sender, or one persona of a sender, in your mail.
+type Person struct {
+	Box     string    `json:"box"`
+	Persona string    `json:"persona,omitempty"`
+	Tagged  bool      `json:"tagged,omitempty"` // the persona comes from a persona-<name> tag, not the seal
+	Letters int       `json:"letters"`
+	Unread  int       `json:"unread"`
+	Last    time.Time `json:"last"`
+}
+
+// personaTag is a letter's persona-<name> tag, as a name ("persona-release-
+// manager" is "Release manager"), or "".
+func personaTag(l *Letter) string {
+	for _, t := range l.Tags {
+		if strings.HasPrefix(t, "persona-") && len(t) > 8 {
+			w := strings.ReplaceAll(t[8:], "-", " ")
+			return strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return ""
+}
+
+func cmdPeople(args []string) error {
+	const u = "people [--for HELPER|'*'] [--json]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "for": true})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) > 0 {
+		return badf(u, "people takes no words of its own")
+	}
+	lettersFor = forArgs(f)
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	// A persona counts only where it's trustworthy: sealed, or a tag on a
+	// letter that verifies. Anything else is its box.
+	byKey := map[string]*Person{}
+	var out []*Person
+	for _, l := range ls {
+		box := l.From
+		if l.Mine {
+			box = me
+		}
+		p := Person{Box: box}
+		if l.Signature == sigVerified || l.Signature == "" {
+			if l.Persona != "" {
+				p.Persona = l.Persona
+			} else if t := personaTag(l); t != "" {
+				p.Persona, p.Tagged = t, true
+			}
+		}
+		k := p.Box + "\x00" + p.Persona
+		e := byKey[k]
+		if e == nil {
+			e = &Person{Box: p.Box, Persona: p.Persona, Tagged: p.Tagged}
+			byKey[k] = e
+			out = append(out, e)
+		}
+		e.Letters++
+		if !l.Mine && l.State == "unread" {
+			e.Unread++
+		}
+		if l.Sent.After(e.Last) {
+			e.Last = l.Sent
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
+	if f.has("json") {
+		if out == nil {
+			out = []*Person{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	if missing != "" {
+		fmt.Println("(" + missing + ")")
+	}
+	at := now()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "WHO\tLETTERS\tUNREAD\tLAST")
+	for _, p := range out {
+		who := p.Box
+		if p.Persona != "" {
+			who += ", as " + cleanLine(p.Persona, 40)
+		}
+		unread := "-"
+		if p.Unread > 0 {
+			unread = strconv.Itoa(p.Unread)
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", cleanLine(who, 60), p.Letters, unread, ago(p.Last, at))
+	}
+	return tw.Flush()
+}

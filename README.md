@@ -264,6 +264,12 @@ asks in your box you haven't answered yet, oldest first: an ask closes when
 you reply in its thread, or file it. `--json` gives a panel the list. A
 reply never carries `ask` back.
 
+**Everyone in your mail.** `deaddrop people` lists every sender and
+persona across your box and what you sent, newest first, with how many
+letters and how many unread: a persona counts where it's trustworthy (the
+sealed one, or a `persona-<name>` tag on a letter that verifies), and is its
+box otherwise. `--json` for a panel's "who" list.
+
 **Every thread at a glance.** `deaddrop threads` lists them, newest activity
 first: subject, when it started and last moved, how many letters, how many
 unread, every tag, and who's in it (box, persona, helper, and the least
@@ -431,7 +437,8 @@ the system's own.
   (that marks it read), archive it or put it back from there, or open its
   thread or the whole conversation in the browser. A switch at the top
   turns it to **Threads**: every conversation, newest first, with chips to
-  show only the ones a given speaker was in (a letter's persona, else its
+  show only the ones a given speaker was in, picked from a dropdown of everyone
+  in your mail (`deaddrop people`: a letter's persona, else its
   `persona-<name>` tag, on letters that verify; else its box), and chips for each helper's
   pigeonhole once mail comes `--for` them. Copy the folder
   to Omarchy's bar plugins and add it to the bar.
@@ -532,6 +539,7 @@ deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for 
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
 deaddrop asks [--for H] [--json]
+deaddrop people [--for H] [--json]
 deaddrop with WHO [--tag T]... [--for H] [--json|--html]
 deaddrop bar [--format text|swiftbar] [--for H]
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with and threads: every one)

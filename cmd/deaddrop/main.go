@@ -37,6 +37,7 @@ On your own machine:
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
+  deaddrop people [--for H] [--json] everyone in your mail, and their personas
   deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json|--html]
                                    every thread, newest activity first
   deaddrop open --thread ID | --with WHO | --threads [--for H]   the same, in the browser
@@ -257,6 +258,7 @@ var here = map[string]func([]string) error{
 	"thread":  cmdThread,
 	"threads": cmdThreads,
 	"asks":    cmdAsks,
+	"people":  cmdPeople,
 	"with":    cmdWith,
 	"watch":   cmdWatch,
 	"open":    cmdOpen,
