@@ -103,6 +103,13 @@ func self(args ...string) ([]byte, error) {
 	var out, errb bytes.Buffer
 	c := exec.Command(exe, args...)
 	c.Stdout, c.Stderr = &out, &errb
+	// What it reads is said in its flags: a helper's DEADDROP_FOR mustn't
+	// quietly point an inner call at another pigeonhole.
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "DEADDROP_FOR=") {
+			c.Env = append(c.Env, kv)
+		}
+	}
 	if err := c.Run(); err != nil {
 		msg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(errb.String()), "deaddrop: "))
 		if msg == "" {
@@ -400,7 +407,11 @@ func cmdWatch(args []string) error {
 
 func say(r passResult) {
 	f := r.inbox
-	line := fmt.Sprintf("%s: %d unread", f.Box, f.Unread)
+	who := f.Box
+	if f.For != "" {
+		who += " (for " + f.For + ")"
+	}
+	line := fmt.Sprintf("%s: %d unread", who, f.Unread)
 	if f.Urgent > 0 {
 		line += fmt.Sprintf(", %d urgent", f.Urgent)
 	}
@@ -518,6 +529,9 @@ func cmdOpen(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
+	if err := setWatchFor(f); err != nil && f.get("for") != "*" {
+		return bad(u, err)
+	}
 	var page []byte
 	var name, id string
 	switch {
@@ -552,7 +566,7 @@ func cmdOpen(args []string) error {
 		if err := checkID(id); err != nil {
 			return bad(u, err)
 		}
-		if page, err = self("show", id, "--html"); err != nil {
+		if page, err = self(append([]string{"show", id, "--html"}, forArgs(f)...)...); err != nil {
 			if strings.Contains(err.Error(), `no command "show"`) {
 				return fmt.Errorf("the store's machine has a deaddrop from before show (0.2.0): upgrade it there (deaddrop upgrade)")
 			}
@@ -579,7 +593,7 @@ func cmdOpen(args []string) error {
 		return fmt.Errorf("could not open %s with %s: %s", path, opener, strings.TrimSpace(string(out)+" "+err.Error()))
 	}
 	if !f.has("keep-unread") {
-		if _, err := self("mark", "read", id); err != nil {
+		if _, err := self(append([]string{"mark", "read", id}, forArgs(f)...)...); err != nil {
 			return err
 		}
 		// The viewers read the inbox file: bring it up to date now.
@@ -615,11 +629,22 @@ func cmdBar(args []string) error {
 	return badf(u, "--format %s: text or swiftbar", f.get("format"))
 }
 
+// watchArgs is the --for a helper's bar passes on to what it runs.
+func watchArgs() []string {
+	if watchFor != "" {
+		return []string{"--for", watchFor}
+	}
+	return nil
+}
+
 // staleAfter is how old a check can be before the bar says so.
 const staleAfter = 10 * time.Minute
 
 func barText(in *InboxFile) string {
 	if in == nil {
+		if watchFor != "" {
+			return "Not watching " + watchFor + "'s pigeonhole yet (deaddrop watch --for " + watchFor + ")."
+		}
 		return "Not watching yet (deaddrop watch)."
 	}
 	s := "No mail."
@@ -631,6 +656,9 @@ func barText(in *InboxFile) string {
 		}
 	case in.Unread > 0:
 		s = fmt.Sprintf("%d unread", in.Unread)
+	}
+	if in.For != "" {
+		s = "for " + in.For + ": " + s
 	}
 	if !in.OK {
 		s += " (can't reach the store)"
@@ -664,7 +692,7 @@ func swiftbar(in *InboxFile, bin string) string {
 	case in == nil:
 		b.WriteString(" | sfimage=envelope\n---\n")
 		b.WriteString("Not watching yet" + plain + "\n")
-		act("", "Check now", "watch")
+		act("", "Check now", append([]string{"watch"}, watchArgs()...)...)
 		return b.String()
 	case in.Urgent > 0:
 		fmt.Fprintf(&b, "%d | sfimage=envelope.badge.fill sfcolor=#e5534b color=#e5534b\n", in.Unread)
@@ -715,8 +743,8 @@ func swiftbar(in *InboxFile, bin string) string {
 			fmt.Fprintf(&b, "--%s | disabled=true%s\n", menuText(e.SignatureNote, 120), strings.TrimPrefix(plain, " |"))
 		}
 		b.WriteString("-----\n")
-		act("--", "Read", "open", e.ID)
-		act("--", "Thread", "open", "--thread", e.ID)
+		act("--", "Read", append([]string{"open", e.ID}, watchArgs()...)...)
+		act("--", "Thread", append([]string{"open", "--thread", e.ID}, watchArgs()...)...)
 		if e.State == "unread" {
 			act("--", "Mark read", "mark", "read", e.ID)
 		} else {
@@ -742,6 +770,6 @@ func swiftbar(in *InboxFile, bin string) string {
 		}
 	}
 	b.WriteString("---\n")
-	act("", "Check now", "watch")
+	act("", "Check now", append([]string{"watch"}, watchArgs()...)...)
 	return b.String()
 }

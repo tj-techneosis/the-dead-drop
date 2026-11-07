@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -253,10 +254,11 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	orig, err := findAnywhere(dir, me, f.pos[0], false)
+	orig, err := findAnywhere(dir, me, f.pos[0], true)
 	if err != nil {
 		return err
 	}
+	verify(orig) // a reply follows only a persona that's really theirs
 	if orig.From == automation {
 		return fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
 	}
@@ -305,6 +307,11 @@ func cmdReply(args []string) error {
 func replyHelpers(orig *Message, f flags) ([]string, error) {
 	if f.has("for") {
 		return helpersOf(f)
+	}
+	// Only a sealed persona that verifies says where a reply goes: anyone can
+	// write a letter claiming one.
+	if orig.Signature != sigVerified {
+		return nil, nil
 	}
 	if s := helperSlug(orig.Persona); s != "" {
 		return []string{s}, nil
@@ -475,8 +482,30 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	rung := map[string]bool{}
+	for _, h := range d.helpers {
+		for _, to := range d.to {
+			if _, err := os.Stat(slotDir(dir, to, h)); os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "deaddrop: %s has no %s pigeonhole yet; this starts one (a typo?)\n", to, h)
+			}
+		}
+	}
+	locked := map[string]func(){}
+	defer func() {
+		for _, unlock := range locked {
+			unlock()
+		}
+	}()
 	for _, at := range copies {
 		to := at.box
+		// Hold the box while its copies go in, so gc never takes a new
+		// letter's attachments for leftovers.
+		if locked[to] == nil {
+			unlock, err := lockBox(dir, to)
+			if err != nil {
+				return err
+			}
+			locked[to] = unlock
+		}
 		m := &Message{From: d.from, Persona: d.persona, For: d.helpers, Box: to, Pigeonhole: at.helper, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
 			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
 		// Who it went to, in every copy (deaddrop sent puts them together).
@@ -711,7 +740,7 @@ func boxArg(u string, pos []string) (string, error) {
 }
 
 func cmdInbox(args []string) error {
-	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for HELPER|'*'] [--json]"
+	const u = "inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for HELPER|'*'] [--json]"
 	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "read": false, "all": false, "json": false, "raw": false, "for": true})
 	if err != nil {
 		return bad(u, err)
@@ -772,6 +801,7 @@ func cmdInbox(args []string) error {
 			where = h + "'s pigeonhole in " + where
 		}
 		fmt.Printf("%s in %s.\n", what, where)
+		helperHint(dir, box, f)
 		if !f.has("all") && !f.has("read") && viaHost == "" && !f.has("for") {
 			if n := len(fl.apply(loadBox(dir, box, []string{"read"}, false))); n > 0 {
 				fmt.Printf("(%d read: --all shows them.)\n", n)
@@ -805,6 +835,7 @@ func cmdInbox(args []string) error {
 			fmt.Printf("\n✗ %s: %s. Don't trust who it says it's from.\n", m.ID, m.SignatureNote)
 		}
 	}
+	helperHint(dir, box, f)
 	return nil
 }
 
@@ -963,6 +994,9 @@ func cmdFile(args []string) error {
 		return nil
 	}
 	name := f.pos[1]
+	if !fileRE.MatchString(name) || filepath.Base(name) != name {
+		return fmt.Errorf("%q isn't a plain file name, so it's not handed out", name)
+	}
 	found := false
 	for _, a := range m.Attachments {
 		found = found || a == name
@@ -980,6 +1014,9 @@ func cmdFile(args []string) error {
 // handOver writes an attachment out once it's checked: never a file that
 // isn't what was sent, and a word when nobody vouches for who sent it.
 func handOver(m *Message, name string, data []byte) error {
+	if !fileRE.MatchString(name) || filepath.Base(name) != name {
+		return fmt.Errorf("%q isn't a plain file name, so it's not handed out", name)
+	}
 	verify(m)
 	if err := checkAttachment(m, name, data); err != nil {
 		return err
@@ -1020,6 +1057,23 @@ func boxFlag(f flags) []string {
 	return out
 }
 
+// helperHint says, under a person's own inbox, that their helpers have
+// unread mail of their own (with the store here; status says it anywhere).
+func helperHint(dir, box string, f flags) {
+	if viaHost != "" || f.has("for") || dir == "" {
+		return
+	}
+	var hs []string
+	for _, h := range helpers(dir, box) {
+		if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+			hs = append(hs, fmt.Sprintf("%s %d", h, n))
+		}
+	}
+	if len(hs) > 0 {
+		fmt.Printf("(unread for helpers: %s. deaddrop inbox --for '*')\n", strings.Join(hs, ", "))
+	}
+}
+
 // findFor finds one letter by id: in the pigeonhole --for names, else in any
 // of the box's (ids are unique across them).
 func findFor(dir, box string, f flags, id string, withBody bool) (*Message, error) {
@@ -1036,7 +1090,7 @@ func findFor(dir, box string, f flags, id string, withBody bool) (*Message, erro
 // ---- marking ----
 
 func cmdMark(args []string) error {
-	const u = "mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for HELPER|'*']"
+	const u = "mark read|unread|archive ID... | --tag T... [--from WHO]... [--since D] [--box WHO] [--for HELPER|'*']"
 	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
@@ -1053,6 +1107,13 @@ func cmdMark(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
+	var uniq []string
+	for _, id := range ids {
+		if !contains(uniq, id) {
+			uniq = append(uniq, id)
+		}
+	}
+	ids = uniq
 	if len(ids) > 0 && !fl.empty() {
 		return badf(u, "ids or --tag/--from, not both")
 	}
@@ -1121,12 +1182,14 @@ func cmdMark(args []string) error {
 // ---- the whole store ----
 
 type boxStatus struct {
-	Box      string   `json:"box"`
-	Unread   int      `json:"unread"`
-	Urgent   int      `json:"urgent"`
-	Read     int      `json:"read"`
-	Archived int      `json:"archived"`
-	Newest   *Message `json:"newest_unread,omitempty"`
+	Box    string `json:"box"`
+	Unread int    `json:"unread"`
+	// HelpersUnread: unread mail in each helper's pigeonhole (0.6.4).
+	HelpersUnread map[string]int `json:"helpers_unread,omitempty"`
+	Urgent        int            `json:"urgent"`
+	Read          int            `json:"read"`
+	Archived      int            `json:"archived"`
+	Newest        *Message       `json:"newest_unread,omitempty"`
 }
 
 func statusOf(dir, box string) boxStatus {
@@ -1141,6 +1204,14 @@ func statusOf(dir, box string) boxStatus {
 	s.Read = countFiles(filepath.Join(dir, box, "read"))
 	s.Archived = countFiles(filepath.Join(dir, box, "archive"))
 	s.Newest = newest(unread)
+	for _, h := range helpers(dir, box) {
+		if n := len(loadSlot(dir, box, h, []string{"unread"}, false)); n > 0 {
+			if s.HelpersUnread == nil {
+				s.HelpersUnread = map[string]int{}
+			}
+			s.HelpersUnread[h] = n
+		}
+	}
 	return s
 }
 
@@ -1180,13 +1251,22 @@ func cmdStatus(args []string) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "BOX\tUNREAD\tURGENT\tREAD\tARCHIVED\tNEWEST UNREAD")
+	fmt.Fprintln(tw, "BOX\tUNREAD\tURGENT\tREAD\tARCHIVED\tHELPERS\tNEWEST UNREAD")
 	for _, s := range out {
 		newest := "-"
 		if s.Newest != nil {
-			newest = s.Newest.Subject + " (from " + s.Newest.From + ")"
+			newest = cleanLine(s.Newest.Subject+" (from "+s.Newest.From+")", 120)
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\n", s.Box, s.Unread, s.Urgent, s.Read, s.Archived, newest)
+		hs := []string{}
+		for h, n := range s.HelpersUnread {
+			hs = append(hs, fmt.Sprintf("%s %d", h, n))
+		}
+		sort.Strings(hs)
+		helpersCol := "-"
+		if len(hs) > 0 {
+			helpersCol = strings.Join(hs, ", ")
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", s.Box, s.Unread, s.Urgent, s.Read, s.Archived, helpersCol, newest)
 	}
 	return tw.Flush()
 }
@@ -1232,6 +1312,12 @@ func cmdGc(args []string) error {
 			for _, e := range ents {
 				if _, err := findIn(dir, box, h, e.Name(), false); err != nil && checkID(e.Name()) == nil {
 					os.RemoveAll(filepath.Join(files, e.Name()))
+				}
+			}
+			// A helper's pigeonhole with nothing left in it goes too.
+			if h != "" && len(loadSlot(dir, box, h, []string{"unread", "read", "archived"}, false)) == 0 {
+				if ents, _ := os.ReadDir(files); len(ents) == 0 {
+					os.RemoveAll(slotDir(dir, box, h))
 				}
 			}
 		}

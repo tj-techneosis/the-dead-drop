@@ -75,9 +75,11 @@ EOF
   anyone else.
 - **For one of their helpers:** `--for <helper>` puts it in that helper's
   own pigeonhole in the person's box (`--for planner`). A helper reads its
-  own with `--for <helper>` on `inbox`, `pull`, `mark`, `watch` (or
-  `DEADDROP_FOR` for the session). If you're a helper with a pigeonhole,
-  read only yours.
+  own with `--for <helper>` on `inbox`, `pull`, `show`, `file`, `mark`,
+  `watch`, `bar`, `thread`, `with`, `threads` and `open`, or sets
+  `DEADDROP_FOR` once for the session. If you're a helper with a
+  pigeonhole, read only yours. A person's own `inbox` and `status` say when
+  helpers have unread mail.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
   the sender with its topic tags, "Re: " and a thread link (`persona-…`
   tags stay behind; `--untag T` drops another, `--tag T` adds yours). Or
@@ -230,18 +232,18 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] < doc.md
-deaddrop reply ID [--urgent|--fyi] < doc.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
-deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread] [--json]
-deaddrop show ID [--json]
+deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] [--for HELPER]... < doc.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... < doc.md
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for H] [--json]
+deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]
+deaddrop show ID [--json] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--json]
-deaddrop with WHO | thread ID [--json]   # both sides, in time order
-deaddrop threads [--json]                # every thread, newest activity first
-deaddrop inbox --for HELPER              # a helper's pigeonhole ('*': all of them)
-deaddrop file ID [NAME]
-deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]...
-deaddrop status [--json]
-deaddrop watch [--every 1m]        # on the person's own machine
-deaddrop open ID                   # read it in the browser, mark it read
+deaddrop with WHO | thread ID [--for H] [--json]   # both sides, in time order
+deaddrop threads [--for H] [--json]                # every thread, newest activity first
+deaddrop file ID [NAME] [--for H]
+deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
+deaddrop status [--json]                 # per box, with helpers' unread
+deaddrop watch [--every 1m] [--for H]    # on the person's own machine
+deaddrop open ID [--for H]               # read it in the browser, mark it read
+# --for H: a helper's pigeonhole ('*': every one); DEADDROP_FOR sets it for a session
 ```

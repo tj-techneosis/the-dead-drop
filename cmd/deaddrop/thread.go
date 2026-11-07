@@ -74,6 +74,9 @@ func letters() (string, []*Letter, string, error) {
 	}
 	var notes []string
 	out, err := self(append([]string{"pull", "--all", "--json"}, lettersFor...)...)
+	if err != nil && strings.Contains(err.Error(), "unknown flag --for") {
+		return "", nil, "", fmt.Errorf("the store's deaddrop is from before 0.6, which has no pigeonholes: upgrade it there")
+	}
 	if err != nil && strings.Contains(err.Error(), "unknown flag --all") {
 		// A store from before 0.4: no archived mail to be had.
 		notes = append(notes, "filed (archived) letters aren't shown")
@@ -101,8 +104,16 @@ func letters() (string, []*Letter, string, error) {
 		if err := json.Unmarshal(out, &ss); err != nil {
 			return "", nil, "", fmt.Errorf("sent's answer wasn't a list of messages: %v", err)
 		}
+		helper := ""
+		if len(lettersFor) == 2 && lettersFor[1] != "*" {
+			helper = lettersFor[1]
+		}
 		for _, s := range ss {
 			if len(s.Copies) == 0 {
+				continue
+			}
+			// A helper's view: what that helper wrote (as its persona).
+			if helper != "" && helperSlug(s.Persona) != helper {
 				continue
 			}
 			s.ID = s.Copies[0].ID
@@ -111,17 +122,18 @@ func letters() (string, []*Letter, string, error) {
 	}
 	// A letter you sent yourself is in your box and in what you sent: show
 	// it once, as yours (it knows every copy).
+	// (Ids are unique only within a box, so it's the box and the id.)
 	yours := map[string]bool{}
 	for _, l := range ls {
 		if l.Mine {
-			for _, id := range l.ids() {
-				yours[id] = true
+			for _, c := range l.Copies {
+				yours[c.Box+"/"+c.ID] = true
 			}
 		}
 	}
 	kept := ls[:0]
 	for _, l := range ls {
-		if l.Mine || !yours[l.ID] {
+		if l.Mine || !yours[me+"/"+l.ID] {
 			kept = append(kept, l)
 		}
 	}
@@ -361,10 +373,16 @@ func showCorrespondence(f flags, c *Correspondence) error {
 func seen(l *Letter) string {
 	var read, unread []string
 	for _, c := range l.Copies {
+		who := c.Box
+		if c.For != "" {
+			who += "/" + c.For
+		}
 		if c.State == "unread" {
-			unread = append(unread, c.Box)
-		} else {
-			read = append(read, c.Box)
+			if !contains(unread, who) {
+				unread = append(unread, who)
+			}
+		} else if !contains(read, who) {
+			read = append(read, who)
 		}
 	}
 	switch {
@@ -445,6 +463,15 @@ func groups(ls []*Letter) [][]*Letter {
 	return out
 }
 
+// viewHas says a pigeonhole is part of what thread, with and threads were
+// asked to read.
+func viewHas(pigeonhole string) bool {
+	if len(lettersFor) == 2 {
+		return lettersFor[1] == "*" || lettersFor[1] == pigeonhole
+	}
+	return pigeonhole == ""
+}
+
 var trustRank = map[string]int{sigBad: 0, sigUnknown: 1, sigUnsigned: 2, sigVerified: 3}
 
 func topicOf(me string, g []*Letter) *Topic {
@@ -459,6 +486,15 @@ func topicOf(me string, g []*Letter) *Topic {
 		}
 		if !l.Mine && l.State == "unread" {
 			t.Unread++
+		}
+		if l.Mine {
+			// A note to yourself you haven't read yet is unread too.
+			for _, c := range l.Copies {
+				if c.Box == me && c.State == "unread" && viewHas(c.For) {
+					t.Unread++
+					break
+				}
+			}
 		}
 		for _, tag := range l.Tags {
 			if !contains(t.Tags, tag) {

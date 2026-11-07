@@ -170,7 +170,7 @@ class FollowUp(DeadDrop):
         args, cmd = self.booking()
         self.assertEqual(args[:2], ["in", str(2 * 24 * 3600) + "s"])
         name = args[args.index("--name") + 1]
-        self.assertRegex(name, r"^deaddrop-2026-11-02t153000-[0-9a-f]{4}$")
+        self.assertRegex(name, r"^deaddrop-2026-11-02t153000-[0-9a-f]{4}-[0-9a-f]{4}$")
         self.assertLessEqual(len(name), 49)  # Crontinental's limit
         self.assertEqual(args[args.index("--notify") + 1], "never")
         self.assertEqual(cmd[-3:], ["follow-up", "bob", id])

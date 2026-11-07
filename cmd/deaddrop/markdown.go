@@ -399,7 +399,16 @@ func correspondencePage(c *Correspondence) []byte {
 		b.WriteString("<details><summary>The whole letter</summary><article>\n")
 		b.WriteString(renderMarkdown(l.Body))
 		if len(l.Attachments) > 0 {
-			fmt.Fprintf(&b, "<p class=\"meta\">Attached: %s. <code>deaddrop file %s NAME</code></p>\n", e(strings.Join(l.Attachments, ", ")), e(l.ID))
+			// A letter you sent is in its recipient's box: say which.
+			where := ""
+			if l.Mine && len(l.Copies) > 0 {
+				where = " --box " + l.Copies[0].Box
+				if l.Copies[0].For != "" {
+					where += " --for " + l.Copies[0].For
+				}
+				l.ID = l.Copies[0].ID
+			}
+			fmt.Fprintf(&b, "<p class=\"meta\">Attached: %s. <code>deaddrop file %s NAME%s</code></p>\n", e(strings.Join(l.Attachments, ", ")), e(l.ID), e(where))
 		}
 		b.WriteString("</article></details>\n</section>\n")
 	}

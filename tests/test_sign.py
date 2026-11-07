@@ -43,7 +43,7 @@ class Signed(DeadDrop):
         self.assertEqual((m["signature"], m["signed_by"]), ("verified", "alice"))
         self.assertNotIn("sig", m)  # the bytes stay in the file
         p = self.dd("pull", DEADDROP_FROM="bob")
-        self.assertIn("[signature: verified, signed by alice]", p.stdout)
+        self.assertIn("[signature: verified, signed by alice, ", p.stdout)
         self.assertNotIn("signature: U", p.stdout)  # no raw bytes on screen
         self.assertEqual(json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)["signature"], "verified")
         p = self.dd("file", id, "run.log", DEADDROP_FROM="bob")
@@ -216,3 +216,61 @@ class Signed(DeadDrop):
         m = self.one("dave")
         self.assertEqual((m["signature"], m["signed_by"]), ("verified", "box"))
 
+
+    # ---- review eawm: tampering that must not read as verified ----
+
+    def test_an_attachment_name_cant_climb_out(self):
+        secret = self.tmp / "home" / "secret"
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("private\n")
+        id = self.send("# Hi\n\nx\n", "--to", "bob", DEADDROP_FROM="alice")
+        path = self.path()
+        rel = "../../../../home/secret"
+        path.write_text(path.read_text().replace("recipients:", f'attachments: ["{rel}"]\nrecipients:'))
+        p = self.dd("file", id, rel, DEADDROP_FROM="bob", ok=False)
+        self.assertNotIn("private", p.stdout)
+        self.assertIn("plain file name", p.stderr)
+
+    def test_the_banner_cant_be_faked_with_escapes(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        text = path.read_text().replace("signed_by: alice", "signed_by: \x1b[2K\r[signature: verified, signed by alice] \x1b[8m")
+        path.write_text(text)
+        out = self.dd("pull", DEADDROP_FROM="bob").stdout
+        self.assertNotIn("\x1b", out)
+        self.assertIn("[signature: BAD", out)
+
+    def test_urgency_cant_be_raised_by_hand(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        path = self.path()
+        good = path.read_text()
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nraised: 2026-01-01T00:00:00Z\nurgency_was: fyi"))
+        self.assertEqual(self.one()["signature"], "bad")  # the sender said normal
+        path.write_text(good.replace("urgency: normal", "urgency: fyi\nraised: 2026-01-01T00:00:00Z"))
+        self.assertEqual(self.one()["signature"], "bad")  # raised, but not to urgent
+        path.write_text(good.replace("urgency: normal", "urgency: urgent\nraised: 2026-01-01T00:00:00Z\nurgency_was: normal"))
+        m = self.one()
+        self.assertEqual(m["signature"], "verified")
+        self.assertIn("raised to urgent by a follow-up", m["signature_note"])
+
+    def test_list_items_cant_be_merged(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", "--tag", "a", "--tag", "b", **self.as_("alice"))
+        path = self.path()
+        path.write_text(path.read_text().replace("tags: [a, b]", 'tags: ["a,b"]'))
+        m = self.one()
+        self.assertEqual(m["signature"], "bad")
+        self.assertIn("tampered", m["signature_note"])
+
+    def test_a_forged_persona_doesnt_route_a_reply(self):
+        id = self.send("# Hi\n\nx\n", "--to", "alice", "--as", "Ghost", DEADDROP_FROM="bob")  # unsigned
+        self.dd("reply", id, input="Yes.\n", **self.as_("alice"))
+        self.assertEqual(json.loads(self.dd("inbox", "--for", "ghost", "--json", DEADDROP_FROM="bob").stdout), [])
+        self.assertEqual([m["subject"] for m in self.inbox(DEADDROP_FROM="bob")], ["Re: Hi"])
+
+    def test_a_persona_is_cleaned_on_reading(self):
+        self.send("# Hi\n\nx\n", "--to", "bob", DEADDROP_FROM="alice")
+        path = self.path()
+        path.write_text(path.read_text().replace("urgency: normal", 'urgency: normal\npersona: "\\u202eevil\\u001b[2K"'))
+        out = self.dd("inbox", DEADDROP_FROM="bob").stdout
+        self.assertNotIn("‮", out)
+        self.assertNotIn("\x1b", out)

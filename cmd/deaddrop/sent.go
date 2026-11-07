@@ -44,22 +44,71 @@ func sentKey(m *Message) string {
 
 // gatherSent is everything from who, across every box, one entry per message.
 func gatherSent(dir, who string) []*SentMessage {
-	byKey := map[string]*SentMessage{}
-	var out []*SentMessage
+	type found struct {
+		c SentCopy
+		m *Message
+	}
+	groups := map[string][]found{}
+	var order []string
 	for _, box := range boxes(dir) {
 		for _, m := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
 			if m.From != who {
 				continue
 			}
 			k := sentKey(m)
-			s := byKey[k]
-			if s == nil {
-				s = &SentMessage{Message: m}
-				byKey[k] = s
-				out = append(out, s)
+			// Two identical unsigned sends in one second are two letters, not
+			// one: a letter has at most one copy in each pigeonhole.
+			for n := 0; ; n++ {
+				kn := fmt.Sprintf("%s\x00%d", k, n)
+				clash := false
+				for _, f := range groups[kn] {
+					clash = clash || (f.c.Box == box && f.c.For == m.Pigeonhole)
+				}
+				if !clash || m.Sig != "" {
+					k = kn
+					break
+				}
 			}
-			s.Copies = append(s.Copies, SentCopy{Box: box, For: m.Pigeonhole, ID: m.ID, State: m.State})
+			if _, ok := groups[k]; !ok {
+				order = append(order, k)
+			}
+			groups[k] = append(groups[k], found{SentCopy{Box: box, For: m.Pigeonhole, ID: m.ID, State: m.State}, m})
 		}
+	}
+	var out []*SentMessage
+	for _, k := range order {
+		fs := groups[k]
+		// The copies of one letter say the same thing. Where they don't (a copy
+		// planted with the same seal and a changed body or header), the ones
+		// that agree are the letter, and the odd ones out are left out: they
+		// can't stand in for it, nor make it read as forged. A tie goes to a
+		// copy sitting where it says it was sent.
+		count := map[string]int{}
+		for _, f := range fs {
+			count[contentKey(f.m)]++
+		}
+		best := ""
+		bestRank := -1
+		for _, f := range fs {
+			rank := count[contentKey(f.m)] * 2
+			if placedRight(f.m) {
+				rank++
+			}
+			if rank > bestRank {
+				best, bestRank = contentKey(f.m), rank
+			}
+		}
+		s := &SentMessage{}
+		for _, f := range fs {
+			if contentKey(f.m) != best {
+				continue
+			}
+			if s.Message == nil || (!placedRight(s.Message) && placedRight(f.m)) {
+				s.Message = f.m
+			}
+			s.Copies = append(s.Copies, f.c)
+		}
+		out = append(out, s)
 	}
 	for _, s := range out {
 		sort.Slice(s.Copies, func(i, j int) bool {
@@ -81,6 +130,29 @@ func gatherSent(dir, who string) []*SentMessage {
 	}
 	sortSent(out)
 	return out
+}
+
+// contentKey is everything a letter's copies have in common: what was
+// written, never where a copy is.
+func contentKey(m *Message) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00",
+		m.From, m.Persona, strings.Join(m.For, ","), strings.Join(m.Recipients, ","), m.Subject,
+		strings.Join(m.Tags, ","), m.UrgencyWas, m.Thread, strings.Join(m.Attachments, ","),
+		strings.Join(m.AttachmentSums, ","), m.SignedBy, m.SignedAt)
+	h.Write([]byte(canonicalBody(m.Body)))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// placedRight says a copy sits where the letter says it was sent.
+func placedRight(m *Message) bool {
+	if len(m.Recipients) > 0 && !contains(m.Recipients, m.Box) {
+		return false
+	}
+	if len(m.For) > 0 {
+		return contains(m.For, m.Pigeonhole)
+	}
+	return m.Pigeonhole == ""
 }
 
 // verifyAs is the copy a sent message is checked as: one its signature names

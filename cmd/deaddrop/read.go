@@ -88,7 +88,13 @@ func fingerprint(dir string, ms []*Message) {
 		storeIndex = map[string]string{}
 		for _, box := range boxes(dir) {
 			for _, x := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
-				storeIndex[x.ID] = letterOf(x)
+				// Ids are unique within a box; one that two boxes share
+				// for different letters names neither.
+				fp := letterOf(x)
+				if was, ok := storeIndex[x.ID]; ok && was != fp {
+					fp = ""
+				}
+				storeIndex[x.ID] = fp
 			}
 		}
 	}

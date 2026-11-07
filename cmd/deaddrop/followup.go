@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -46,8 +48,12 @@ func followUpTime(s string) (time.Time, error) {
 }
 
 // followUpJob names a message's job: deaddrop-<when>-<its random part>.
-func followUpJob(id string) string {
-	return "deaddrop-" + strings.ToLower(id[:17]) + "-" + id[len(id)-4:]
+// followUpJob names a copy's job: its id, and a short mark of the box and
+// pigeonhole it's in, since ids are unique only within a box.
+func followUpJob(m *Message) string {
+	id := m.ID
+	h := sha256.Sum256([]byte(m.Box + "/" + m.Pigeonhole))
+	return "deaddrop-" + strings.ToLower(id[:17]) + "-" + id[len(id)-4:] + "-" + hex.EncodeToString(h[:2])
 }
 
 func bookFollowUp(dir string, m *Message) error {
@@ -70,7 +76,7 @@ func bookFollowUp(dir string, m *Message) error {
 	if secs < 1 {
 		secs = 1
 	}
-	args := []string{"in", fmt.Sprintf("%ds", secs), "--name", followUpJob(m.ID),
+	args := []string{"in", fmt.Sprintf("%ds", secs), "--name", followUpJob(m),
 		"--notify", "never", "--catchup", "run", "--by", "deaddrop",
 		"--note", "Dead Drop follow-up: raise " + m.ID + " to urgent if " + m.To + " hasn't read it",
 		"--", "env", "DEADDROP_DIR=" + dir, "DEADDROP_LOCAL=1", exe, "follow-up", m.To, m.ID}
@@ -115,7 +121,7 @@ func cancelFollowUp(m *Message) {
 	if err != nil {
 		return
 	}
-	exec.Command(cron, "rm", followUpJob(m.ID), "--force").Run()
+	exec.Command(cron, "rm", followUpJob(m), "--force").Run()
 }
 
 // cmdFollowUp is what the job runs: deaddrop follow-up BOX ID.
@@ -154,12 +160,16 @@ func cmdFollowUp(args []string) error {
 		fmt.Printf("%s is unread and already urgent\n", m.ID)
 		return nil
 	}
-	m.Urgency, m.Raised = urgent, now().Format(time.RFC3339)
+	m.UrgencyWas, m.Urgency, m.Raised = m.Urgency, urgent, now().Format(time.RFC3339)
 	if err := writeAtomic(m.path, m.render(), 0o600); err != nil {
 		return err
 	}
 	fmt.Printf("%s is still unread: raised to urgent\n", m.ID)
-	ring(box, m)
+	// One ring per letter: a letter for several helpers has a copy (and a
+	// follow-up) each, and rings for the first.
+	if len(m.For) == 0 || m.Pigeonhole == m.For[0] {
+		ring(box, m)
+	}
 	return nil
 }
 

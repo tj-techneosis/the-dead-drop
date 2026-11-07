@@ -93,8 +93,10 @@ copied onto replies and could be stuck on by anyone. So a box has a
 pigeonhole per helper, `<box>/for/<helper>/`, the same new/read/archive
 folders again: state stays "which folder it's in", and each helper's copy
 has its own. The address is part of the letter and its signature; replies
-route by the persona that wrote (its name made into a pigeonhole's), never
-by what the original was for. One box, one key, one person.
+route by the persona that wrote (its name made into a pigeonhole's), and
+only when that persona is signed and verifies: anyone can claim one on an
+unsigned letter, which would send the answer where nobody reads. Never by
+what the original was for. One box, one key, one person.
 
 ## Signatures
 
@@ -116,8 +118,14 @@ and checked where the reader is:
   exactly that (by any key: it holds none), so a send that could never
   verify is refused at once rather than delivered. The id and the sent time
   are the store's and aren't signed; a copy moved to another box fails the
-  recipients, and one delivered again later fails the time (an hour's
-  slack). A follow-up raising it to urgent is allowed for.
+  recipients, and one the store delivers again later fails the time (an
+  hour's slack). The time check can't stop someone who edits the store's
+  files, since `sent` is the store's own line, so a verified letter also
+  says when it was signed: its age shows whatever the store says. A follow-up raising it to urgent records the urgency it had
+  (`urgency_was`), which is what's checked; the letter then says it was
+  raised by a follow-up, and only ever to urgent. Every field the signature
+  covers is checked for shape before anything else: a list item with a comma
+  in it would otherwise sign the same as two.
 - **Checked on the reader's machine**, against the reader's own
   `allowed_signers`, never the store's. With the store elsewhere, `inbox`,
   `pull`, `show` and `file` fetch the messages as they are (`--raw`) and

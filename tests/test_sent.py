@@ -112,7 +112,7 @@ class Persona(DeadDrop):
         id = self.send("# Status\n\nx\n", "--to", "bob", "--as", "Release manager", DEADDROP_SIGN_KEY=key("alice")[0])
         m = json.loads(self.dd("show", id, "--json", DEADDROP_FROM="bob").stdout)
         self.assertEqual((m["from"], m["persona"], m["signature"]), ("alice", "Release manager", "verified"))
-        self.assertEqual(m["signature_note"], "signed by alice, as Release manager")
+        self.assertTrue(m["signature_note"].startswith("signed by alice, as Release manager, "), m["signature_note"])
         self.assertIn("alice, as Release manager", self.dd("inbox", DEADDROP_FROM="bob").stdout)
         self.assertIn('persona: "Release manager"', self.dd("pull", DEADDROP_FROM="bob").stdout)
         self.assertIn("as Release manager", self.dd("show", id, "--html", DEADDROP_FROM="bob").stdout)

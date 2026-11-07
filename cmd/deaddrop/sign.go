@@ -199,12 +199,52 @@ func verify(m *Message) {
 	m.Signature, m.SignatureNote = verifyState(m)
 }
 
+// wellFormed checks every header field a signature covers, before anything
+// from them is shown or signed over: names are names, tags are tags, files
+// are plain file names, sums are sums. A list item with a comma or a newline
+// in it would otherwise sign the same as two items.
+func wellFormed(m *Message) bool {
+	name := func(s string) bool { return checkBox("", s) == nil }
+	if !(m.From == automation || name(m.From)) || !name(m.SignedBy) {
+		return false
+	}
+	if _, err := time.Parse(time.RFC3339, m.SignedAt); err != nil {
+		return false
+	}
+	for _, r := range append(append([]string{}, m.Recipients...), m.For...) {
+		if !name(r) {
+			return false
+		}
+	}
+	for _, t := range m.Tags {
+		if c, err := checkTag(t); err != nil || c != t {
+			return false
+		}
+	}
+	for _, a := range m.Attachments {
+		if !fileRE.MatchString(a) || filepath.Base(a) != a {
+			return false
+		}
+	}
+	for _, s := range m.AttachmentSums {
+		if len(s) != 64 || strings.Trim(s, "0123456789abcdef") != "" {
+			return false
+		}
+	}
+	return m.Urgency == normal || m.Urgency == fyi || m.Urgency == urgent
+}
+
+const tamperedHeader = "its header has been tampered with: a name, tag, file or time no sender could have signed"
+
 func verifyState(m *Message) (string, string) {
 	if m.Sig == "" {
 		return sigUnsigned, "not signed: the sender is only a claim"
 	}
 	if m.SignedBy == "" {
 		return sigBad, "a signature with no signer"
+	}
+	if !wellFormed(m) {
+		return sigBad, tamperedHeader
 	}
 	if m.From != automation && m.SignedBy != m.From {
 		return sigBad, fmt.Sprintf("signed by %s, but it says it's from %s", m.SignedBy, m.From)
@@ -240,20 +280,38 @@ func verifyState(m *Message) (string, string) {
 		return sigBad, err.Error()
 	}
 	defer done()
-	// A follow-up raises a message to urgent after it was signed.
+	// A follow-up raises a message to urgent after it was signed, and says
+	// what it was. Only ever to urgent, and the note says so.
 	urgencies := []string{m.Urgency}
+	raised := ""
 	if m.Raised != "" {
-		urgencies = []string{normal, fyi, urgent}
+		if m.Urgency != urgent {
+			return sigBad, "marked raised by a follow-up, but it isn't urgent"
+		}
+		switch m.UrgencyWas {
+		case normal, fyi:
+			urgencies = []string{m.UrgencyWas}
+		case "":
+			urgencies = []string{normal, fyi} // raised before 0.6.4 kept no note
+		default:
+			return sigBad, tamperedHeader
+		}
+		raised = "; raised to urgent by a follow-up, not by the sender"
 	}
 	for _, u := range urgencies {
 		payload := signedPayload(m.From, m.Persona, m.For, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
-			if m.Persona != "" {
-				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona
+			// When it was signed, too: a letter delivered again shows its age.
+			when := ""
+			if t, err := time.Parse(time.RFC3339, m.SignedAt); err == nil {
+				when = ", " + t.Local().Format("2006-01-02 15:04")
 			}
-			return sigVerified, "signed by " + m.SignedBy
+			if m.Persona != "" {
+				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona + when + raised
+			}
+			return sigVerified, "signed by " + m.SignedBy + when + raised
 		}
 	}
 	// Whose key it is, by this machine's list: someone else's is a forgery;
@@ -357,6 +415,9 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	if hops() > 0 || (cmd != "send" && cmd != "reply") {
 		return cmd, args, nil
 	}
+	// Whatever can't be signed goes on as the person typed it, so its
+	// errors name their own command (a reply's, not the send it became).
+	origCmd, origArgs := cmd, args
 	key, err := signKey()
 	if err != nil || key == "" {
 		return cmd, args, err
@@ -368,7 +429,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	}
 	f, err := parseFlags(args, sendFlags)
 	if err != nil || f.has("signature") {
-		return cmd, args, nil // send says what's wrong
+		return origCmd, origArgs, nil // the command says what's wrong
 	}
 	body, err := readBody()
 	if err != nil {
@@ -377,7 +438,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 	presetBody = &body
 	d, err := draftOf(f)
 	if err != nil {
-		return cmd, args, nil // send says what's wrong
+		return origCmd, origArgs, nil // the command says what's wrong
 	}
 	d.body = body
 	if err := d.settle(); err != nil {
@@ -394,7 +455,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		// goes unsigned, as it should), only a job's automation mail, and
 		// only under a name the config gives it.
 		if d.from != automation || c.SignAs == "" {
-			return cmd, args, nil
+			return origCmd, origArgs, nil
 		}
 		signer = c.SignAs
 	} else if signer == automation {
@@ -435,7 +496,7 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md"
 	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true})
 	if err != nil {
 		return "", nil, bad(u, err)

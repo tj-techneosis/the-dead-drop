@@ -308,7 +308,7 @@ class Attachments(DeadDrop):
         p = subprocess_bytes(self, "file", id, "numbers.csv")
         self.assertEqual(p, b"x,y\n1,2\n\x00\xff")
         self.assertIn("[attached: numbers.csv", self.dd("pull").stdout)
-        self.assertIn("no attachment", self.dd("file", id, "../../etc/passwd", ok=False).stderr)
+        self.assertIn("plain file name", self.dd("file", id, "../../etc/passwd", ok=False).stderr)
 
     def test_gc_takes_archived_mail_and_its_files(self):
         a = self.tmp / "f.txt"

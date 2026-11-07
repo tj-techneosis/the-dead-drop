@@ -70,7 +70,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertEqual(self.near_files(), [], "remote mode wrote on the caller's side")
 
     def test_identity_goes_across_and_is_required(self):
-        p = self.rdd("send", "--to", "bob", input="x\n", env=dict(DEADDROP_FROM=None, USER="tec"), ok=False)
+        p = self.rdd("send", "--to", "bob", input="x\n", env=dict(DEADDROP_FROM=None, USER="zed"), ok=False)
         self.assertIn("say who you are", p.stderr)
         self.assertFalse(self.far_store.exists())
         # me in the near config does.
@@ -217,7 +217,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
         self.assertEqual((ms[0]["signature"], ms[0]["signed_by"]), ("verified", "alice"))
         self.assertNotIn("sig", ms[0])
         self.assertNotIn("body", ms[0])
-        self.assertIn("[signature: verified, signed by alice]", self.rdd("pull", env=bob).stdout)
+        self.assertIn("[signature: verified, signed by alice, ", self.rdd("pull", env=bob).stdout)
         self.assertIn("run.log (7 B)", self.rdd("pull", env=bob).stdout)
         self.assertEqual(json.loads(self.rdd("show", id, "--json", env=bob).stdout)["signature"], "verified")
         p = self.rdd("file", id, "run.log", env=bob)

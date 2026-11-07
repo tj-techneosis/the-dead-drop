@@ -36,9 +36,14 @@ func TestSubjectFrom(t *testing.T) {
 }
 
 func TestFollowUpJobName(t *testing.T) {
-	got := followUpJob("2026-11-02T153012-a-very-long-sender-name-here-3f9a")
-	if got != "deaddrop-2026-11-02t153012-3f9a" || len(got) > 49 {
+	m := &Message{ID: "2026-11-02T153012-a-very-long-sender-name-here-3f9a", Box: "bob"}
+	got := followUpJob(m)
+	if !strings.HasPrefix(got, "deaddrop-2026-11-02t153012-3f9a-") || len(got) > 49 {
 		t.Fatal(got)
+	}
+	m.Pigeonhole = "planner"
+	if followUpJob(m) == got {
+		t.Fatal("two copies in one box, one job name")
 	}
 }
 

@@ -178,7 +178,12 @@ tell:
 
 What's signed: the sender (and persona), the recipients, subject, tags, urgency, thread,
 each attachment's sha256, when it was signed, and the text. `file` refuses
-an attachment that isn't the one sent. A job's `--from automation` mail is
+an attachment that isn't the one sent, and any name that isn't a plain file
+name. A verified letter says when it was signed, so one delivered again
+later shows its age; the store's own delivery time is checked against it
+too, but someone who can edit the store's files can change that, so the
+signing time is the one to trust. A follow-up that raised a letter to
+urgent says so: the sender's own urgency is what was signed. A job's `--from automation` mail is
 signed by whose machine it runs on (`sign_as` to name someone else). On a
 machine with `shared_login = true` the key belongs to the machine, not a
 person: it never signs as anyone, so a front end there sending for someone
@@ -220,8 +225,11 @@ deaddrop watch --for planner          # its own inbox file, its own hooks (DEADD
   `thread` and `threads` put the copies together.
 - **The address is sealed into the signature.** A copy moved to another
   pigeonhole, or with a `for` added or taken off, reads as bad.
+- **Your own inbox and `status` say when a helper has unread mail,** and
+  sending to a pigeonhole nobody has used yet says so (a typo?).
 - **Replies find their way back.** Answering "bob, as Release manager"
-  goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
+  (when that persona is signed and verified: anyone can claim one on an
+  unsigned letter) goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
   name, lowercase, with dashes), unless you say `--for`. What a letter was
   for is never copied back.
 - `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `thread`,
@@ -471,14 +479,14 @@ What gets reported, and when, belongs to whoever books it.
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]... < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO]
 deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
 deaddrop file ID [NAME] [--box WHO]
-deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]
+deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--json]
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
@@ -486,7 +494,7 @@ deaddrop watch [--every 1m] [--no-hooks]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json]
-deaddrop with WHO [--tag T]... [--json|--html]
+deaddrop with WHO [--tag T]... [--for H] [--json|--html]
 deaddrop bar [--format text|swiftbar]
 deaddrop upgrade [--check] | version | help
 ```
