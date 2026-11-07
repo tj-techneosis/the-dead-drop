@@ -280,6 +280,16 @@ exit 0
         self.assertIn("from before 0.3", p.stderr)
 
 
+    def test_sent_from_a_store_without_wrapped(self):
+        # A 0.7.6 store doesn't know --wrapped: asked again without it.
+        old = script(self.tmp / "store-076", f"""
+for a; do [ "$a" = --wrapped ] && {{ echo "deaddrop: unknown flag --wrapped" >&2; exit 2; }}; done
+exec "{BIN}" "$@"
+""")
+        self.rdd("send", "--to", "bob", input="# To bob\n\nx\n", env=self.signed_env("alice"))
+        rows = json.loads(self.rdd("sent", "--json", env=dict(DEADDROP_FROM="alice", DEADDROP_REMOTE_BIN=str(old))).stdout)
+        self.assertEqual([r["subject"] for r in rows], ["To bob"])
+
     def test_sent_over_ssh_is_checked_here(self):
         self.rdd("send", "--to", "bob,carol", "--as", "Helper", input="# Both\n\nx\n", env=self.signed_env("alice"))
         self.rdd("send", "--to", "alice", input="# Not mine\n\nx\n", env=self.signed_env("bob"))
@@ -572,6 +582,15 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)  # said on the reader's machine
         p = self.gate("deaddrop sent --raw --json")
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)
+
+    def test_an_empty_sent_still_says_its_partial(self):
+        # Everything alice sent went to boxes this key can't read: the list is
+        # empty, and the holder is still told it's cut.
+        self.rdd("send", "--to", "carol", input="# Only carol\n\nx\n")
+        p = self.rdd("sent")
+        self.assertIn("Nothing sent", p.stdout)
+        self.assertIn("only letters with a copy in a box this key reads", p.stderr)
+        self.assertEqual(json.loads(self.rdd("sent", "--json").stdout), [])  # the list's shape is unchanged
 
     def test_attach_never_reads_the_stores_files(self):
         secret = self.far / "secret.txt"

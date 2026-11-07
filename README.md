@@ -424,7 +424,7 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 
 What that costs the key's holder, by design: `sent` lists only letters with
 a copy in a box the key reads (each marked `"copies_partial": true` in
-`--json`, and said on the holder's machine), and a letter whose thread starts
+`--json`, and said on the holder's machine, even when the list is empty), and a letter whose thread starts
 in a box it can't read shows no thread link.
 
 It runs only on the store's own machine (never one that passes commands on).
