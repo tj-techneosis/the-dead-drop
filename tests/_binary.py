@@ -13,6 +13,11 @@ import stat
 import subprocess
 import tempfile
 import unittest
+
+# The trust checks judge folders by their mode, and a umask of 0002 (common on
+# Linux) makes the tests' own folders group-writable, which they'd rightly
+# refuse. The suite runs under 022, as a person's own machine usually does.
+os.umask(0o022)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
