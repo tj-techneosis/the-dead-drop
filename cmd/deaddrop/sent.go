@@ -26,6 +26,14 @@ type SentMessage struct {
 	CopiesPartial bool `json:"copies_partial,omitempty"`
 }
 
+// sentWrapped is sent's answer to another deaddrop (--wrapped): the list,
+// and whether the store looked in only some boxes (a gated key's), which an
+// empty list alone can't say.
+type sentWrapped struct {
+	Letters []*SentMessage `json:"letters"`
+	Partial bool           `json:"partial"`
+}
+
 // SentCopy is one recipient's copy, and whether they've read it.
 type SentCopy struct {
 	Box   string `json:"box"`
@@ -208,7 +216,7 @@ func sortSent(ss []*SentMessage) {
 
 func cmdSent(args []string) error {
 	const u = "sent [--to WHO]... [--tag T]... [--since 7d|DATE] [--json] [--box WHO]"
-	f, err := parseFlags(args, map[string]bool{"to": true, "tag": true, "since": true, "json": false, "box": true, "raw": false})
+	f, err := parseFlags(args, map[string]bool{"to": true, "tag": true, "since": true, "json": false, "box": true, "raw": false, "wrapped": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -239,12 +247,25 @@ func cmdSent(args []string) error {
 	}
 
 	var ss []*SentMessage
+	storePartial := false // the store said it looked in only some boxes
 	if viaHost != "" {
-		out, err := mirroredBytes(viaHost, "sent", beforeDashes(args, "--json", "--raw"))
+		// --wrapped: the answer says, even when empty, whether the store
+		// looked in every box. An older store doesn't know it: ask plainly.
+		out, err := mirroredBytes(viaHost, "sent", beforeDashes(args, "--json", "--raw", "--wrapped"))
+		wrapped := err == nil
+		if err != nil && strings.Contains(err.Error(), "--wrapped") {
+			out, err = mirroredBytes(viaHost, "sent", beforeDashes(args, "--json", "--raw"))
+		}
 		if err != nil {
 			return err
 		}
-		if err := json.Unmarshal(out, &ss); err != nil {
+		if wrapped {
+			var w sentWrapped
+			if err := json.Unmarshal(out, &w); err != nil || w.Letters == nil {
+				return fmt.Errorf("the store's answer wasn't a list of messages")
+			}
+			ss, storePartial = w.Letters, w.Partial
+		} else if err := json.Unmarshal(out, &ss); err != nil {
 			return fmt.Errorf("the store's answer wasn't a list of messages: %v", err)
 		}
 		for _, s := range ss {
@@ -282,7 +303,7 @@ func cmdSent(args []string) error {
 			s.Box = ""
 		}
 	}
-	partial := gateRead != nil
+	partial := gateRead != nil || storePartial
 	for _, s := range ss {
 		if gateRead != nil {
 			s.CopiesPartial = true // said in the answer, for the reader's machine
@@ -299,6 +320,10 @@ func cmdSent(args []string) error {
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
+		if f.has("wrapped") {
+			// Whatever made this list partial, here or further on.
+			return enc.Encode(sentWrapped{Letters: ss, Partial: partial})
+		}
 		return enc.Encode(ss)
 	}
 	if len(ss) == 0 {

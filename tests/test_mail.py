@@ -66,6 +66,14 @@ The body.
         self.assertIn("isn't one", p.stderr)  # a box is never --: no =-- advice
         self.assertNotIn("--box=--", p.stderr)
 
+    def test_a_box_nothing_was_sent_to_has_its_own_exit_code(self):
+        # A job tells "no such box yet" from a failure by the code, not the words.
+        for args in (("inbox", "carol", "--json"), ("mark", "read", "--box", "carol", "--tag", "x")):
+            p = self.dd(*args, ok=False)
+            self.assertEqual(p.returncode, 4, (args, p.stderr))
+            self.assertIn("no box carol", p.stderr)
+        self.assertNotEqual(self.dd("inbox", "--json", "--nosuchflag", ok=False).returncode, 4)  # other failures keep theirs
+
     def test_subject_from_the_document(self):
         self.send("Just a first line here\nand more\n", "--to", "bob")
         self.send("---\ntitle: x\n---\n\nintro\n\n## The heading\n", "--to", "bob")

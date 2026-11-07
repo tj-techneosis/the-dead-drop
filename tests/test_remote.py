@@ -95,7 +95,7 @@ class Remote(RemoteBase):
         self.rdd("send", "--to", "carol", input="x\n")
         p = self.rdd("mark", "read", "2026-11-02T153000-bob-0000", ok=False)
         self.assertIn("no box alice", p.stderr)
-        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.returncode, 4)  # no such box: its own code, across ssh
         unreachable = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
         p = self.rdd("status", env=dict(DEADDROP_SSH=str(unreachable)), ok=False)
         self.assertIn("could not reach the store on store-box", p.stderr)
@@ -280,6 +280,16 @@ exit 0
         self.assertIn("from before 0.3", p.stderr)
 
 
+    def test_sent_from_a_store_without_wrapped(self):
+        # A 0.7.6 store doesn't know --wrapped: asked again without it.
+        old = script(self.tmp / "store-076", f"""
+for a; do [ "$a" = --wrapped ] && {{ echo "deaddrop: unknown flag --wrapped" >&2; exit 2; }}; done
+exec "{BIN}" "$@"
+""")
+        self.rdd("send", "--to", "bob", input="# To bob\n\nx\n", env=self.signed_env("alice"))
+        rows = json.loads(self.rdd("sent", "--json", env=dict(DEADDROP_FROM="alice", DEADDROP_REMOTE_BIN=str(old))).stdout)
+        self.assertEqual([r["subject"] for r in rows], ["To bob"])
+
     def test_sent_over_ssh_is_checked_here(self):
         self.rdd("send", "--to", "bob,carol", "--as", "Helper", input="# Both\n\nx\n", env=self.signed_env("alice"))
         self.rdd("send", "--to", "alice", input="# Not mine\n\nx\n", env=self.signed_env("bob"))
@@ -351,6 +361,14 @@ class RemoteDashes(RemoteBase):
         for cmd in ("inbox", "pull"):
             p = self.rdd(cmd, "--", "bob", env=dict(DEADDROP_FROM="bob"))
             self.assertIn(a[-4:], p.stdout, (cmd, p.stderr))
+
+
+    def test_a_box_nothing_was_sent_to_says_so_by_its_code_over_ssh(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        for args in (("inbox", "carol", "--json"), ("mark", "read", "--box", "carol", "--tag", "x")):
+            p = self.rdd(*args, ok=False, env=dict(DEADDROP_FROM="bob"))
+            self.assertEqual(p.returncode, 4, (args, p.stderr))
+            self.assertIn("no box carol", p.stderr)
 
 
 class Mirror(RemoteBase):
@@ -564,6 +582,15 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)  # said on the reader's machine
         p = self.gate("deaddrop sent --raw --json")
         self.assertIn("only letters with a copy in a box this key reads", p.stderr)
+
+    def test_an_empty_sent_still_says_its_partial(self):
+        # Everything alice sent went to boxes this key can't read: the list is
+        # empty, and the holder is still told it's cut.
+        self.rdd("send", "--to", "carol", input="# Only carol\n\nx\n")
+        p = self.rdd("sent")
+        self.assertIn("Nothing sent", p.stdout)
+        self.assertIn("only letters with a copy in a box this key reads", p.stderr)
+        self.assertEqual(json.loads(self.rdd("sent", "--json").stdout), [])  # the list's shape is unchanged
 
     def test_attach_never_reads_the_stores_files(self):
         secret = self.far / "secret.txt"

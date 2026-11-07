@@ -109,6 +109,11 @@ When the work is done, `mark` files it: `read` (dealt with; still pulled),
 `archive` (filed; out of the way, gone after 30 days) or `unread` (put
 back). `mark` takes ids, or `--tag` and `--from` to pick by those.
 
+**A box nothing was ever sent to** is a typo until mail arrives: `inbox`
+or `mark` on someone else's box that isn't there says "there's no box
+…" and **exits 4**, over ssh too, so a job can treat that as empty without
+reading the words. Your own box is just empty.
+
 Several `--tag` all have to match; several `--from` match any of them. So
 "tool Y's automated reports and anything from Bob about tool Y" is
 `--tag tool-y --from automation --from bob`.
@@ -419,7 +424,7 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 
 What that costs the key's holder, by design: `sent` lists only letters with
 a copy in a box the key reads (each marked `"copies_partial": true` in
-`--json`, and said on the holder's machine), and a letter whose thread starts
+`--json`, and said on the holder's machine, even when the list is empty), and a letter whose thread starts
 in a box it can't read shows no thread link.
 
 It runs only on the store's own machine (never one that passes commands on).

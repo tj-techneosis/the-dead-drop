@@ -891,7 +891,7 @@ func cmdInbox(args []string) error {
 	if viaHost == "" {
 		if me, _ := whoAmI(); box != me {
 			if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
-				return fmt.Errorf("there's no box %s", box)
+				return noBox(box)
 			}
 		}
 	}
@@ -1338,7 +1338,7 @@ func cmdMark(args []string) error {
 	}
 	// A box that isn't there has nothing to mark: never make one by asking.
 	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
-		return fmt.Errorf("there's no box %s", box)
+		return noBox(box)
 	}
 	unlock, err := lockBox(dir, box)
 	if err != nil {
