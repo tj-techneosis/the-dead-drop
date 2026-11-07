@@ -452,6 +452,12 @@ Crontinental's `notify` when it's installed (tagged `drop=<id>`, so a
 viewer that shows both can fold the notification into the message), else
 the system's own.
 
+**An agent's session.** [`examples/claude-code/unread-mail`](examples/claude-code/)
+is a Claude Code hook: when the session's box (`$DEADDROP_BOX`, else
+`$DEADDROP_REPLY_BOX`, else yours) has unread mail, the model is told the
+count as context the next time it acts. It types nothing and starts no turn,
+and it says only the count, never a subject or a sender.
+
 **Menu-bar inboxes**, both reading the inbox file and calling `show` and
 `mark`:
 
@@ -504,6 +510,12 @@ fire on its own. Urgent mail is fire either way. `inbox`, `watch` and
 `--smoke-after` alone keeps fresh unheard mail clear and never goes to fire
 for age; `--fire-after` alone is smoke as soon as anything's unheard, fire
 once it's waited that long. Every lookout is tagged `mail`.
+
+With `--ring`, a box that's just gone to fire also runs `crontinental notify
+--urgent` on the store's machine, once per fire (not every run), tagged
+`deaddrop-box=<box>` so that machine's notify hooks can send it to whoever
+minds that box. It says what the board says: counts, unless the box is in
+`board_detail`.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -573,7 +585,7 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]
-deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]
+deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]

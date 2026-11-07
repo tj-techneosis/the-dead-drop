@@ -46,7 +46,7 @@ On your own machine:
 
 Look after it:
   deaddrop status [--box WHO]... [--json]   per box: unread, urgent, helpers' unread, newest subject
-  deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]   one lookout per box
+  deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]   one lookout per box
   deaddrop gc [--days 30]          archived mail older than that goes
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help

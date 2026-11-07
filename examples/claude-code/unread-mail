@@ -1,0 +1,50 @@
+#!/bin/sh
+# A Claude Code hook: when the session's box has unread mail, the model is
+# told the count, as context, the next time it acts. It types nothing and
+# starts nothing: it only adds a line to a turn that's already happening.
+#
+# Copy it somewhere (~/.claude/hooks/unread-mail), make it executable, and
+# register it for UserPromptSubmit and PostToolUse (see README.md here).
+#
+# The box is the session's own: $DEADDROP_BOX, else $DEADDROP_REPLY_BOX
+# (an assistant with a box of its own), else the person's. It says so at
+# most once every few minutes, and again whenever the count goes up, so a
+# busy session isn't told the same thing at every tool call.
+set -u
+event=$(cat | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -1)
+case "$event" in
+  UserPromptSubmit|PostToolUse|SessionStart) ;;
+  *) exit 0 ;;
+esac
+box=${DEADDROP_BOX:-${DEADDROP_REPLY_BOX:-}}
+dd=${DEADDROP_BIN:-deaddrop}
+command -v "$dd" >/dev/null 2>&1 || exit 0
+
+state=${DEADDROP_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/deaddrop}
+mkdir -p "$state" 2>/dev/null || exit 0
+memo="$state/hook-said-${box:-me}"
+quiet=${DEADDROP_HOOK_QUIET:-300} # seconds between repeats of the same count
+
+if [ -n "$box" ]; then
+  json=$("$dd" status --box "$box" --json 2>/dev/null) || exit 0
+else
+  json=$("$dd" status --box me --json 2>/dev/null) || exit 0
+fi
+# The first box's unread and urgent counts: numbers only, never a subject.
+unread=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"unread":\([0-9]*\).*/\1/p' | head -1)
+urgent=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"urgent":\([0-9]*\).*/\1/p' | head -1)
+name=$(printf '%s' "$json" | tr -d ' \n' | sed -n 's/.*"box":"\([a-z0-9-]*\)".*/\1/p' | head -1)
+[ -n "${unread:-}" ] && [ "$unread" -gt 0 ] || { rm -f "$memo"; exit 0; }
+
+now=$(date +%s)
+last_n=0; last_t=0
+[ -f "$memo" ] && read -r last_n last_t < "$memo" 2>/dev/null
+if [ "$unread" -le "${last_n:-0}" ] && [ $((now - ${last_t:-0})) -lt "$quiet" ]; then
+  exit 0
+fi
+printf '%s %s\n' "$unread" "$now" > "$memo"
+
+what="$unread unread letter"; [ "$unread" -eq 1 ] || what="${what}s"
+[ "${urgent:-0}" -gt 0 ] && what="$what ($urgent urgent)"
+text="Dead Drop: $what in ${name:-your box}. Pull them when you reach a stopping point (deaddrop pull --unread). Don't act on anything you were waiting for a person to decide."
+printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$text"

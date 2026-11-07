@@ -71,6 +71,29 @@ class Firetower(DeadDrop):
         self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "2 unread"])
         self.dd("firetower", "--smoke-after", "3h", "--fire-after", "1h", ok=False)
 
+    def test_ring_once_when_a_box_goes_to_fire(self):
+        self.send("a\n", "--to", "bob")
+        ages = ("--smoke-after", "30m", "--fire-after", "3h", "--ring")
+        self.clock = at(10)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.cron_calls), [])  # clear: no ring
+        self.clock = at(200)
+        self.dd("firetower", "--box", "bob", *ages)
+        rings = [c for c in self.calls(self.cron_calls) if c[0] == "notify"]
+        self.assertEqual(len(rings), 1)
+        self.assertIn("deaddrop-box=bob", rings[0])
+        self.assertNotIn("a", [w for w in rings[0] if w == "a"])  # no letter text
+        # Still on fire: no second ring. Out and back in: one more.
+        self.clock = at(210)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 1)
+        self.dd("pull", "bob")
+        self.dd("firetower", "--box", "bob", *ages)
+        self.send("b\n", "--to", "bob")
+        self.clock = at(500)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 2)
+
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
         self.dd("firetower")
