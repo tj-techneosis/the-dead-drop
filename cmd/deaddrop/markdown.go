@@ -55,7 +55,11 @@ hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
 <header><h1>`)
 	b.WriteString(e(m.Subject))
 	b.WriteString("</h1>\n<div class=\"meta\">")
-	fmt.Fprintf(&b, "<span>From <strong>%s</strong> to %s</span>", e(m.From), e(m.To))
+	if m.Persona != "" {
+		fmt.Fprintf(&b, "<span>From <strong>%s</strong>, as %s, to %s</span>", e(m.From), e(m.Persona), e(m.To))
+	} else {
+		fmt.Fprintf(&b, "<span>From <strong>%s</strong> to %s</span>", e(m.From), e(m.To))
+	}
 	fmt.Fprintf(&b, "<span>%s</span>", e(m.Sent.Local().Format("Mon 2 Jan 2006, 15:04")))
 	switch m.Signature {
 	case sigVerified:

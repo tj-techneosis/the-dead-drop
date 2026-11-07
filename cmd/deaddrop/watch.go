@@ -55,6 +55,8 @@ type InboxEntry struct {
 	Signature     string `json:"signature"`
 	SignatureNote string `json:"signature_note"`
 	SignedBy      string `json:"signed_by"`
+	// Who spoke for the sender, if one of their assistants did ("" if not).
+	Persona string `json:"persona"`
 }
 
 // stateDir is where this machine keeps the inbox file and what watch has
@@ -184,7 +186,7 @@ func watchPass(hooks bool) (passResult, error) {
 		}
 		e := InboxEntry{ID: m.ID, From: m.From, Subject: m.Subject, Tags: m.Tags,
 			Urgency: m.Urgency, State: m.State, Sent: m.Sent, Thread: m.Thread, Attachments: m.Attachments,
-			Signature: m.Signature, SignatureNote: m.SignatureNote, SignedBy: m.SignedBy}
+			Signature: m.Signature, SignatureNote: m.SignatureNote, SignedBy: m.SignedBy, Persona: m.Persona}
 		if e.Tags == nil {
 			e.Tags = []string{}
 		}
@@ -300,6 +302,7 @@ func runHooks(box string, e InboxEntry) {
 			"DEADDROP_MSG_ATTACHMENTS="+fmt.Sprint(len(e.Attachments)),
 			"DEADDROP_MSG_SIGNATURE="+e.Signature,
 			"DEADDROP_MSG_SIGNED_BY="+e.SignedBy,
+			"DEADDROP_MSG_PERSONA="+e.Persona,
 		)
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: hook %s, for %s: %v\n", name, e.ID, err)
@@ -597,6 +600,9 @@ func swiftbar(in *InboxFile, bin string) string {
 			mark = "○"
 		}
 		from := menuText(e.From, 32)
+		if e.Persona != "" {
+			from = menuText(e.From+", as "+e.Persona, 60)
+		}
 		if e.Signature != sigVerified {
 			from += " (" + map[string]string{sigUnsigned: "unsigned", sigUnknown: "unchecked", sigBad: "FORGED?"}[e.Signature] + ")"
 		}

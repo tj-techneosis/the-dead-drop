@@ -68,6 +68,11 @@ EOF
   if it's still unread by then. Use it when the person asks for a nudge
   ("make sure Bob sees this by Thursday").
 - **Several people:** `--to bob --to carol` (each gets a copy).
+- **You're an assistant writing for the person:** sign as a persona,
+  `--as "<your role>"` (or `DEADDROP_AS` for the session): their name,
+  their box, your label ("alice, as Release manager"). Use the role the
+  person gave you, or describe what you're doing for them. Never send as
+  anyone else.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
   the sender with the same tags, "Re: " and a thread link. Or
   `send --reply-to ID` to send an answer somewhere else.
@@ -111,6 +116,9 @@ deaddrop pull --tag tool-y --from automation --from bob
   fetches one.
 - One message by its id: `deaddrop show ID` (`--json` for a program). Like
   `pull`, it marks nothing.
+- What the person sent: `deaddrop sent [--to WHO] [--tag T]`, with each
+  recipient's copy unread, read or archived. With `pull`, that's both sides
+  of a conversation.
 
 **Pull marks nothing.** That's deliberate: a session that crashes halfway
 loses no mail. When the work is done, file what was used.
@@ -212,11 +220,12 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] < doc.md
+deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] < doc.md
 deaddrop reply ID [--urgent|--fyi] < doc.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread] [--json]
 deaddrop show ID [--json]
+deaddrop sent [--to WHO]... [--tag T]... [--json]
 deaddrop file ID [NAME]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]...
 deaddrop status [--json]

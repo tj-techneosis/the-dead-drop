@@ -19,12 +19,16 @@ import (
 // only what it wrote (strings that need it are JSON-quoted, which YAML reads
 // too).
 type Message struct {
-	ID          string    `json:"id"`
-	From        string    `json:"from"`
-	To          string    `json:"to"`
-	Subject     string    `json:"subject"`
-	Tags        []string  `json:"tags"`
-	Urgency     string    `json:"urgency"`
+	ID      string   `json:"id"`
+	From    string   `json:"from"`
+	To      string   `json:"to"`
+	Subject string   `json:"subject"`
+	Tags    []string `json:"tags"`
+	Urgency string   `json:"urgency"`
+	// Persona: who is speaking for the sender, when it's one of their
+	// robots ("Release manager"). A label under the sender, never another
+	// sender: the box and the signature are still theirs. Added in 0.4.
+	Persona     string    `json:"persona,omitempty"`
 	Thread      string    `json:"thread,omitempty"`
 	FollowUp    string    `json:"follow_up,omitempty"`
 	Raised      string    `json:"raised,omitempty"`
@@ -191,6 +195,9 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 	fmt.Fprintf(&b, "subject: %s\n", q(m.Subject))
 	fmt.Fprintf(&b, "tags: [%s]\n", strings.Join(m.Tags, ", "))
 	fmt.Fprintf(&b, "urgency: %s\n", m.Urgency)
+	if m.Persona != "" {
+		fmt.Fprintf(&b, "persona: %s\n", q(m.Persona))
+	}
 	if m.Thread != "" {
 		fmt.Fprintf(&b, "thread: %s\n", m.Thread)
 	}
@@ -265,6 +272,8 @@ func parseMessage(data []byte, withBody bool) (*Message, error) {
 			m.Tags = list(v)
 		case "urgency":
 			m.Urgency = v
+		case "persona":
+			m.Persona = unquote(v)
 		case "thread":
 			m.Thread = v
 		case "follow_up":
@@ -330,6 +339,15 @@ func list(v string) []string {
 		}
 	}
 	return out
+}
+
+// sender is who it's from as a person reads it: "alice", or "alice, as Release
+// manager" when one of their robots wrote it.
+func (m *Message) sender() string {
+	if m.Persona != "" {
+		return m.From + ", as " + m.Persona
+	}
+	return m.From
 }
 
 func (m *Message) hasTag(t string) bool {

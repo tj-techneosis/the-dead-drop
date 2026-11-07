@@ -19,6 +19,7 @@ Claude Code setup.
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
+| `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
 | `cmd/deaddrop/read.go` | reading with the store elsewhere: fetch as stored (`--raw`), check here |
 | `agents/` | what ships to users' Claude Code: the skill and the CLAUDE.md snippet |
 | `examples/` | a config, the store machine's jobs, ways to run `watch`, a `new.d` hook, the SwiftBar and Omarchy inboxes |
@@ -65,6 +66,12 @@ Claude Code setup.
   a reading command with the store elsewhere print the store's verdict
   instead of checking here. Bad is said loudly wherever a message shows.
   What's signed (`signedPayload`) changes only with a new version line.
+- **A persona is a label, never a sender.** Signed with the message; the box,
+  the key and the replies stay the person's.
+- **`sent` lists only the caller's mail** (or `--box`'s), never anything
+  received, and never another person's.
+- **This is a public tool.** It serves anyone's store, not ours: no feature
+  that only makes sense for one setup, and nothing named after one.
 - **Who sends.** `--from` is yourself or `automation`; with `shared_login`
   the login name is never a fallback. Jobs the Dead Drop books run the
   installed binary (`~/.local/bin`), never the one that booked them.

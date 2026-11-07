@@ -81,6 +81,11 @@ takes nothing else. That stops a slip, not a person: anyone can set
 `DEADDROP_FROM`, or write into the store's files. Who really sent a message
 is what its signature says (below).
 
+**Personas.** People hand their writing to assistants, and a reader wants
+to know which one is talking. A persona is a label under the sender, never a
+sender: the box, the key and the replies stay the person's. It's in the
+header and in the signature, so it's as trustworthy as the sender's name.
+
 ## Signatures
 
 Everyone may reach the store as one login, so nothing on the store can tell
@@ -91,7 +96,9 @@ and checked where the reader is:
 - **Signed on the sender's machine** with their ssh key (`ssh-keygen -Y
   sign`, namespace `deaddrop`), through the agent if they like. The key
   never reaches the store, so the store and its login can't sign.
-- **What's signed** is a canonical text of what the sender chose: from, the
+- **What's signed** is a canonical text of what the sender chose: from (and
+  persona, in v2 of the text; a message without one is signed as v1, as
+  0.3 did), the
   recipients, subject, tags, urgency, thread, each attachment's name and
   sha256, when it was signed, and the body. The sender works it out with
   the same code the store uses, and the store checks the signature is of
@@ -108,6 +115,9 @@ and checked where the reader is:
   key that isn't theirs). Bad is said loudly everywhere a message shows, and
   `file` won't hand out an attachment whose sum doesn't match.
 - **Automation** is signed by whoever's machine runs the job (`sign_as`).
+  On a shared login the key is the machine's, so it never signs as a
+  person: a front end there sending on someone's behalf stays unsigned
+  (honest) rather than signed with a key that isn't theirs (forged).
 - **Old messages and old senders** are unsigned, and say so; nothing
   breaks. Header fields a version doesn't know are kept when it rewrites a
   message, so an older store never strips a signature.
@@ -121,6 +131,20 @@ store's own README says so, the skill says so, and `send` refuses the shapes
 that are never anything but a secret (private key blocks, cloud and API
 token prefixes with their full length). It's a backstop for slips, not a
 scanner; a document that talks *about* tokens goes through.
+
+## What you sent
+
+A message lives only in its recipients' boxes: one copy each, each with its
+own id. `deaddrop sent` looks through every box for mail from the caller and
+puts the copies of one message back together, by its signature when it has
+one (the same in every copy), else by its sender, time, subject, thread and
+text. From 0.4, every message records its recipients. Each copy's state
+(unread, read, archived) comes with it: on a store anyone on the login can
+`ls`, hiding it from the sender would be pretend privacy, and a conversation
+view needs "seen". A signed message is checked as a copy its signature
+names, so a stray copy put in another box can't make the real one look
+forged. Like every reading command, with the store elsewhere it's fetched
+as stored and checked on the caller's machine.
 
 ## Pull, then mark
 

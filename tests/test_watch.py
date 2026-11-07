@@ -65,7 +65,7 @@ class Watch(DeadDrop):
         # Every field, always: a viewer never has to guess.
         for m in f["messages"]:
             self.assertEqual(set(m), {"id", "from", "subject", "tags", "urgency", "state", "sent", "thread", "attachments",
-                                      "signature", "signature_note", "signed_by"})
+                                      "signature", "signature_note", "signed_by", "persona"})
             self.assertEqual(m["signature"], "unsigned")
         self.assertEqual((f["messages"][1]["attachments"], f["messages"][1]["thread"], f["messages"][1]["tags"]), ([], "", []))
         att = self.tmp / "build.log"

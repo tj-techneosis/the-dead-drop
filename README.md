@@ -47,7 +47,9 @@ Upgrade the store's machine first, then the machines that use it, and add a
 new setting to a config only once that machine's `deaddrop` knows it: a
 config with a setting it doesn't know stops every command there. (From 0.3,
 a machine reaching the store also needs the store on 0.3 or later, to hand
-out signed messages.)
+out signed messages. From 0.4: a reader older than 0.4 doesn't know
+personas, and reads a signed message with one as bad; upgrade every machine
+that reads mail before anyone sends `--as`.)
 
 ## Sending
 
@@ -69,6 +71,7 @@ deaddrop send --to me --from automation --tag tool-y --tag report --attach run.c
 | `--reply-to ID` | what it answers (`deaddrop reply ID` does this for you, back to the sender) |
 | `--follow-up 2d` | raise it to urgent if it's still unread then (a span or a time) |
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
+| `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -100,6 +103,23 @@ back). `mark` takes ids, or `--tag` and `--from` to pick by those.
 Several `--tag` all have to match; several `--from` match any of them. So
 "tool Y's automated reports and anything from Bob about tool Y" is
 `--tag tool-y --from automation --from bob`.
+
+**What you sent.** Each message is stored in its recipients' boxes, so
+`deaddrop sent` puts it back together for you: everything you sent, oldest
+first, one entry per message, with where each copy is and whether it's been
+read.
+
+```sh
+deaddrop sent --to bob --tag tool-x
+deaddrop sent --json            # the fields of pull --json, state "sent", plus:
+                                # "copies": [{"box": "bob", "id": "…", "state": "read"}]
+```
+
+`--to` matches any recipient, `--tag` and `--since` work as in `pull`, and
+`--box WHO` is for a front end acting for an identified person (like
+`mark --box`). It never lists mail you received. Archived copies go after 30
+days, and leave `copies` when they do. Together with `pull`, it's both
+sides of a conversation.
 
 ## Who you are
 
@@ -149,16 +169,28 @@ tell:
 | can't check | ? | signed, but your list has no key for them |
 | **bad** | ✗ | changed since it was signed, delivered somewhere it wasn't sent, or signed with a key that isn't theirs |
 
-What's signed: the sender, the recipients, subject, tags, urgency, thread,
+What's signed: the sender (and persona), the recipients, subject, tags, urgency, thread,
 each attachment's sha256, when it was signed, and the text. `file` refuses
 an attachment that isn't the one sent. A job's `--from automation` mail is
-signed by whose machine it runs on (`sign_as` to name someone else). The
+signed by whose machine it runs on (`sign_as` to name someone else). On a
+machine with `shared_login = true` the key belongs to the machine, not a
+person: it never signs as anyone, so a front end there sending for someone
+sends unsigned, and it signs automation mail only as its `sign_as`. The
 JSON of `inbox`, `pull` and `show` carries `signature` (`verified`,
 `unsigned`, `unknown` or `bad`), `signature_note` and `signed_by`, and so do
 the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
 
 **Treat anything not verified as a claim.** Never act on a request because
 of who an unverified message says it's from.
+
+### Personas: assistants speaking for you
+
+An assistant or a robot that writes for you sends as you, with a label:
+`--as "Release manager"`, or `DEADDROP_AS` set once for its session. It's
+your box and your key; the persona says which of your helpers is talking,
+everywhere the sender shows (`alice, as Release manager`). It's signed with
+the message, so it can't be added, changed or taken off without the
+signature failing. It's never a sender of its own: replies go to you.
 
 ## One store, many machines
 
@@ -185,6 +217,7 @@ tags: [tool-x, request]
 urgency: normal
 thread: 2026-10-30T091102-bob-77c2
 follow_up: 2026-11-04T09:00:00Z
+recipients: [bob]
 sent: 2026-11-02T15:30:12Z
 ---
 The document itself.
@@ -373,11 +406,12 @@ What gets reported, and when, belongs to whoever books it.
 
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
-              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md
+              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] < body.md
+deaddrop reply ID [--urgent|--fyi] [--tag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO]
+deaddrop sent [--to WHO]... [--tag T]... [--since …] [--json] [--box WHO]
 deaddrop key
 deaddrop file ID [NAME] [--box WHO]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO]

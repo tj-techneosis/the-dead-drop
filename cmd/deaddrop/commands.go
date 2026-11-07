@@ -24,6 +24,7 @@ const (
 // draft is a message on its way in, before it has an id or a box.
 type draft struct {
 	from, subject, urgency, thread string
+	persona                        string
 	to, tags                       []string
 	body                           string
 	attach                         []string // paths on this machine
@@ -37,7 +38,19 @@ const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
 var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
 	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
-	"signed-by": true, "signed-at": true, "signature": true,
+	"signed-by": true, "signed-at": true, "signature": true, "as": true,
+}
+
+// personaOf is a send's --as, cleaned: one short line.
+func personaOf(f flags) (string, error) {
+	if !f.has("as") {
+		return "", nil
+	}
+	p := cleanLine(f.get("as"), 60)
+	if p == "" {
+		return "", fmt.Errorf("--as: a name for who is speaking, like \"Release manager\"")
+	}
+	return p, nil
 }
 
 // draftOf works a send's flags out into a draft: the same on the sender's
@@ -54,6 +67,9 @@ func draftOf(f flags) (draft, error) {
 	d := draft{subject: f.get("subject"), thread: f.get("reply-to"), attach: f.all("attach"),
 		signedBy: f.get("signed-by"), signedAt: f.get("signed-at"), sig: f.get("signature")}
 	if d.urgency, err = urgencyOf(f); err != nil {
+		return d, bad(u, err)
+	}
+	if d.persona, err = personaOf(f); err != nil {
 		return d, bad(u, err)
 	}
 	if d.from, err = senderOf(f); err != nil {
@@ -139,8 +155,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true})
+	const u = "reply ID [--urgent|--fyi] [--tag T]... [--as NAME] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true, "as": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -164,6 +180,9 @@ func cmdReply(args []string) error {
 	}
 	d := draft{from: me, to: []string{orig.From}, thread: orig.ID, tags: append([]string{}, orig.Tags...)}
 	if d.urgency, err = urgencyOf(f); err != nil {
+		return bad(u, err)
+	}
+	if d.persona, err = personaOf(f); err != nil {
 		return bad(u, err)
 	}
 	extra, err := tagsOf(f)
@@ -307,7 +326,7 @@ func deliver(dir string, d draft) error {
 		for i := range attached {
 			as[i] = attachSum{attached[i], sums[i]}
 		}
-		payload := signedPayload(d.from, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
+		payload := signedPayload(d.from, d.persona, d.to, d.subject, d.tags, d.urgency, d.thread, as, d.signedAt, d.body)
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
@@ -319,10 +338,12 @@ func deliver(dir string, d draft) error {
 	}
 	sent := now()
 	for _, to := range d.to {
-		m := &Message{From: d.from, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
+		m := &Message{From: d.from, Persona: d.persona, To: to, Subject: d.subject, Tags: d.tags, Urgency: d.urgency,
 			Thread: d.thread, Attachments: attached, AttachmentSums: sums, Sent: sent, Body: d.body}
+		// Who it went to, in every copy (deaddrop sent puts them together).
+		m.Recipients = d.to
 		if d.sig != "" {
-			m.Recipients, m.SignedBy, m.SignedAt, m.Sig = d.to, d.signedBy, d.signedAt, d.sig
+			m.SignedBy, m.SignedAt, m.Sig = d.signedBy, d.signedAt, d.sig
 		}
 		if m.Tags == nil {
 			m.Tags = []string{}
@@ -618,7 +639,7 @@ func cmdInbox(args []string) error {
 		if len(m.Attachments) > 0 {
 			subj += fmt.Sprintf(" [%d attached]", len(m.Attachments))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m.State, m.ID, m.Urgency, m.From, sigMark(m), ago(m.Sent, at), tags, subj)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m.State, m.ID, m.Urgency, cleanLine(m.sender(), 48), sigMark(m), ago(m.Sent, at), tags, subj)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

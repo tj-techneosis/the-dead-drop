@@ -125,7 +125,7 @@ Panel {
   // Who it's from, as far as this machine can tell (deaddrop checks the
   // signature here, against this machine's list of keys).
   function sender(m) {
-    var s = String(m.from || "")
+    var s = String(m.from || "") + (m.persona ? ", as " + m.persona : "")
     if (m.signature === "bad") return s + " · forged or changed"
     if (m.signature === "unknown") return s + " · can't check"
     if (m.signature !== "verified") return s + " · unsigned"

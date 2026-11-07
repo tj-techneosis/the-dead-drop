@@ -198,3 +198,21 @@ class Signed(DeadDrop):
         p = self.dd("key", **self.as_("alice"))
         self.assertEqual(p.stdout.strip(), key("alice")[1])
         self.dd("key", DEADDROP_FROM="alice", ok=False)
+
+    def test_a_shared_login_never_signs_as_a_person(self):
+        # On a machine everyone logs in to as one user, the key is the
+        # machine's: a front end sending for someone stays unsigned rather
+        # than being signed (and read as forged) with it.
+        self.config.write_text('shared_login = true\n')
+        box = dict(DEADDROP_SIGN_KEY=key("box")[0])
+        self.send("# For alice, by a front end\n\nx\n", "--to", "bob", DEADDROP_FROM="alice", **box)
+        self.assertEqual(self.one()["signature"], "unsigned")
+        # Automation is signed only under the name the config gives it.
+        self.send("# A job\n\nx\n", "--to", "carol", "--from", "automation", DEADDROP_FROM="alice", **box)
+        self.assertEqual(self.one("carol")["signature"], "unsigned")
+        self.config.write_text('shared_login = true\nsign_as = "box"\n')
+        signers(self.signers, "alice", "bob", "box")
+        self.send("# A job\n\nx\n", "--to", "dave", "--from", "automation", DEADDROP_FROM="alice", **box)
+        m = self.one("dave")
+        self.assertEqual((m["signature"], m["signed_by"]), ("verified", "box"))
+

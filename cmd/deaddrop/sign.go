@@ -46,12 +46,23 @@ const (
 type attachSum struct{ name, sum string }
 
 // signedPayload is the text a signature covers.
-func signedPayload(from string, recipients []string, subject string, tags []string, urgency, thread string,
+//
+// v1 is a message with no persona, exactly as 0.3 signed it, so those still
+// verify; v2 adds the persona. Taking a persona off, or putting one on,
+// changes which is checked, and the signature fails.
+func signedPayload(from, persona string, recipients []string, subject string, tags []string, urgency, thread string,
 	sums []attachSum, signedAt string, body string) []byte {
 	var b bytes.Buffer
 	q, _ := json.Marshal(subject)
-	fmt.Fprintf(&b, "deaddrop signed message v1\n")
-	fmt.Fprintf(&b, "from: %s\n", from)
+	if persona == "" {
+		fmt.Fprintf(&b, "deaddrop signed message v1\n")
+		fmt.Fprintf(&b, "from: %s\n", from)
+	} else {
+		p, _ := json.Marshal(persona)
+		fmt.Fprintf(&b, "deaddrop signed message v2\n")
+		fmt.Fprintf(&b, "from: %s\n", from)
+		fmt.Fprintf(&b, "persona: %s\n", p)
+	}
 	fmt.Fprintf(&b, "recipients: %s\n", strings.Join(recipients, ","))
 	fmt.Fprintf(&b, "subject: %s\n", q)
 	fmt.Fprintf(&b, "tags: %s\n", strings.Join(tags, ","))
@@ -218,10 +229,13 @@ func verifyState(m *Message) (string, string) {
 		urgencies = []string{normal, fyi, urgent}
 	}
 	for _, u := range urgencies {
-		payload := signedPayload(m.From, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
+		payload := signedPayload(m.From, m.Persona, m.Recipients, m.Subject, m.Tags, u, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
 		c.Stdin = bytes.NewReader(payload)
 		if c.Run() == nil {
+			if m.Persona != "" {
+				return sigVerified, "signed by " + m.SignedBy + ", as " + m.Persona
+			}
 			return sigVerified, "signed by " + m.SignedBy
 		}
 	}
@@ -272,6 +286,26 @@ func contains(xs []string, x string) bool {
 
 // ---- the sending side ----
 
+// withPersona adds $DEADDROP_AS to a send or reply that doesn't name a
+// persona, so a robot's session can set it once. It's added here, on the
+// sender's machine, so it goes to the store (and into the signature) as a
+// flag.
+func withPersona(cmd string, args []string) []string {
+	p := os.Getenv("DEADDROP_AS")
+	if p == "" || hops() > 0 || (cmd != "send" && cmd != "reply") {
+		return args
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--as" || strings.HasPrefix(a, "--as=") {
+			return args
+		}
+	}
+	return append(append([]string{}, args...), "--as", p)
+}
+
 // presetBody, when set, is the body: the signing step has read stdin already.
 var presetBody *string
 
@@ -310,7 +344,20 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		return cmd, args, err
 	}
 	signer := d.from
-	if signer == automation {
+	c, err := loadConfig()
+	if err != nil {
+		return cmd, args, err
+	}
+	if c.SharedLogin {
+		// Everyone here is the same login, so this machine's key is nobody's
+		// own: it never signs as a person (a front end sending for someone
+		// goes unsigned, as it should), only a job's automation mail, and
+		// only under a name the config gives it.
+		if d.from != automation || c.SignAs == "" {
+			return cmd, args, nil
+		}
+		signer = c.SignAs
+	} else if signer == automation {
 		if signer, err = signAs(); err != nil || signer == "" {
 			return cmd, args, err
 		}
@@ -324,7 +371,7 @@ func signOutgoing(cmd string, args []string) (string, []string, error) {
 		sums = append(sums, attachSum{filepath.Base(p), s})
 	}
 	at := now().UTC().Format(time.RFC3339)
-	sig, err := sign(key, signedPayload(d.from, d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
+	sig, err := sign(key, signedPayload(d.from, d.persona, d.to, d.subject, d.tags, d.urgency, d.thread, sums, at, d.body))
 	if err != nil {
 		return cmd, args, err
 	}
@@ -349,7 +396,7 @@ func signAs() (string, error) {
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
 	const u = "reply ID [--urgent|--fyi] [--tag T]... [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true})
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "follow-up": true, "as": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
@@ -385,6 +432,9 @@ func replyAsSend(args []string) (string, []string, error) {
 	}
 	if f.has("follow-up") {
 		out = append(out, "--follow-up", f.get("follow-up"))
+	}
+	if f.has("as") {
+		out = append(out, "--as", f.get("as"))
 	}
 	return "send", out, nil
 }

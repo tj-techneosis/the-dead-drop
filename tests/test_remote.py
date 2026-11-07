@@ -272,3 +272,27 @@ exit 0
         p = self.rdd("inbox", ok=False, env=self.signed_env("bob", **env))
         self.assertIn("from before 0.3", p.stderr)
 
+
+    def test_sent_over_ssh_is_checked_here(self):
+        self.rdd("send", "--to", "bob,carol", "--as", "Helper", input="# Both\n\nx\n", env=self.signed_env("alice"))
+        self.rdd("send", "--to", "alice", input="# Not mine\n\nx\n", env=self.signed_env("bob"))
+        ss = json.loads(self.rdd("sent", "--json", env=self.signed_env("alice")).stdout)
+        self.assertEqual([s["subject"] for s in ss], ["Both"])
+        s = ss[0]
+        self.assertEqual((s["signature"], s["persona"], s["recipients"]), ("verified", "Helper", ["bob", "carol"]))
+        self.assertEqual([c["box"] for c in s["copies"]], ["bob", "carol"])
+        self.assertNotIn("sig", s)
+        # Changed on the store: caught here.
+        f = next((self.far_store / "carol" / "new").glob("*.md"))
+        f.write_text(f.read_text().replace("x\n", "y\n"))
+        f2 = next((self.far_store / "bob" / "new").glob("*.md"))
+        f2.write_text(f2.read_text().replace("x\n", "y\n"))
+        self.assertEqual(json.loads(self.rdd("sent", "--json", env=self.signed_env("alice")).stdout)[0]["signature"], "bad")
+        self.assertEqual(self.near_files(), [])
+
+    def test_sent_through_a_relay(self):
+        mid, mid_ssh = self.relay_setup()
+        via = dict(DEADDROP_SSH=str(mid_ssh), DEADDROP_HOST="relay-box")
+        self.rdd("send", "--to", "bob", input="# Far\n\nx\n", env=self.signed_env("alice", **via))
+        ss = json.loads(self.rdd("sent", "--json", env=self.signed_env("alice", **via)).stdout)
+        self.assertEqual((ss[0]["subject"], ss[0]["signature"]), ("Far", "verified"))

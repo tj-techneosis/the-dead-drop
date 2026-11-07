@@ -17,13 +17,15 @@ const usage = `deaddrop: a shared, tagged inbox of documents
 Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
-                [--from automation] < body.md
-  deaddrop reply ID [--urgent|--fyi] [--tag T]... < body.md
+                [--from automation] [--as NAME] < body.md
+  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--as NAME] < body.md
 
 Collect it:
   deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--json]
   deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread] [--json]
   deaddrop show ID [--json|--html]  one message in full
+  deaddrop sent [--to WHO]... [--tag T]... [--since D] [--json]
+                                   what you sent, with each copy's state
   deaddrop file ID [NAME]          an attachment, on stdout (no NAME: list them)
   deaddrop mark read|unread|archive ID... [--box WHO]
   deaddrop mark read|unread|archive --tag T... [--from WHO]... [--box WHO]
@@ -151,6 +153,7 @@ func dispatch(cmd string, args []string) error {
 		return err
 	}
 	// A send is signed here, on the sender's own machine, before it goes.
+	args = withPersona(cmd, args)
 	if cmd, args, err = signOutgoing(cmd, args); err != nil {
 		return err
 	}
@@ -221,7 +224,7 @@ func refreshInbox() {
 
 // readsHere are the commands whose messages are checked on the reader's
 // machine when the store is elsewhere.
-var readsHere = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "file": true}
+var readsHere = map[string]bool{"inbox": true, "ls": true, "pull": true, "show": true, "file": true, "sent": true}
 
 // viaHost is the store's machine while a reading command runs here.
 var viaHost string
@@ -241,6 +244,7 @@ var commands = map[string]func([]string) error{
 	"pull":      cmdPull,
 	"file":      cmdFile,
 	"show":      cmdShow,
+	"sent":      cmdSent,
 	"mark":      cmdMark,
 	"status":    cmdStatus,
 	"firetower": cmdFiretower,

@@ -45,6 +45,7 @@ to: bob
 subject: "Requests for tool X v9"
 tags: [tool-x, request]
 urgency: normal
+recipients: [bob]
 sent: 2026-11-02T15:30:00Z
 ---
 # Requests for tool X v9
