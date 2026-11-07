@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,5 +124,144 @@ func TestOwnSharing(t *testing.T) {
 	}
 	if !ownSharing("controlmaster auto\ncontrolpath none\n") || !ownSharing("controlmaster false\ncontrolpath ~/.ssh/cm-%C\n") {
 		t.Fatal("the person's own ControlMaster or ControlPath wins")
+	}
+}
+
+func TestVCacheOnlyWhereTheListIsYourOwn(t *testing.T) {
+	d := t.TempDir()
+	lists := t.TempDir() // the list lives outside home, so only the home chain is under test
+	t.Setenv("HOME", d)
+	state := d + "/.local/state/deaddrop"
+	t.Setenv("DEADDROP_STATE", state)
+	t.Setenv("DEADDROP_NO_VCACHE", "")
+	was := systemSigners
+	defer func() { systemSigners = was }()
+	systemSigners = d + "/no-pin"
+	list := lists + "/allowed_signers"
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	if !vcacheAllowed(list) {
+		t.Fatal("your own private list: the cache is yours")
+	}
+	// Every folder from the state folder up to home, home included: any one
+	// others can write means no cache (they could swap the state folder).
+	for _, dir := range []string{d + "/.local/state", d + "/.local", d} {
+		os.Chmod(dir, 0o777)
+		if vcacheAllowed(list) {
+			t.Fatalf("%s writable by others: no cache", dir)
+		}
+		os.Chmod(dir, 0o755)
+	}
+	// A cache file that's a link: no cache.
+	os.WriteFile(d+"/elsewhere.json", []byte("{}"), 0o600)
+	os.Symlink(d+"/elsewhere.json", state+"/verified.json")
+	if vcacheAllowed(list) {
+		t.Fatal("a linked cache file: no cache")
+	}
+	os.Remove(state + "/verified.json")
+	// A state folder outside home, plainly, by "..", or through a link.
+	outside := t.TempDir()
+	os.Symlink(outside, d+"/.local/out")
+	for _, p := range []string{outside, d + "/../" + filepath.Base(outside), d + "/.local/out"} {
+		t.Setenv("DEADDROP_STATE", p)
+		if vcacheAllowed(list) {
+			t.Fatalf("state folder %s leads outside home: no cache", p)
+		}
+	}
+	// A link from a folder others can write, into the checked state folder:
+	// the folder holding the link is checked too, so no cache.
+	shared := d + "/shared" // inside home, so it's the folder check that refuses
+	os.Mkdir(shared, 0o700)
+	os.Chmod(shared, 0o777)
+	os.Symlink(state, shared+"/ln")
+	t.Setenv("DEADDROP_STATE", shared+"/ln")
+	if vcacheAllowed(list) {
+		t.Fatal("a state folder reached through a shared folder: no cache")
+	}
+	// A refused path outside home is never created, plainly or through a
+	// link inside home that leads out.
+	for _, p := range []string{outside + "/never", d + "/.local/out/never"} {
+		t.Setenv("DEADDROP_STATE", p)
+		vcacheAllowed(list)
+	}
+	if _, err := os.Stat(outside + "/never"); err == nil {
+		t.Fatal("a refused state folder was created outside home")
+	}
+	// A save goes nowhere once the state folder no longer resolves to the
+	// folder that was checked.
+	t.Setenv("DEADDROP_STATE", state)
+	vcacheAllowed(list)
+	vcache = &verifyCache{Checks: map[string]bool{"k": true}, Owners: map[string][]string{}, dirty: true}
+	t.Setenv("DEADDROP_STATE", d+"/.local/out")
+	saveVCache()
+	if _, err := os.Stat(state + "/verified.json"); err == nil {
+		t.Fatal("a save after the state folder moved")
+	}
+	vcache = nil
+	t.Setenv("DEADDROP_STATE", state)
+	if !vcacheAllowed(list) || vcacheDir == "" {
+		t.Fatal("back home: the cache, in the resolved folder")
+	}
+	os.WriteFile(list, []byte(`alice valid-before="20300101" ssh-ed25519 AAAA`+"\n"), 0o644)
+	if vcacheAllowed(list) {
+		t.Fatal("keys that expire: no cache")
+	}
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	os.Chmod(list, 0o666)
+	if vcacheAllowed(list) {
+		t.Fatal("a list others can write: no cache")
+	}
+	os.Chmod(list, 0o644)
+	os.WriteFile(d+"/pin", []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	systemSigners = d + "/pin"
+	if vcacheAllowed(list) {
+		t.Fatal("a pinned list (a shared login): no cache")
+	}
+}
+
+func TestAFutureHeardStampHidesNothing(t *testing.T) {
+	d := t.TempDir()
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	os.MkdirAll(d+"/bob/new", 0o700)
+	os.WriteFile(d+"/bob/.heard", nil, 0o600)
+	future := now().Add(48 * time.Hour)
+	os.Chtimes(d+"/bob/.heard", future, future)
+	if !heardAt(d, "bob", "").IsZero() {
+		t.Fatal("a stamp in the future counts as never heard")
+	}
+	hear(d, "bob", "")
+	if got := heardAt(d, "bob", ""); !got.Equal(now().Add(-time.Second)) {
+		t.Fatalf("the next read writes a true stamp, a second back: %v", got)
+	}
+}
+
+func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
+	d := t.TempDir()
+	t.Setenv("DEADDROP_STATE", d+"/state")
+	t.Setenv("DEADDROP_NO_VCACHE", "")
+	t.Setenv("HOME", d)
+	os.MkdirAll(d+"/state", 0o700)
+	was := systemSigners
+	defer func() { systemSigners = was }()
+	systemSigners = d + "/no-pin"
+	list := d + "/allowed_signers"
+	os.WriteFile(list, []byte("alice ssh-ed25519 AAAA\n"), 0o644)
+	plant := func(mode os.FileMode) {
+		vcache, vcacheOKMemo, signersHashMemo = nil, map[string]bool{}, map[string]string{}
+		k := vkey(signersHash(list), keygenID(), "alice", "SIG", "TEXT")
+		b, _ := json.Marshal(map[string]any{"checks": map[string]bool{k: true}})
+		os.MkdirAll(d+"/state", 0o700)
+		os.WriteFile(d+"/state/verified.json", b, 0o600)
+		os.Chmod(d+"/state/verified.json", mode)
+	}
+	checked := false
+	check := func() bool { checked = true; return false }
+	plant(0o600)
+	if !cachedCheck(list, "alice", "SIG", []byte("TEXT"), check) || checked {
+		t.Fatal("the person's own private cache is used")
+	}
+	plant(0o666)
+	checked = false
+	if cachedCheck(list, "alice", "SIG", []byte("TEXT"), check) || !checked {
+		t.Fatal("a verdict in a cache others can write is checked again, never trusted")
 	}
 }

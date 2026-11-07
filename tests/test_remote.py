@@ -9,10 +9,10 @@ import json
 import os
 from pathlib import Path
 
-from _binary import BIN, DeadDrop, key, script, signers
+from _binary import BIN, DeadDrop, at, key, script, signers
 
 
-class Remote(DeadDrop):
+class RemoteBase(DeadDrop):
     def setUp(self):
         super().setUp()
         self.far = self.tmp / "far-home"
@@ -44,9 +44,12 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
     def near_files(self):
         """What reading left on this side: nothing but the reader's own
         ledger of seals (hashes and ids, never a letter's text)."""
-        ledger = {".local", ".local/state", ".local/state/deaddrop", ".local/state/deaddrop/seals.json", ".local/state/deaddrop/.seals.lock"}
+        ledger = {".local", ".local/state", ".local/state/deaddrop", ".local/state/deaddrop/seals.json", ".local/state/deaddrop/.seals.lock",
+                  ".local/state/deaddrop/verified.json", ".local/state/deaddrop/.verified.lock"}
         return sorted(str(p.relative_to(self.near)) for p in self.near.rglob("*") if str(p.relative_to(self.near)) not in ledger)
 
+
+class Remote(RemoteBase):
     def test_send_pull_mark_with_nothing_written_here(self):
         # Build order step 3.
         att = self.tmp / "outside" / "run.log"
@@ -338,3 +341,120 @@ exec {BIN} "$@"
         self.rdd("send", "--to", "bob", "--for", "planner", input="# For the planner\n\nx\n")
         out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
         self.assertIn("unread for helpers: planner 1", out)
+
+
+class Mirror(RemoteBase):
+    """--cached: the store's answers kept on the reader's machine, checked
+    here on every read, refreshed by watch --mirror, dropped by a write."""
+
+    def bob(self, **kw):
+        return dict(DEADDROP_FROM="bob", **kw)
+
+    def ids(self, *args, **env):
+        return [m["id"] for m in json.loads(self.rdd("inbox", "--json", *args, env=self.bob(**env)).stdout)]
+
+    def test_cached_reads_keep_the_answer_until_a_write_or_a_refresh(self):
+        a = self.rdd("send", "--to", "bob", input="# A\n\nx\n").stdout.split()[1]
+        self.assertEqual(self.ids("--cached"), [a])
+        mirror = self.near / ".local" / "state" / "deaddrop" / "mirror"
+        kept = [p for p in mirror.glob("*.json")]
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(oct(kept[0].stat().st_mode & 0o777), "0o600")
+        self.assertEqual(oct(mirror.stat().st_mode & 0o777), "0o700")
+        # Something arrives that this machine didn't send: --cached still
+        # answers from the mirror, with no ssh; without it, the store.
+        b = self.dd("send", "--to", "bob", input="# B\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        before = self.ssh_log.read_text()
+        self.assertEqual(self.ids("--cached"), [a])
+        self.assertEqual(self.ssh_log.read_text(), before)
+        self.assertEqual(sorted(self.ids()), sorted([a, b]))
+        # watch --mirror asks again for what's been read.
+        c = self.dd("send", "--to", "bob", input="# C\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())
+        self.assertEqual(sorted(self.ids("--cached")), sorted([a, b, c]))
+        # A write from here: the next cached read asks the store.
+        self.rdd("mark", "read", a, env=self.bob())
+        got = json.loads(self.rdd("inbox", "--json", "--all", "--cached", env=self.bob()).stdout)
+        self.assertEqual({m["id"]: m["state"] for m in got}[a], "read")
+
+    def test_cached_reads_are_still_checked_here(self):
+        signers(self.tmp / "signers", "alice")
+        sk = dict(DEADDROP_SIGN_KEY=key("alice")[0], DEADDROP_SIGNERS=str(self.tmp / "signers"))
+        id = self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=sk).stdout.split()[1]
+        self.assertEqual(json.loads(self.rdd("show", id, "--json", "--cached", env=self.bob(DEADDROP_SIGNERS=str(self.tmp / "signers"))).stdout)["signature"], "verified")
+        # The same kept answer, read with a list that doesn't know alice.
+        empty = self.tmp / "empty-signers"
+        empty.write_text("")
+        m = json.loads(self.rdd("show", id, "--json", "--cached", env=self.bob(DEADDROP_SIGNERS=str(empty))).stdout)
+        self.assertNotEqual(m["signature"], "verified")
+
+    def test_nothing_is_kept_without_asking(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        self.ids()
+        self.rdd("watch", "--no-hooks", env=self.bob())
+        self.assertFalse((self.near / ".local" / "state" / "deaddrop" / "mirror").exists())
+
+    def test_a_planted_or_future_answer_is_never_used(self):
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        self.ids("--cached")
+        mirror = self.near / ".local" / "state" / "deaddrop" / "mirror"
+        (entry,) = mirror.glob("*.json")
+        e = json.loads(entry.read_text())
+        # Dated ahead: not fresh, so the store is asked.
+        e["fetched_at"] = "2099-01-01T00:00:00Z"
+        entry.write_text(json.dumps(e))
+        before = self.ssh_log.read_text()
+        self.ids("--cached")
+        self.assertNotEqual(self.ssh_log.read_text(), before)
+        # Naming another store: a refresh never asks it, and lets it go.
+        e = json.loads(entry.read_text())
+        e["host"] = "elsewhere"
+        entry.write_text(json.dumps(e))
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())
+        self.assertNotIn("elsewhere", self.ssh_log.read_text())
+        self.assertFalse(entry.exists())
+
+
+    def test_a_cached_read_is_heard_as_of_what_was_shown(self):
+        from datetime import datetime
+        epoch = lambda t: datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+        self.rdd("send", "--to", "bob", input="# A\n\nx\n")
+        heard = self.far_store / "bob" / ".heard"
+        self.rdd("pull", "--json", "--cached", env=self.bob())  # fetched: heard
+        heard.unlink()
+        self.clock = at(1)
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # a copy only, fetched at 1
+        self.assertFalse(heard.exists())
+        self.clock = at(2)
+        self.dd("send", "--to", "bob", input="# B, after the copy\n\nx\n", DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol")
+        self.clock = at(3)
+        self.rdd("pull", "--json", "--cached", env=self.bob())  # shown the copy from 1
+        self.clock = at(4)
+        self.rdd("watch", "--mirror", "--no-hooks", env=self.bob())  # tells the store: heard as of 1
+        self.assertEqual(heard.stat().st_mtime, epoch(at(1)) - 1)  # a second back; B, at 2, is still unheard
+
+
+class DefaultBox(RemoteBase):
+    """A session with a box of its own ($DEADDROP_BOX, or the reply box it
+    asks answers at) reads there by default, here and over ssh."""
+
+    def test_reading_commands_default_to_the_sessions_box(self):
+        a = self.rdd("send", "--to", "alice-helper", input="# For the helper\n\nx\n").stdout.split()[1]
+        self.rdd("send", "--to", "alice", input="# For alice\n\nx\n", env=dict(DEADDROP_FROM="bob"))
+        for var in ("DEADDROP_BOX", "DEADDROP_REPLY_BOX"):
+            env = {var: "alice-helper"}
+            self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "--json", env=env).stdout)], [a])
+            self.assertEqual([m["id"] for m in json.loads(self.rdd("pull", "--json", env=env).stdout)], [a])
+            self.assertIn("For the helper", self.rdd("show", a, env=env).stdout)
+        self.rdd("mark", "read", a, env=dict(DEADDROP_REPLY_BOX="alice-helper"))
+        self.assertTrue((self.far_store / "alice-helper" / "read" / (a + ".md")).exists())
+        # What you sent stays yours, and a named box still wins.
+        self.assertIn("For the helper", self.rdd("sent", env=dict(DEADDROP_BOX="alice-helper")).stdout)
+        self.assertIn("For alice", self.rdd("pull", "alice", env=dict(DEADDROP_BOX="alice-helper")).stdout)
+
+    def test_a_letter_in_another_box_says_where(self):
+        a = self.rdd("send", "--to", "alice-helper", input="# Q\n\nx\n").stdout.split()[1]
+        self.rdd("send", "--to", "alice", input="# Mine\n\nx\n", env=dict(DEADDROP_FROM="bob"))
+        p = self.rdd("mark", "read", a, ok=False)
+        self.assertIn("--box alice-helper", p.stderr)
+

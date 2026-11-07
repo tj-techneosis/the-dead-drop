@@ -33,7 +33,7 @@ Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
   deaddrop mark read|unread|archive --tag T... [--from WHO]... [--since D] [--box WHO] [--for H]
 
 On your own machine:
-  deaddrop watch [--every 1m] [--no-hooks] [--for H]   keep the inbox file current, run new.d hooks
+  deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   keep the inbox file current, run new.d hooks
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
@@ -46,7 +46,7 @@ On your own machine:
 
 Look after it:
   deaddrop status [--box WHO]... [--json]   per box: unread, urgent, helpers' unread, newest subject
-  deaddrop firetower [--next 6m|TIME|none] [--box WHO]...   one lookout per box, mail/<who>/inbox
+  deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]   one lookout per box
   deaddrop gc [--days 30]          archived mail older than that goes
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help
@@ -122,7 +122,7 @@ func main() {
 			return
 		}
 	}
-	err := dispatch(cmd, args)
+	err := dispatch(cmd, takeCached(cmd, args))
 	if err == nil {
 		return
 	}
@@ -144,6 +144,7 @@ func main() {
 
 func dispatch(cmd string, args []string) error {
 	defer saveLedger()
+	defer saveVCache()
 	switch cmd {
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
@@ -171,6 +172,7 @@ func dispatch(cmd string, args []string) error {
 	// A send is signed here, on the sender's own machine, before it goes.
 	args = withPersona(cmd, args)
 	args = withFor(cmd, args)
+	args = withBox(cmd, args)
 	if cmd, args, err = signOutgoing(cmd, args); err != nil {
 		return err
 	}
@@ -185,6 +187,9 @@ func dispatch(cmd string, args []string) error {
 	}
 	if host != "" {
 		err = runRemote(host, cmd, args)
+		if changesStore[cmd] {
+			mirrorChanged() // kept answers may be out of date now
+		}
 	} else if err = arrivedHere(cmd); err == nil {
 		err = run(args)
 	}
@@ -229,22 +234,46 @@ func refreshInbox(args []string) {
 	if os.Getenv("DEADDROP_LOCAL") == "1" || hops() > 0 {
 		return
 	}
-	// Every inbox file watched here, the person's and each helper's: a mark
-	// by id may have moved a letter in any of them.
+	// The inbox files watched here for the box marked in (the person's own,
+	// each helper's in it): a mark by id may have moved a letter in any of
+	// them. Other boxes' files are left to their watches.
 	me, err := whoAmI()
 	if err != nil {
 		return
 	}
-	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
-	for _, path := range files {
-		base := strings.TrimSuffix(filepath.Base(path), ".json")
-		watchFor = strings.TrimPrefix(strings.TrimPrefix(base, "inbox"), "-")
-		if in := readInbox(); in != nil && in.Box == me && in.For == watchFor {
-			watchPass(false)
+	marked := me
+	for i, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--box" && i+1 < len(args) {
+			marked = strings.ToLower(args[i+1])
+		} else if strings.HasPrefix(a, "--box=") {
+			marked = strings.ToLower(strings.TrimPrefix(a, "--box="))
 		}
 	}
-	watchFor = ""
+	if marked == "me" || marked == "" {
+		marked = me
+	}
+	files, _ := filepath.Glob(filepath.Join(stateDir(), "inbox*.json"))
+	for _, path := range files {
+		// inbox.json, inbox-<helper>.json, inbox@<box>.json, inbox@<box>@<helper>.json
+		name := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(path), ".json"), "inbox")
+		watchBox, watchFor = "", strings.TrimPrefix(name, "-")
+		if strings.HasPrefix(name, "@") {
+			watchBox, watchFor, _ = strings.Cut(name[1:], "@")
+		}
+		in := readInbox()
+		if in == nil || in.For != watchFor || in.Box != marked || (watchBox == "" && in.Box != me) || (watchBox != "" && in.Box != watchBox) {
+			continue
+		}
+		watchPass(false)
+	}
+	watchBox, watchFor = "", ""
 }
+
+// changesStore are the commands that change what's in the store.
+var changesStore = map[string]bool{"send": true, "reply": true, "mark": true, "gc": true, "follow-up": true}
 
 // readsHere are the commands whose messages are checked on the reader's
 // machine when the store is elsewhere.

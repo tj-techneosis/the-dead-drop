@@ -100,6 +100,37 @@ class Watch(DeadDrop):
         self.assertNotIn("the text", payload)
         self.assertNotEqual(id, old)
 
+    def test_watch_box_keeps_another_box_in_its_own_file(self):
+        self.hook(body=f'printf "%s|%s\\n" "$DEADDROP_MSG_ID" "$DEADDROP_MSG_BOX" >> "{self.hook_log}"\n')
+        self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.dd("watch")
+        # A box that isn't there is a typo, said, not an empty inbox.
+        self.assertIn("no box alice-helper", self.dd("watch", "--box", "alice-helper", ok=False).stderr)
+        self.send("# Before\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")
+        self.assertIn("first look", self.dd("watch", "--box", "alice-helper").stdout)
+        side = self.send("# For the side box\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")
+        self.assertIn("1 new", self.dd("watch", "--box", "alice-helper").stdout)
+        self.assertEqual(self.fired(), [[side, "alice-helper"]])
+        f = json.loads((self.state / "inbox@alice-helper.json").read_text())
+        self.assertEqual((f["box"], f["unread"]), ("alice-helper", 2))
+        self.assertEqual(self.inbox_file()["box"], "alice")  # the caller's own file is untouched
+        self.assertIn("alice-helper: 2 unread", self.dd("bar", "--box", "alice-helper").stdout)
+        menu = self.dd("bar", "--box", "alice-helper", "--format", "swiftbar").stdout
+        mark_lines = [l for l in menu.splitlines() if 'param1="mark"' in l]
+        self.assertTrue(mark_lines and all('"--box" param' in l and '"alice-helper"' in l for l in mark_lines), menu)
+        # --box me is the usual file; one box per watch.
+        self.dd("watch", "--box", "me")
+        self.assertFalse((self.state / "inbox@alice.json").exists())
+        self.dd("watch", "--box", "a", "--box", "b", ok=False)
+
+    def test_a_sessions_box_never_fills_the_persons_own_file(self):
+        self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.send("# Side\n\nx\n", "--to", "alice-helper", DEADDROP_FROM="bob")
+        self.dd("watch", "--box", "me", DEADDROP_REPLY_BOX="alice-helper")
+        f = self.inbox_file()
+        self.assertEqual(f["box"], "alice")
+        self.assertEqual([m["subject"] for m in f["messages"]], ["Mine"])
+
     def test_a_failing_hook_does_not_stop_the_others_or_refire(self):
         self.hook("a-broken", "echo broken >&2; exit 3\n")
         self.hook("b-log")

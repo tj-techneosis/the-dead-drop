@@ -248,7 +248,72 @@ func findAnywhere(dir, box, id string, withBody bool) (*Message, error) {
 			return m, nil
 		}
 	}
+	if other := boxHolding(dir, box, id); other != "" && checkID(id) == nil {
+		return nil, fmt.Errorf("%v; it's in %s's box (--box %s)", err, other, other)
+	}
 	return nil, err
+}
+
+// boxHolding is another box with a copy of id, for a hint: "" if none.
+func boxHolding(dir, not, id string) string {
+	if checkID(id) != nil {
+		return ""
+	}
+	for _, b := range boxes(dir) {
+		if b == not {
+			continue
+		}
+		for _, h := range append([]string{""}, helpers(dir, b)...) {
+			for _, s := range stateDirs {
+				if _, err := os.Stat(filepath.Join(slotDir(dir, b, h), s.dir, id+".md")); err == nil {
+					return b
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// heardFile stamps when a pigeonhole was last read (pull, show, mark): its
+// time is all it holds. A board counts mail waiting since then as unheard.
+const heardFile = ".heard"
+
+// hear stamps a pigeonhole as read now, if it's there; never makes one.
+func hear(dir, box, helper string) { hearAt(dir, box, helper, now()) }
+
+// hearAt stamps a pigeonhole heard as of t (never later than now), only
+// moving the stamp forward: a reader who was shown the box as of t has heard
+// what had arrived by then, not what came after.
+func hearAt(dir, box, helper string, t time.Time) {
+	slot := slotDir(dir, box, helper)
+	if _, err := os.Stat(slot); err != nil {
+		return
+	}
+	if at := now(); t.After(at) {
+		t = at
+	}
+	// A second back: times are kept to the second, so a letter landing later
+	// in the very second of the read stays unheard (louder, never hidden).
+	t = t.Add(-time.Second)
+	if !t.After(heardAt(dir, box, helper)) {
+		return
+	}
+	path := filepath.Join(slot, heardFile)
+	if writeAtomic(path, nil, 0o600) == nil {
+		os.Chtimes(path, t, t)
+	}
+}
+
+// heardAt is when a pigeonhole was last read: zero if never stamped.
+func heardAt(dir, box, helper string) time.Time {
+	info, err := os.Stat(filepath.Join(slotDir(dir, box, helper), heardFile))
+	if err != nil || info.ModTime().After(now()) {
+		// A stamp in the future (a clock set back, a planted file) would hide
+		// every new letter as heard: it counts as never heard, and the next
+		// read writes a true one.
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 // findIn finds one message in one pigeonhole, in any state.

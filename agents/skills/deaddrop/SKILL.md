@@ -70,7 +70,8 @@ EOF
 - **Several people:** `--to bob --to carol` (each gets a copy).
 - **You have a box of your own** (an assistant with its own box, like
   `alice-helper`): send with `--reply-box <your box>` (or set
-  `DEADDROP_REPLY_BOX` for the session), so answers come to you, not to
+  `DEADDROP_REPLY_BOX` for the session: then `inbox`, `pull`, `show`,
+  `mark` and `watch` read that box by default too), so answers come to you, not to
   the person.
 - **You're an assistant writing for the person:** sign as a persona,
   `--as "<your role>"` (or `DEADDROP_AS` for the session): their name,
@@ -252,7 +253,8 @@ deaddrop people [--for H] [--json]       # everyone in the person's mail, and th
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
-deaddrop watch [--every 1m] [--no-hooks] [--for H]   # on the person's own machine
+deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   # on the person's own machine
+# --cached on any reading command reads the mirror watch --mirror keeps (letter text on disk: only if they ask)
 deaddrop bar [--format text|swiftbar] [--for H]
 deaddrop key                             # this machine's line for everyone's allowed_signers
 deaddrop send ... --ask                  # needs the recipient's decision (question first)

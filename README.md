@@ -80,7 +80,7 @@ answered with a status: `--untag proposal --tag status`).
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
 | `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
 | `--ask` | the letter needs its recipient's decision. Its first paragraph is the question. `deaddrop asks` lists the ones you haven't answered |
-| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session |
+| `--reply-box BOX` | answers go to that box, not yours: an assistant with its own box (`alice-helper`). Sealed; `reply` honours it only when the letter verifies. `$DEADDROP_REPLY_BOX` sets it for a session, and that session then reads there by default too (`inbox`, `pull`, `show`, `file`, `mark`, `watch`, the threads); `$DEADDROP_BOX` sets only the reading box. `sent` stays yours, and naming a box always wins |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -233,6 +233,7 @@ deaddrop inbox --for planner          # the planner's queue (DEADDROP_FOR=planne
 deaddrop inbox --for '*'              # every pigeonhole in the box, for whoever's minding it
 deaddrop mark read ID                 # by id, wherever it is; by --tag, in the --for pigeonhole
 deaddrop watch --for planner          # its own inbox file, its own hooks (DEADDROP_MSG_FOR)
+deaddrop watch --box bob-review       # a side box you read: inbox@bob-review.json (DEADDROP_MSG_BOX)
 ```
 
 - **A helper exists once something's addressed to it**, like a box: no
@@ -336,11 +337,30 @@ go over ssh's stdin; nothing is written on the
 calling machine except what `pull` prints, the ssh connection's socket in
 `~/.ssh` (while it's open), the reader's ledger of seals it
 has seen (hashes and ids, so a signed letter copied under a new id reads as
-delivered again), and, if you run `deaddrop watch`, the inbox file. Never a
-letter's text. Everyone may log in to the
+delivered again), a cache of signature checks that passed (so reading
+doesn't run ssh-keygen once per letter every time; only where the list of
+signers is your own private file, your state folder is inside your home
+both as given and with links resolved, nothing on the way is writable by
+others, the cache file is a plain file of yours, and never under a pinned
+list; checked once each run, and the cache is read and written only in
+the folder that passed), and, if you run `deaddrop watch`, the inbox file. Never a
+letter's text, unless you ask for the mirror (below). Everyone may log in to the
 store's machine as the same user, so the login name there says nothing:
 the caller's own name always goes across, and remote mode refuses to run
 without one. `examples/config.toml` has every setting.
+
+**The mirror, for panels that read often.** `--cached` on any reading
+command (`inbox`, `pull`, `show`, `sent`, `thread`, `threads`, `with`,
+`asks`, `people`; or `DEADDROP_CACHED=1`) keeps the store's answer on your
+machine and reads it from there next time, with no ssh. A kept answer is
+used for up to 10 minutes, and not at all once you've changed anything on
+the store from this machine (a mark, a send, a reply). `deaddrop watch
+--mirror` asks the store again on every pass for everything read `--cached`
+in the last day, so a panel reading `--cached` is never more than a pass
+behind. Signatures are still checked on every read, here, against your own
+list, and the seal ledger still applies. This does put letter text on your
+disk (`mirror/` beside the inbox file, readable only by you), so it's off
+unless you ask for it.
 
 **Through another machine.** If you can only reach the store's machine
 through a second one, point your `host` at the second one, and put
@@ -421,7 +441,10 @@ at once.
 **Hooks** are the executables in `~/.config/deaddrop/new.d/` (beside the
 config). `watch` runs each once per newly arrived message, with
 `DEADDROP_MSG_ID`, `_SENDER`, `_SUBJECT`, `_TAGS`, `_URGENCY`, `_SENT`,
-`_BOX` and `_ATTACHMENTS` set, and the message's entry as JSON on stdin:
+`_BOX`, `_ATTACHMENTS`, `_SIGNATURE`, `_SIGNED_BY`, `_PERSONA`, `_FOR` (the
+helper, with `watch --for`) and `_SIDE_BOX` (the box, with `watch --box` on
+a box not your own) set (a hook that runs deaddrop on the letter passes
+`--box "$DEADDROP_MSG_BOX"`), and the message's entry as JSON on stdin:
 never the text. What's been announced is remembered, so a restart doesn't
 announce everything again, and the very first `watch` announces nothing.
 [`examples/new.d/notify`](examples/new.d/notify) is a desktop notification:
@@ -469,6 +492,18 @@ reports one lookout per box to the Firetower on the store's machine,
 | empty | clear, "No mail." |
 | unread | smoke, "3 unread" |
 | urgent unread | fire, "1 urgent, 3 unread" |
+
+With `--smoke-after 30m --fire-after 3h`, a box goes by its **unheard**
+mail instead: letters that arrived after anyone last read the box (a
+`pull`, a `show`, a `mark`; the store keeps just the time, in `.heard`). It's
+clear until the oldest unheard letter has waited 30 minutes, smoke after
+that, fire after 3 hours ("3 unread, 1 unheard, the oldest 45m"). So a reader
+who pulls and hasn't marked yet stays clear, and a box nobody reads goes to
+fire on its own. Urgent mail is fire either way. `inbox`, `watch` and
+`watch --mirror`'s copies don't count as reading. Either flag alone works:
+`--smoke-after` alone keeps fresh unheard mail clear and never goes to fire
+for age; `--fire-after` alone is smoke as soon as anything's unheard, fire
+once it's waited that long. Every lookout is tagged `mail`.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -538,9 +573,9 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]
-deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
+deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]
 deaddrop gc [--days 30]
-deaddrop watch [--every 1m] [--no-hooks] [--for H]
+deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]

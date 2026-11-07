@@ -77,20 +77,30 @@ func stateDir() string {
 // watchFor is the helper a watch, or a bar, is for: "" is the person.
 var watchFor string
 
-func inboxPath() string {
-	if watchFor != "" {
-		return filepath.Join(stateDir(), "inbox-"+watchFor+".json")
+// watchBox is the box a watch, or a bar, keeps when it isn't the caller's
+// own (--box): "" is the caller's.
+var watchBox string
+
+// stateFile names a watch's file: inbox.json, inbox-<helper>.json for a
+// helper's pigeonhole, inbox@<box>.json for another box, and
+// inbox@<box>@<helper>.json for a pigeonhole there. "@" is never in a name,
+// so the two can't be confused.
+func stateFile(base string) string {
+	name := base
+	switch {
+	case watchBox != "" && watchFor != "":
+		name += "@" + watchBox + "@" + watchFor
+	case watchBox != "":
+		name += "@" + watchBox
+	case watchFor != "":
+		name += "-" + watchFor
 	}
-	return filepath.Join(stateDir(), "inbox.json")
+	return filepath.Join(stateDir(), name+".json")
 }
 
-func announcedPath() string {
-	if watchFor != "" {
-		return filepath.Join(stateDir(), "announced-"+watchFor+".json")
-	}
-	return filepath.Join(stateDir(), "announced.json")
-}
-func hooksDir() string { return filepath.Join(filepath.Dir(configPath()), "new.d") }
+func inboxPath() string     { return stateFile("inbox") }
+func announcedPath() string { return stateFile("announced") }
+func hooksDir() string      { return filepath.Join(filepath.Dir(configPath()), "new.d") }
 
 // self runs this deaddrop with args and returns what it printed. It goes
 // through the usual dispatch, so it reaches the store over ssh when the
@@ -168,9 +178,12 @@ type passResult struct {
 // reached, the inbox file keeps its last list and says ok: false.
 func watchPass(hooks bool) (passResult, error) {
 	var r passResult
-	box, err := whoAmI()
-	if err != nil {
-		return r, err
+	box := watchBox
+	if box == "" {
+		var err error
+		if box, err = whoAmI(); err != nil {
+			return r, err
+		}
 	}
 	unlock, err := lockState()
 	if err != nil {
@@ -185,7 +198,9 @@ func watchPass(hooks bool) (passResult, error) {
 
 	at := now().UTC()
 	prev := readInbox()
-	fetch := []string{"inbox", "--read", "--json"}
+	// The box is always named: the caller's own included, so a session's
+	// default box (DEADDROP_BOX) never fills the person's own file.
+	fetch := []string{"inbox", box, "--read", "--json"}
 	if watchFor != "" {
 		fetch = append(fetch, "--for", watchFor)
 	}
@@ -339,6 +354,7 @@ func runHooks(box string, e InboxEntry) {
 			"DEADDROP_MSG_SIGNED_BY="+e.SignedBy,
 			"DEADDROP_MSG_PERSONA="+e.Persona,
 			"DEADDROP_MSG_FOR="+watchFor,
+			"DEADDROP_MSG_SIDE_BOX="+watchBox, // set when the watch is on a box not the caller's (--box)
 		)
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: hook %s, for %s: %v\n", name, e.ID, err)
@@ -347,7 +363,8 @@ func runHooks(box string, e InboxEntry) {
 	}
 }
 
-// setWatchFor takes a watch's or a bar's --for: one helper, never "*".
+// setWatchFor takes a watch's or a bar's --for: one helper, never "*"; and
+// its --box, one box, where the command takes one.
 func setWatchFor(f flags) error {
 	helper, all, err := pigeonholeOf(f)
 	if err != nil {
@@ -357,6 +374,18 @@ func setWatchFor(f flags) error {
 		return fmt.Errorf("--for: one helper (a watch keeps one pigeonhole's file)")
 	}
 	watchFor = helper
+	if f.has("box") || defaultBox() != "" {
+		if len(f.all("box")) > 1 {
+			return fmt.Errorf("--box: one box (a watch keeps one box's file; run one watch per box)")
+		}
+		b, err := resolveBox("--box", f.get("box"))
+		if err != nil {
+			return err
+		}
+		if me, err := whoAmI(); err != nil || me != b {
+			watchBox = b // the caller's own box keeps its usual file
+		}
+	}
 	return nil
 }
 
@@ -364,8 +393,8 @@ func setWatchFor(f flags) error {
 const minEvery = 10 * time.Second
 
 func cmdWatch(args []string) error {
-	const u = "watch [--every 1m] [--no-hooks] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "for": true})
+	const u = "watch [--every 1m] [--no-hooks] [--box WHO] [--for HELPER] [--mirror]"
+	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "box": true, "for": true, "mirror": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -376,7 +405,18 @@ func cmdWatch(args []string) error {
 		return badf(u, "watch takes no words of its own")
 	}
 	hooks := !f.has("no-hooks")
+	// A watch looks at the store itself: --cached is for the readers of what
+	// it keeps, never for its own look.
+	os.Unsetenv("DEADDROP_CACHED")
+	mirror := func() {
+		if f.has("mirror") {
+			if _, err := refreshMirror(); err != nil {
+				fmt.Fprintf(os.Stderr, "deaddrop: the mirror: %v\n", err)
+			}
+		}
+	}
 	if !f.has("every") {
+		mirror()
 		r, err := watchPass(hooks)
 		cleanOpened()
 		if err != nil {
@@ -397,6 +437,7 @@ func cmdWatch(args []string) error {
 	// reachability changes.
 	lastErr := ""
 	for {
+		mirror()
 		r, err := watchPass(hooks)
 		cleanOpened()
 		switch {
@@ -437,7 +478,7 @@ func say(r passResult) {
 
 func cmdShow(args []string) error {
 	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false})
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true, "fingerprint": false, "unheard": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -474,6 +515,9 @@ func cmdShow(args []string) error {
 			return err
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
+		if !f.has("unheard") {
+			hear(dir, m.Box, m.Pigeonhole)
+		}
 	}
 	switch {
 	case f.has("json"):
@@ -502,7 +546,12 @@ func showFingerprint(f flags) error {
 		return err
 	}
 	if viaHost != "" {
-		return runRemote(viaHost, "show", []string{f.pos[0], "--fingerprint"})
+		out, err := mirroredBytes(viaHost, "show", []string{f.pos[0], "--fingerprint"})
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(out)
+		return err
 	}
 	dir, err := storeDir()
 	if err != nil {
@@ -533,13 +582,18 @@ func cleanOpened() {
 }
 
 func cmdOpen(args []string) error {
-	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO | open --threads  [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "threads": false, "for": true})
+	const u = "open ID [--keep-unread] | open --thread ID | open --with WHO | open --threads  [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"keep-unread": false, "thread": true, "with": true, "threads": false, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if err := setWatchFor(f); err != nil {
 		return bad(u, err) // one pigeonhole, never '*': open marks what it shows
+	}
+	if watchBox != "" {
+		// What it shows and marks is in that box: the commands it runs read
+		// there by default (defaultBox).
+		os.Setenv("DEADDROP_BOX", watchBox)
 	}
 	var page []byte
 	var name, id string
@@ -597,6 +651,9 @@ func cmdOpen(args []string) error {
 	if err := os.MkdirAll(openedDir(), 0o700); err != nil {
 		return err
 	}
+	if watchBox != "" {
+		name = watchBox + "-" + name // two boxes' pages never share a name
+	}
 	path := filepath.Join(openedDir(), name+".html")
 	if err := writeAtomic(path, page, 0o600); err != nil {
 		return err
@@ -624,8 +681,8 @@ func cmdOpen(args []string) error {
 // ---- bar: the inbox file as a menu ----
 
 func cmdBar(args []string) error {
-	const u = "bar [--format text|swiftbar] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"format": true, "for": true})
+	const u = "bar [--format text|swiftbar] [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"format": true, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -650,10 +707,14 @@ func cmdBar(args []string) error {
 
 // watchArgs is the --for a helper's bar passes on to what it runs.
 func watchArgs() []string {
-	if watchFor != "" {
-		return []string{"--for", watchFor}
+	var a []string
+	if watchBox != "" {
+		a = append(a, "--box", watchBox)
 	}
-	return nil
+	if watchFor != "" {
+		a = append(a, "--for", watchFor)
+	}
+	return a
 }
 
 // staleAfter is how old a check can be before the bar says so.
@@ -662,7 +723,10 @@ const staleAfter = 10 * time.Minute
 func barText(in *InboxFile) string {
 	if in == nil {
 		if watchFor != "" {
-			return "Not watching " + watchFor + "'s pigeonhole yet (deaddrop watch --for " + watchFor + ")."
+			return "Not watching " + watchFor + "'s pigeonhole yet (deaddrop watch " + strings.Join(watchArgs(), " ") + ")."
+		}
+		if watchBox != "" {
+			return "Not watching " + watchBox + " yet (deaddrop watch --box " + watchBox + ")."
 		}
 		return "Not watching yet (deaddrop watch)."
 	}
@@ -678,6 +742,9 @@ func barText(in *InboxFile) string {
 	}
 	if in.For != "" {
 		s = "for " + in.For + ": " + s
+	}
+	if watchBox != "" {
+		s = in.Box + ": " + s
 	}
 	if !in.OK {
 		s += " (can't reach the store)"
@@ -710,7 +777,7 @@ func swiftbar(in *InboxFile, bin string) string {
 	switch {
 	case in == nil:
 		b.WriteString(" | sfimage=envelope\n---\n")
-		b.WriteString("Not watching yet" + plain + "\n")
+		b.WriteString(menuText(barText(nil), 120) + plain + "\n")
 		act("", "Check now", append([]string{"watch"}, watchArgs()...)...)
 		return b.String()
 	case in.Urgent > 0:
@@ -765,11 +832,11 @@ func swiftbar(in *InboxFile, bin string) string {
 		act("--", "Read", append([]string{"open", e.ID}, watchArgs()...)...)
 		act("--", "Thread", append([]string{"open", "--thread", e.ID}, watchArgs()...)...)
 		if e.State == "unread" {
-			act("--", "Mark read", "mark", "read", e.ID)
+			act("--", "Mark read", append([]string{"mark", "read", e.ID}, watchArgs()...)...)
 		} else {
-			act("--", "Mark unread", "mark", "unread", e.ID)
+			act("--", "Mark unread", append([]string{"mark", "unread", e.ID}, watchArgs()...)...)
 		}
-		act("--", "Archive", "mark", "archive", e.ID)
+		act("--", "Archive", append([]string{"mark", "archive", e.ID}, watchArgs()...)...)
 	}
 	if len(in.Messages) == 0 {
 		b.WriteString("No mail" + plain + "\n")
@@ -785,7 +852,7 @@ func swiftbar(in *InboxFile, bin string) string {
 		b.WriteString("---\nConversations" + plain + "\n")
 		sort.Strings(people)
 		for _, p := range people {
-			act("--", "With "+menuText(p, 32), "open", "--with", p)
+			act("--", "With "+menuText(p, 32), append([]string{"open", "--with", p}, watchArgs()...)...)
 		}
 	}
 	b.WriteString("---\n")

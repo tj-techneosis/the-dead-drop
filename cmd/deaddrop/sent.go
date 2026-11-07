@@ -213,6 +213,9 @@ func cmdSent(args []string) error {
 		return badf(u, "sent takes no words of its own (%q)", f.pos[0])
 	}
 	who, err := resolveBox("--box", f.get("box"))
+	if !f.has("box") {
+		who, err = whoAmI() // what you sent is the person's, whatever box they read
+	}
 	if err != nil {
 		return err
 	}
@@ -234,7 +237,7 @@ func cmdSent(args []string) error {
 
 	var ss []*SentMessage
 	if viaHost != "" {
-		out, err := remoteBytes(viaHost, "sent", append(append([]string{}, args...), "--json", "--raw"))
+		out, err := mirroredBytes(viaHost, "sent", append(append([]string{}, args...), "--json", "--raw"))
 		if err != nil {
 			return err
 		}

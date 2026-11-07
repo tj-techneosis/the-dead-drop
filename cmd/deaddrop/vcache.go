@@ -1,0 +1,303 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+)
+
+// The verification cache: ssh-keygen once per letter, every time, is most of
+// what reading costs (seconds, for a few hundred letters). A check that
+// passed is kept under a hash of everything its answer depends on: the list
+// of signers (path and bytes), the ssh-keygen that checked it, the signer
+// named, the seal and the exact text signed. Only passes are kept, never
+// failures, so a passing check can't be talked out of, nor a failure into.
+//
+// A kept "verified" is only as trustworthy as whoever can write the cache.
+// So it's used only where that's already the person who controls the list:
+// the list is their own file, the state folder is theirs and private, and
+// neither is writable by anyone else; the state folder, resolved (no "..",
+// no links), is inside home, and every folder from it up to home, home
+// included, is the person's (or root's) and writable by nobody else; and the
+// cache file is a plain file of theirs, never a link. Under a pinned list (a shared login,
+// where the login can write the state folder but not the list) there is no
+// cache. Nor when the list has keys that expire (valid-before, valid-after)
+// or a certificate authority, whose answers change with the clock.
+
+type verifyCache struct {
+	Checks map[string]bool     `json:"checks"` // list, signer, seal, text -> it verified
+	Owners map[string][]string `json:"owners"` // list, seal -> whose key it is
+	dirty  bool
+}
+
+var vcache *verifyCache
+
+// vcacheDir is the checked, resolved state folder (vcacheAllowed): the
+// cache is read and written there and nowhere else. "" until checked.
+var vcacheDir string
+
+func vcachePath() string { return filepath.Join(vcacheDir, "verified.json") }
+
+// signersHash is the list's identity: its path and every byte of it.
+var signersHashMemo = map[string]string{}
+
+func signersHash(path string) string {
+	if h, ok := signersHashMemo[path]; ok {
+		return h
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(append([]byte(path+"\x00"), b...))
+	h := hex.EncodeToString(sum[:])
+	signersHashMemo[path] = h
+	return h
+}
+
+// vcacheOK says the cache may be used with this list (see above).
+var vcacheOKMemo = map[string]bool{}
+
+var vcacheDirMemo = map[string]string{}
+
+func vcacheOK(signers string) bool {
+	if ok, seen := vcacheOKMemo[signers]; seen {
+		vcacheDir = vcacheDirMemo[signers] // the folder that passed, with its verdict
+		return ok
+	}
+	ok := vcacheAllowed(signers)
+	vcacheOKMemo[signers], vcacheDirMemo[signers] = ok, vcacheDir
+	return ok
+}
+
+func vcacheAllowed(signers string) bool {
+	vcacheDir = ""
+	if os.Getenv("DEADDROP_NO_VCACHE") != "" || pinnedSigners() {
+		return false
+	}
+	mine := func(path string) bool {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		return ok && int(st.Uid) == os.Getuid()
+	}
+	// A folder others can't write: the person's or root's, not group- or
+	// world-writable. Lstat: a link is judged by the folder it sits in.
+	sound := func(d string) bool {
+		info, err := os.Lstat(d)
+		if err != nil || info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSymlink == 0 {
+			return false
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		return ok && (int(st.Uid) == os.Getuid() || st.Uid == 0)
+	}
+	// Every folder from below path up to home, home included.
+	chain := func(path, home string) bool {
+		for d := filepath.Dir(path); ; d = filepath.Dir(d) {
+			if !strings.HasPrefix(d+string(filepath.Separator), home+string(filepath.Separator)) || !sound(d) {
+				return false
+			}
+			if d == home {
+				return true
+			}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	home = filepath.Clean(home)
+	// The state folder as given, cleaned, must be under home literally, with
+	// every folder on the way (any link included) sound; and again as it
+	// really is (links and ".." resolved). Then the cache is read and written
+	// only through that resolved folder, so nothing can be swapped between
+	// this check and its use. Nothing outside home is ever created.
+	literal := filepath.Clean(stateDir())
+	if home == "." || !filepath.IsAbs(literal) || !strings.HasPrefix(literal, home+string(filepath.Separator)) {
+		return false
+	}
+	realHome, err1 := filepath.EvalSymlinks(home)
+	// Before making anything: the nearest folder of it that's already there,
+	// resolved, must be inside home too, so a link on the way can't lead the
+	// creation out of home.
+	existing := literal
+	for {
+		if _, err := os.Stat(existing); err == nil {
+			break
+		}
+		existing = filepath.Dir(existing)
+	}
+	if r, err := filepath.EvalSymlinks(existing); err1 != nil || err != nil || (r != realHome && !strings.HasPrefix(r, realHome+string(filepath.Separator))) {
+		return false
+	}
+	if os.MkdirAll(literal, 0o700) != nil || !chain(literal, home) {
+		return false
+	}
+	state, err2 := filepath.EvalSymlinks(literal)
+	if err1 != nil || err2 != nil || !strings.HasPrefix(state, realHome+string(filepath.Separator)) || !chain(state, realHome) {
+		return false
+	}
+	if !mine(signers) || !mine(filepath.Dir(signers)) || !mine(state) {
+		return false
+	}
+	cache := filepath.Join(state, "verified.json")
+	if info, err := os.Lstat(cache); err == nil && (!info.Mode().IsRegular() || !mine(cache)) {
+		return false // a link, or someone else's file
+	}
+	b, err := os.ReadFile(signers)
+	if err != nil {
+		return false
+	}
+	low := strings.ToLower(string(b))
+	if strings.Contains(low, "valid-before") || strings.Contains(low, "valid-after") || strings.Contains(low, "cert-authority") {
+		return false
+	}
+	vcacheDir = state
+	return true
+}
+
+// keygenID is the ssh-keygen that checks: its path and its file's size and
+// time, so a different one is a different key.
+var keygenIDMemo string
+
+func keygenID() string {
+	if keygenIDMemo == "" {
+		p := sshKeygen()
+		if lp, err := exec.LookPath(p); err == nil {
+			p = lp
+		}
+		keygenIDMemo = p
+		if info, err := os.Stat(p); err == nil {
+			keygenIDMemo = fmt.Sprintf("%s\x00%d\x00%d", p, info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	return keygenIDMemo
+}
+
+func loadVCache() *verifyCache {
+	if vcache == nil {
+		vcache = &verifyCache{Checks: map[string]bool{}, Owners: map[string][]string{}}
+		if os.Getenv("DEADDROP_NO_VCACHE") == "" && vcacheDir != "" {
+			if b, err := os.ReadFile(vcachePath()); err == nil {
+				json.Unmarshal(b, vcache)
+			}
+		}
+		if vcache.Checks == nil {
+			vcache.Checks = map[string]bool{}
+		}
+		if vcache.Owners == nil {
+			vcache.Owners = map[string][]string{}
+		}
+	}
+	return vcache
+}
+
+func vkey(parts ...string) string {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// cachedCheck runs check unless the same list, signer, seal and text were
+// checked before.
+func cachedCheck(signers, signer, sig string, payload []byte, check func() bool) bool {
+	sh := signersHash(signers)
+	if sh == "" || !vcacheOK(signers) {
+		return check()
+	}
+	c := loadVCache()
+	k := vkey(sh, keygenID(), signer, sig, string(payload))
+	if c.Checks[k] {
+		return true
+	}
+	ok := check()
+	if ok {
+		c.Checks[k], c.dirty = true, true
+	}
+	return ok
+}
+
+// cachedOwners is find-principals, cached the same way.
+func cachedOwners(signers, sig string, find func() []string) []string {
+	sh := signersHash(signers)
+	if sh == "" || !vcacheOK(signers) {
+		return find()
+	}
+	c := loadVCache()
+	k := vkey(sh, keygenID(), sig)
+	if o := c.Owners[k]; len(o) > 0 {
+		return o
+	}
+	o := find()
+	if len(o) > 0 {
+		c.Owners[k], c.dirty = o, true
+	}
+	return o
+}
+
+// saveVCache writes what this run learned, merged with what's on disk.
+func saveVCache() {
+	if vcache == nil || !vcache.dirty || os.Getenv("DEADDROP_NO_VCACHE") != "" {
+		return
+	}
+	// Only into the folder that was checked, and only if the state folder
+	// still resolves to it.
+	if vcacheDir == "" {
+		return
+	}
+	if now, err := filepath.EvalSymlinks(filepath.Clean(stateDir())); err != nil || now != vcacheDir {
+		return
+	}
+	lock, err := os.OpenFile(filepath.Join(vcacheDir, ".verified.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return
+	}
+	defer lock.Close()
+	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX) != nil {
+		return
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	var onDisk verifyCache
+	if b, err := os.ReadFile(vcachePath()); err == nil {
+		json.Unmarshal(b, &onDisk)
+	}
+	// Only passes are ever kept, so merging is a union.
+	for k, v := range onDisk.Checks {
+		if v {
+			vcache.Checks[k] = true
+		}
+	}
+	for k, v := range onDisk.Owners {
+		if _, mine := vcache.Owners[k]; !mine && len(v) > 0 {
+			vcache.Owners[k] = v
+		}
+	}
+	// Bounded: a cache that only grows would be the slow part one day.
+	// Past the bound, half goes (Go's map order is random), so a big reader
+	// keeps a warm cache rather than starting from nothing.
+	for len(vcache.Checks)+len(vcache.Owners) > 20000 {
+		n := 0
+		for k := range vcache.Checks {
+			if n%2 == 0 {
+				delete(vcache.Checks, k)
+			}
+			n++
+		}
+		for k := range vcache.Owners {
+			if n%2 == 0 {
+				delete(vcache.Owners, k)
+			}
+			n++
+		}
+	}
+	writeJSONFile(vcachePath(), vcache)
+	vcache.dirty = false
+}

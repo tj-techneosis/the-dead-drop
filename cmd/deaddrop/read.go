@@ -18,7 +18,7 @@ import (
 // fetchRemote runs a reading command on the store's machine, --raw, and
 // returns its messages.
 func fetchRemote(cmd string, args []string) ([]*Message, error) {
-	out, err := remoteBytes(viaHost, cmd, append(append([]string{}, args...), "--json", "--raw"))
+	out, err := mirroredBytes(viaHost, cmd, append(append([]string{}, args...), "--json", "--raw"))
 	if err != nil {
 		return nil, err
 	}

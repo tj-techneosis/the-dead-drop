@@ -390,3 +390,33 @@ class Signed(DeadDrop):
         self.assertEqual(p.returncode, 0)
         self.dd("send", "--to", "bob", "--follow-up", at(-24 * 60), input="# Long ago\n\nx\n", DEADDROP_FROM="alice", ok=False)
 
+
+    def test_checks_are_cached_and_a_changed_letter_is_checked_again(self):
+        state = self.tmp / "home" / ".local" / "state" / "deaddrop"  # under home: the cache is only kept there
+        self.send("# Hi\n\nx\n", "--to", "bob", **self.as_("alice"))
+        env = dict(DEADDROP_FROM="bob", DEADDROP_STATE=str(state))
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")
+        self.assertTrue((state / "verified.json").exists())
+        kept = json.loads((state / "verified.json").read_text())
+        self.assertEqual(len(kept["checks"]), 1)
+        self.assertTrue(all(kept["checks"].values()))  # only passes are kept
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")
+        # A different ssh-keygen is a different check: never the cached one.
+        broken = self.tmp / "no-keygen"
+        broken.write_text("#!/bin/sh\nexit 1\n")
+        broken.chmod(0o755)
+        self.assertNotEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), **env)[0]["signature"], "verified")
+        # A forged "verified" in a cache the list's owner doesn't control: a
+        # list others can write turns the cache off.
+        os.chmod(self.signers, 0o666)
+        kept["checks"] = {k: True for k in kept["checks"]}
+        self.assertEqual(self.inbox(**env)[0]["signature"], "verified")  # checked, not cached
+        os.chmod(self.signers, 0o644)
+        # A changed letter isn't the cached one.
+        path = self.path()
+        path.write_text(path.read_text().replace("x\n", "y\n"))
+        self.assertEqual(self.inbox(**env)[0]["signature"], "bad")
+        # Nor is a changed list of signers.
+        signers(self.signers, "bob")  # alice's key gone
+        path.write_text(path.read_text().replace("y\n", "x\n"))
+        self.assertNotEqual(self.inbox(**env)[0]["signature"], "verified")

@@ -147,6 +147,25 @@ func explicitMe() (string, error) {
 
 // whoAmI is the caller: explicitMe, else the login name (unless the login
 // is shared).
+// defaultBox is the box reading commands use when none is named, if it
+// isn't the caller's own: $DEADDROP_BOX, else $DEADDROP_REPLY_BOX (a session
+// that asks for its answers at a box of its own reads there too). Only on
+// the caller's machine: over ssh, the box goes across as a flag.
+func defaultBox() string {
+	if hops() > 0 {
+		return ""
+	}
+	for _, v := range []string{"DEADDROP_BOX", "DEADDROP_REPLY_BOX"} {
+		if b := strings.ToLower(strings.TrimSpace(os.Getenv(v))); b != "" {
+			if checkBox(v, b) != nil || b == automation {
+				return ""
+			}
+			return b
+		}
+	}
+	return ""
+}
+
 func whoAmI() (string, error) {
 	me, err := explicitMe()
 	if err != nil || me != "" {
@@ -171,6 +190,11 @@ func whoAmI() (string, error) {
 
 // resolveBox turns "me" (or nothing) into the caller, and checks the rest.
 func resolveBox(what, who string) (string, error) {
+	if who == "" {
+		if b := defaultBox(); b != "" {
+			return b, nil
+		}
+	}
 	if who == "" || who == "me" {
 		return whoAmI()
 	}

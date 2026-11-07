@@ -264,8 +264,8 @@ func cmdSend(args []string) error {
 }
 
 func cmdReply(args []string) error {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
+	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -280,13 +280,21 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	orig, err := findAnywhere(dir, me, f.pos[0], true)
+	// The letter is in your box, or the one --box names (a session's own,
+	// by default): the answer still comes from you.
+	in := me
+	if f.has("box") {
+		if in, err = resolveBox("--box", f.get("box")); err != nil {
+			return bad(u, err)
+		}
+	}
+	orig, err := findAnywhere(dir, in, f.pos[0], true)
 	if err != nil {
 		return err
 	}
 	verify(orig) // a reply follows only a persona that's really theirs
-	if orig.From == automation {
-		return fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
+	if err := replyable(orig); err != nil {
+		return err
 	}
 	kept, err := replyTags(orig.Tags, f.all("untag"))
 	if err != nil {
@@ -337,6 +345,15 @@ var warnedReplyBox bool
 // replyTo is the box a reply goes to: the letter's reply box, when it has
 // one and verifies (anyone could write one onto an unsigned letter), else its
 // sender's.
+// replyable refuses an answer with nowhere to go: automation has no box,
+// unless a verified letter names a reply box for its answers.
+func replyable(orig *Message) error {
+	if orig.From == automation && (orig.ReplyBox == "" || orig.Signature != sigVerified) {
+		return fmt.Errorf("%s came from automation, which has no box to reply to (unless a verified letter names a reply box)", orig.ID)
+	}
+	return nil
+}
+
 func replyTo(orig *Message) string {
 	if orig.ReplyBox == "" {
 		return orig.From
@@ -790,6 +807,15 @@ func (fl filter) describe() string {
 }
 
 // boxArg is a command's [WHO]: the caller's box unless named.
+// boxAcross names the box for the store when the caller didn't and it isn't
+// theirs (the default box), so the store doesn't read the caller's own.
+func boxAcross(f flags, box string, args []string) []string {
+	if len(f.pos) > 0 || defaultBox() != box {
+		return args
+	}
+	return append([]string{box}, args...)
+}
+
 func boxArg(u string, pos []string) (string, error) {
 	if len(pos) > 1 {
 		return "", badf(u, "one box at a time (got %s)", strings.Join(pos, " "))
@@ -826,9 +852,19 @@ func cmdInbox(args []string) error {
 	case f.has("read"):
 		states = []string{"unread", "read"}
 	}
+	// Someone else's box that isn't there is a typo, not an empty inbox
+	// (a watch on it would otherwise sit at "no mail" for good). Your own
+	// is just empty until mail comes.
+	if viaHost == "" {
+		if me, _ := whoAmI(); box != me {
+			if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+				return fmt.Errorf("there's no box %s", box)
+			}
+		}
+	}
 	var ms []*Message
 	if viaHost != "" {
-		if ms, err = fetchRemote("inbox", args); err != nil {
+		if ms, err = fetchRemote("inbox", boxAcross(f, box, args)); err != nil {
 			return err
 		}
 		prepare(ms, false, "")
@@ -903,7 +939,7 @@ func cmdInbox(args []string) error {
 
 func cmdPull(args []string) error {
 	const u = "pull [WHO] [--tag T]... [--from WHO]... [--since 7d|DATE] [--unread|--all] [--for HELPER|'*'] [--json]"
-	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true})
+	f, err := parseFlags(args, map[string]bool{"tag": true, "from": true, "since": true, "unread": false, "all": false, "json": false, "raw": false, "for": true, "unheard": false, "heard-at": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -930,7 +966,7 @@ func cmdPull(args []string) error {
 	}
 	var ms []*Message
 	if viaHost != "" {
-		if ms, err = fetchRemote("pull", args); err != nil {
+		if ms, err = fetchRemote("pull", boxAcross(f, box, args)); err != nil {
 			return err
 		}
 		prepare(ms, false, "")
@@ -942,6 +978,28 @@ func cmdPull(args []string) error {
 		ms = fl.apply(loadFor(dir, box, helper, all, states, true))
 		sortForPull(ms)
 		prepare(ms, f.has("raw"), dir)
+		// Read: what was waiting has been heard. --unheard for a reader
+		// that only keeps a copy (watch --mirror), not one who reads it.
+		// --heard-at: a mirror's refresh for a reader who was shown the
+		// box as of then (read from the mirror), not as of this fetch.
+		at := now()
+		if f.has("heard-at") {
+			t, err := time.Parse(time.RFC3339Nano, f.get("heard-at"))
+			if err != nil {
+				return badf(u, "--heard-at %s: a time (RFC 3339)", f.get("heard-at"))
+			}
+			at = t
+		}
+		if !f.has("unheard") {
+			if all {
+				hearAt(dir, box, "", at)
+				for _, h := range helpers(dir, box) {
+					hearAt(dir, box, h, at)
+				}
+			} else {
+				hearAt(dir, box, helper, at)
+			}
+		}
 	}
 	if f.has("json") {
 		return printJSON(ms)
@@ -1280,6 +1338,7 @@ func cmdMark(args []string) error {
 		if err := move(dir, m, target); err != nil {
 			return err
 		}
+		hear(dir, m.Box, m.Pigeonhole)
 		if was != target {
 			moved++
 			if was == "unread" {

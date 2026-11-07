@@ -369,9 +369,12 @@ func verifyState(m *Message) (string, string) {
 	}
 	for _, t := range tries {
 		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, t.followUp, m.Recipients, m.Subject, m.Tags, t.urgency, m.Thread, sumsOf(m), m.SignedAt, m.Body)
-		c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
-		c.Stdin = bytes.NewReader(payload)
-		if c.Run() == nil {
+		ok := cachedCheck(signers, m.SignedBy, m.Sig, payload, func() bool {
+			c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
+			c.Stdin = bytes.NewReader(payload)
+			return c.Run() == nil
+		})
+		if ok {
 			if t.followUp == "" && m.FollowUp != "" {
 				// Not in what was signed (a letter from before 0.6.4, or one
 				// written onto it since): not shown as the sender's.
@@ -401,9 +404,10 @@ func verifyState(m *Message) (string, string) {
 	}
 	// Whose key it is, by this machine's list: someone else's is a forgery;
 	// nobody's is a key this machine can't vouch for.
-	c := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", path)
-	out, _ := c.Output()
-	owners := strings.Fields(string(out))
+	owners := cachedOwners(signers, m.Sig, func() []string {
+		out, _ := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", path).Output()
+		return strings.Fields(string(out))
+	})
 	switch {
 	case len(owners) == 0 && listsPrincipal(signers, m.SignedBy):
 		return sigBad, fmt.Sprintf("it says %s signed it, but that isn't %s's key", m.SignedBy, m.SignedBy)
@@ -489,7 +493,36 @@ func withFor(cmd string, args []string) []string {
 			return args
 		}
 	}
-	return append(append([]string{}, args...), "--for", h)
+	return withFlag(args, "--for", h)
+}
+
+// boxFlagged are the commands that name a box with --box; withBox adds the
+// default box to them. inbox, ls and pull name theirs as a word, which they
+// add themselves when they go to the store.
+var boxFlagged = map[string]bool{"mark": true, "show": true, "file": true, "reply": true}
+
+// withBox adds the default box (defaultBox) to a command that doesn't name
+// one, on the caller's machine, so it reaches the store as a flag.
+func withBox(cmd string, args []string) []string {
+	b := defaultBox()
+	if b == "" || !boxFlagged[cmd] || hasFlag(args, "box") {
+		return args
+	}
+	return withFlag(args, "--box", b)
+}
+
+// withFlag adds a flag and its value before any "--", so it's never read
+// as one of the words after it.
+func withFlag(args []string, flag, value string) []string {
+	out := make([]string, 0, len(args)+2)
+	for i, a := range args {
+		if a == "--" {
+			out = append(out, flag, value)
+			return append(out, args[i:]...)
+		}
+		out = append(out, a)
+	}
+	return append(out, flag, value)
 }
 
 // hasFlag says args name --flag (before any --).
@@ -605,15 +638,19 @@ func signAs() (string, error) {
 // replyAsSend turns `reply ID` into the send the store would make of it, so
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
-	const u = "reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true})
+	const u = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
 	if len(f.pos) != 1 {
 		return "", nil, badf(u, "reply to one message: its id")
 	}
-	raw, err := self("show", f.pos[0], "--json")
+	show := []string{"show", f.pos[0], "--json"}
+	if f.has("box") {
+		show = append(show, "--box", f.get("box"))
+	}
+	raw, err := self(show...)
 	if err != nil {
 		return "", nil, err
 	}
@@ -621,8 +658,8 @@ func replyAsSend(args []string) (string, []string, error) {
 	if err := json.Unmarshal(raw, &orig); err != nil {
 		return "", nil, err
 	}
-	if orig.From == automation {
-		return "", nil, fmt.Errorf("%s came from automation, which has no box to reply to", orig.ID)
+	if err := replyable(&orig); err != nil {
+		return "", nil, err
 	}
 	subject := orig.Subject
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {

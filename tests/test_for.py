@@ -225,6 +225,23 @@ class PigeonholeReview(DeadDrop):
         env.setdefault("DEADDROP_FROM", who)
         return self.inbox(*args, **env)
 
+    def test_automation_with_a_verified_reply_box_can_be_answered(self):
+        # A job of alice's, signed, asking answers at a box of its own.
+        id = self.dd("send", "--to", "bob", "--from", "automation", "--reply-box", "alice-jobs",
+                     input="# Nightly\n\nAnything to add?\n", **self.signed("alice")).stdout.split()[1]
+        self.dd("reply", id, input="Yes.\n", **self.signed("bob"))
+        self.assertEqual([m["subject"] for m in self.box("alice-jobs")], ["Re: Nightly"])
+        # Unsigned, it's only a claim: no box to answer.
+        plain = self.dd("send", "--to", "bob", "--from", "automation", "--reply-box", "alice-jobs",
+                        input="# Claim\n\nx\n", DEADDROP_FROM="alice").stdout.split()[1]
+        p = self.dd("reply", plain, input="No.\n", DEADDROP_FROM="bob", ok=False)
+        self.assertIn("no box to reply to", p.stderr)
+
+    def test_reply_finds_the_letter_in_a_sessions_own_box(self):
+        id = self.dd("send", "--to", "bob-helper", input="# For the helper\n\nx\n", **self.signed("alice")).stdout.split()[1]
+        self.dd("reply", id, input="Got it.\n", DEADDROP_FROM="bob", DEADDROP_REPLY_BOX="bob-helper")
+        self.assertIn("Re: For the helper", [m["subject"] for m in self.box("alice")])
+
     def test_the_person_hears_about_helper_mail_and_typos(self):
         p = self.dd("send", "--to", "bob", "--for", "planer", input="# Typo\n\nx\n")
         self.assertIn("no planer pigeonhole yet", p.stderr)
@@ -281,7 +298,7 @@ class PigeonholeReview(DeadDrop):
         self.assertEqual(self.inbox(DEADDROP_FROM="bob")[0]["signature"], "bad")
         p = self.dd("reply", id, input="Again.\n", DEADDROP_FROM="bob")
         self.assertIn("isn't verified", p.stderr)
-        self.assertEqual(self.inbox("mallory", DEADDROP_FROM="carol"), [])
+        self.assertIn("no box mallory", self.dd("inbox", "mallory", "--json", DEADDROP_FROM="carol", ok=False).stderr)
         self.assertEqual([x["subject"] for x in self.inbox(DEADDROP_FROM="alice")], ["Re: A question"])
 
     def test_a_reply_box_set_once(self):
