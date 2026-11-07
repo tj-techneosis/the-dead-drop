@@ -265,3 +265,34 @@ func TestAPlantedVerdictIsNeverTrusted(t *testing.T) {
 		t.Fatal("a verdict in a cache others can write is checked again, never trusted")
 	}
 }
+
+func TestGateWordsReadOnlyWhatRemoteModeWrites(t *testing.T) {
+	ok := map[string][]string{
+		`d="$HOME/.local/bin/deaddrop"; [ -x "$d" ] || d=deaddrop; DEADDROP_HOPS=1 DEADDROP_FROM='bob' exec "$d" 'inbox' '--json'`: {"inbox", "--json"},
+		`d='/opt/dd'; DEADDROP_HOPS=2 DEADDROP_FROM='bob' exec "$d" 'send' '--subject' 'it'\''s here'`:                             {"send", "--subject", "it's here"},
+		`deaddrop pull --unread --json`: {"pull", "--unread", "--json"},
+	}
+	for line, want := range ok {
+		got, _, err := gateWords(line)
+		if err != nil || strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("%q: got %q, %v", line, got, err)
+		}
+	}
+	for _, line := range []string{
+		`scp -t /tmp`,
+		`internal-sftp`,
+		`/usr/lib/openssh/sftp-server`,
+		`deaddrop inbox; rm -rf ~`,
+		`deaddrop inbox $(id)`,
+		"deaddrop inbox `id`",
+		`deaddrop inbox | sh`,
+		`deaddrop 'inbox' && id`,
+		`d="$HOME/.local/bin/deaddrop"; [ -x "$d" ] || d=deaddrop; DEADDROP_HOPS=1 DEADDROP_FROM='bob' exec "$d" 'inbox'; id`,
+		`bash -c 'deaddrop inbox'`,
+		"",
+	} {
+		if w, _, err := gateWords(line); err == nil {
+			t.Fatalf("%q read as %q", line, w)
+		}
+	}
+}

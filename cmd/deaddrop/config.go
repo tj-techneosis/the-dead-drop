@@ -190,6 +190,17 @@ func whoAmI() (string, error) {
 
 // resolveBox turns "me" (or nothing) into the caller, and checks the rest.
 func resolveBox(what, who string) (string, error) {
+	b, err := resolveBoxName(what, who)
+	// Behind the gate, a box a command reads (named, or the caller's own by
+	// default) must be one the key may read. Where mail goes (--to) isn't
+	// reading.
+	if err == nil && gateRead != nil && what != "--to" && !gateReadable(b) {
+		return "", gateRefusal(b)
+	}
+	return b, err
+}
+
+func resolveBoxName(what, who string) (string, error) {
 	if who == "" {
 		if b := defaultBox(); b != "" {
 			return b, nil

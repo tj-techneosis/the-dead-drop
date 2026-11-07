@@ -279,6 +279,11 @@ func cmdSent(args []string) error {
 			s.Box = ""
 		}
 	}
+	if gateRead != nil {
+		// Behind the gate, only the boxes this key reads are looked in. (On
+		// stderr for --json, whose shape is a contract; said in the text.)
+		fmt.Fprintln(os.Stderr, "deaddrop: (only letters with a copy in a box this key reads)")
+	}
 	if f.has("json") {
 		if ss == nil {
 			ss = []*SentMessage{}

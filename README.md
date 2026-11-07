@@ -211,7 +211,7 @@ everything honestly when the account that keeps the store is also the one
 reading it (a front end running on the store's machine as the store's own
 login): that account can hide a letter, put an old one back, or edit what the
 reader remembers. Readers with logins of their own (on their own machines,
-or through `deaddrop gate`) are out of its reach.
+or through a gated key: see "A gated key" below) are out of its reach.
 
 ### Personas: assistants speaking for you
 
@@ -375,6 +375,55 @@ store there.
 
 Set it up in the usual order: upgrade the relay machine first, then add
 `relay = true` (an older `deaddrop` refuses a setting it doesn't know).
+
+### A gated key: one name, its own boxes, nothing else
+
+When everyone logs in to the store's machine as one user, each key there can
+do anything that user can, and say it's anyone. A **gated key** can only
+use the Dead Drop, as one name, reading only the boxes it's given. On the
+store's machine, one line per key in that login's `~/.ssh/authorized_keys`:
+
+```
+restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper" ssh-ed25519 AAAA… bob's laptop
+```
+
+Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
+special. The gate reads the command line remote mode sends (sshd hands it over
+as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
+
+- it's exactly the shape remote mode writes (single-quoted words), or a plain
+  `deaddrop <command> <words>` a person types, with nothing a shell would
+  read, so a shell, `scp`, `sftp` or a pipe gets nothing;
+- reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
+  mode always asks), so the store doesn't check signatures or keep a ledger
+  on the key's behalf; files come only as remote mode sends them
+  (`--bundle`), never `--attach` paths;
+- it's one of the store's commands (`send`, `reply`, `inbox`, `pull`, `show`,
+  `file`, `mark`, `status --box`, `sent`), not `gc`, `firetower` or a
+  follow-up job;
+- every box it reads, named or by default, is in `--read`, and to the key
+  the store holds no other box: `sent`, thread fingerprints and every hint
+  or warning say nothing about the rest; where mail goes (`--to`) is anyone;
+- it sends as `--as` (the gate sets who's asking, whatever the line says), and
+  signs as no one else;
+- nothing from the environment sshd built decides anything: no `DEADDROP_`
+  setting, no `XDG_` folder, a fixed `PATH`, and `HOME` from the account.
+  Where the store and its config are is the owner's to say in the line
+  itself (`--dir /srv/drop --config /srv/drop/config.toml`), or else their
+  usual place in the account's home. What goes wrong that the key holder
+  isn't told (a broken config) goes in `gate.log` at the store's top;
+- `file` and `reply` check signatures on the store, against the store's own
+  list (they record nothing outside the key's boxes).
+
+What that costs the key's holder, by design: `sent` lists only letters with
+a copy in a box the key reads, and a letter whose thread starts in a box it
+can't read shows no thread link.
+
+It runs only on the store's own machine (never one that passes commands on).
+Use the full path in `command=` (the gate refuses to run otherwise), and
+`restrict`, which turns off forwarding of every kind and a terminal. Signing
+still happens on Bob's machine with Bob's key: the gate only carries the
+letter to the store.
 
 ## Reading it without a terminal
 
@@ -591,6 +640,7 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
+deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
