@@ -18,10 +18,29 @@ import (
 // subject and no sender (and so the value is a hash of the id, which names its
 // sender). A box named in board_detail also gets what's waiting (whatsWaiting).
 func cmdFiretower(args []string) error {
-	const u = "firetower [--next 6m|TIME|none] [--box WHO]..."
-	f, err := parseFlags(args, map[string]bool{"next": true, "box": true})
+	const u = "firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]"
+	f, err := parseFlags(args, map[string]bool{"next": true, "box": true, "smoke-after": true, "fire-after": true})
 	if err != nil {
 		return bad(u, err)
+	}
+	// Optional ages: unread mail is clear until its oldest letter has waited
+	// --smoke-after, and fire once it has waited --fire-after. Without them,
+	// any unread is smoke, as before. Urgent mail is fire either way.
+	var smokeAfter, fireAfter time.Duration
+	for _, a := range []struct {
+		flag string
+		to   *time.Duration
+	}{{"smoke-after", &smokeAfter}, {"fire-after", &fireAfter}} {
+		if f.has(a.flag) {
+			d, ok := parseSpan(f.get(a.flag))
+			if !ok || d <= 0 {
+				return badf(u, "--%s %s: a span, like 30m or 3h", a.flag, f.get(a.flag))
+			}
+			*a.to = d
+		}
+	}
+	if smokeAfter > 0 && fireAfter > 0 && fireAfter <= smokeAfter {
+		return badf(u, "--fire-after must be longer than --smoke-after")
 	}
 	if len(f.pos) > 0 {
 		return badf(u, "firetower takes no words of its own")
@@ -66,6 +85,16 @@ func cmdFiretower(args []string) error {
 			}
 		case s.Unread > 0:
 			status, msg = "yellow", fmt.Sprintf("%d unread", s.Unread)
+			if smokeAfter > 0 || fireAfter > 0 {
+				waited := oldestWait(dir, box)
+				switch {
+				case fireAfter > 0 && waited >= fireAfter:
+					status = "red"
+				case smokeAfter > 0 && waited < smokeAfter:
+					status = "green"
+				}
+				msg += ", the oldest waiting " + spanWords(waited)
+			}
 		}
 		if s.Newest != nil {
 			value = boardValue(s.Newest.ID)
@@ -91,6 +120,33 @@ func cmdFiretower(args []string) error {
 		fmt.Println("No boxes yet: nothing to report.")
 	}
 	return nil
+}
+
+// oldestWait is how long the box's oldest unread letter has waited: since
+// it was sent, and never less than nothing (a letter can't date itself ahead
+// to look fresh).
+func oldestWait(dir, box string) time.Duration {
+	at := now()
+	var most time.Duration
+	for _, m := range loadBox(dir, box, []string{"unread"}, false) {
+		if w := at.Sub(m.Sent); w > most {
+			most = w
+		}
+	}
+	return most
+}
+
+// spanWords is a wait as a board says it: 12m, 3h, 2d.
+func spanWords(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 // lineMax keeps a board line inside the Firetower's cut (200 characters), so

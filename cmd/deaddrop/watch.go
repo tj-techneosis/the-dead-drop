@@ -77,20 +77,30 @@ func stateDir() string {
 // watchFor is the helper a watch, or a bar, is for: "" is the person.
 var watchFor string
 
-func inboxPath() string {
-	if watchFor != "" {
-		return filepath.Join(stateDir(), "inbox-"+watchFor+".json")
+// watchBox is the box a watch, or a bar, keeps when it isn't the caller's
+// own (--box): "" is the caller's.
+var watchBox string
+
+// stateFile names a watch's file: inbox.json, inbox-<helper>.json for a
+// helper's pigeonhole, inbox@<box>.json for another box, and
+// inbox@<box>@<helper>.json for a pigeonhole there. "@" is never in a name,
+// so the two can't be confused.
+func stateFile(base string) string {
+	name := base
+	switch {
+	case watchBox != "" && watchFor != "":
+		name += "@" + watchBox + "@" + watchFor
+	case watchBox != "":
+		name += "@" + watchBox
+	case watchFor != "":
+		name += "-" + watchFor
 	}
-	return filepath.Join(stateDir(), "inbox.json")
+	return filepath.Join(stateDir(), name+".json")
 }
 
-func announcedPath() string {
-	if watchFor != "" {
-		return filepath.Join(stateDir(), "announced-"+watchFor+".json")
-	}
-	return filepath.Join(stateDir(), "announced.json")
-}
-func hooksDir() string { return filepath.Join(filepath.Dir(configPath()), "new.d") }
+func inboxPath() string     { return stateFile("inbox") }
+func announcedPath() string { return stateFile("announced") }
+func hooksDir() string      { return filepath.Join(filepath.Dir(configPath()), "new.d") }
 
 // self runs this deaddrop with args and returns what it printed. It goes
 // through the usual dispatch, so it reaches the store over ssh when the
@@ -168,9 +178,12 @@ type passResult struct {
 // reached, the inbox file keeps its last list and says ok: false.
 func watchPass(hooks bool) (passResult, error) {
 	var r passResult
-	box, err := whoAmI()
-	if err != nil {
-		return r, err
+	box := watchBox
+	if box == "" {
+		var err error
+		if box, err = whoAmI(); err != nil {
+			return r, err
+		}
 	}
 	unlock, err := lockState()
 	if err != nil {
@@ -186,6 +199,9 @@ func watchPass(hooks bool) (passResult, error) {
 	at := now().UTC()
 	prev := readInbox()
 	fetch := []string{"inbox", "--read", "--json"}
+	if watchBox != "" {
+		fetch = append(fetch, watchBox)
+	}
 	if watchFor != "" {
 		fetch = append(fetch, "--for", watchFor)
 	}
@@ -347,7 +363,8 @@ func runHooks(box string, e InboxEntry) {
 	}
 }
 
-// setWatchFor takes a watch's or a bar's --for: one helper, never "*".
+// setWatchFor takes a watch's or a bar's --for: one helper, never "*"; and
+// its --box, one box, where the command takes one.
 func setWatchFor(f flags) error {
 	helper, all, err := pigeonholeOf(f)
 	if err != nil {
@@ -357,6 +374,18 @@ func setWatchFor(f flags) error {
 		return fmt.Errorf("--for: one helper (a watch keeps one pigeonhole's file)")
 	}
 	watchFor = helper
+	if f.has("box") {
+		if len(f.all("box")) > 1 {
+			return fmt.Errorf("--box: one box (a watch keeps one box's file; run one watch per box)")
+		}
+		b, err := resolveBox("--box", f.get("box"))
+		if err != nil {
+			return err
+		}
+		if me, err := whoAmI(); err != nil || me != b {
+			watchBox = b // the caller's own box keeps its usual file
+		}
+	}
 	return nil
 }
 
@@ -364,8 +393,8 @@ func setWatchFor(f flags) error {
 const minEvery = 10 * time.Second
 
 func cmdWatch(args []string) error {
-	const u = "watch [--every 1m] [--no-hooks] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "for": true})
+	const u = "watch [--every 1m] [--no-hooks] [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -624,8 +653,8 @@ func cmdOpen(args []string) error {
 // ---- bar: the inbox file as a menu ----
 
 func cmdBar(args []string) error {
-	const u = "bar [--format text|swiftbar] [--for HELPER]"
-	f, err := parseFlags(args, map[string]bool{"format": true, "for": true})
+	const u = "bar [--format text|swiftbar] [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"format": true, "box": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}

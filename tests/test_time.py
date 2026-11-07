@@ -42,6 +42,23 @@ class Firetower(DeadDrop):
         self.assertEqual(r["mail/empty/inbox"][r["mail/empty/inbox"].index("--value") + 1], "none")
         self.assertNotIn("--next", c)
 
+    def test_ages_turn_unread_to_smoke_and_fire(self):
+        self.send("a\n", "--to", "bob")
+        ages = ("--smoke-after", "30m", "--fire-after", "3h")
+        self.clock = at(10)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["green", "1 unread, the oldest waiting 10m"])
+        self.clock = at(45)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "1 unread, the oldest waiting 45m"])
+        self.clock = at(200)
+        self.dd("firetower", "--box", "bob", *ages)
+        self.assertEqual(self.calls(self.tower_calls)[-1][2], "red")
+        # Without ages, as before; and the ages must make sense.
+        self.dd("firetower", "--box", "bob")
+        self.assertEqual(self.calls(self.tower_calls)[-1][2:4], ["yellow", "1 unread"])
+        self.dd("firetower", "--smoke-after", "3h", "--fire-after", "1h", ok=False)
+
     def test_nothing_private_on_the_board(self):
         self.send("secret plans\n", "--to", "bob", "--subject", "Acquisition of Example Corp", DEADDROP_FROM="carol")
         self.dd("firetower")

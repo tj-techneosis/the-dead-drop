@@ -33,7 +33,7 @@ Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
   deaddrop mark read|unread|archive --tag T... [--from WHO]... [--since D] [--box WHO] [--for H]
 
 On your own machine:
-  deaddrop watch [--every 1m] [--no-hooks] [--for H]   keep the inbox file current, run new.d hooks
+  deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H]   keep the inbox file current, run new.d hooks
   deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
@@ -46,7 +46,7 @@ On your own machine:
 
 Look after it:
   deaddrop status [--box WHO]... [--json]   per box: unread, urgent, helpers' unread, newest subject
-  deaddrop firetower [--next 6m|TIME|none] [--box WHO]...   one lookout per box, mail/<who>/inbox
+  deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]   one lookout per box
   deaddrop gc [--days 30]          archived mail older than that goes
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help

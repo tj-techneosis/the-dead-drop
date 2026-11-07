@@ -233,6 +233,7 @@ deaddrop inbox --for planner          # the planner's queue (DEADDROP_FOR=planne
 deaddrop inbox --for '*'              # every pigeonhole in the box, for whoever's minding it
 deaddrop mark read ID                 # by id, wherever it is; by --tag, in the --for pigeonhole
 deaddrop watch --for planner          # its own inbox file, its own hooks (DEADDROP_MSG_FOR)
+deaddrop watch --box bob-review       # a side box you read: inbox@bob-review.json (DEADDROP_MSG_BOX)
 ```
 
 - **A helper exists once something's addressed to it**, like a box: no
@@ -471,6 +472,12 @@ reports one lookout per box to the Firetower on the store's machine,
 | unread | smoke, "3 unread" |
 | urgent unread | fire, "1 urgent, 3 unread" |
 
+With `--smoke-after 30m --fire-after 3h`, a box goes by how long its oldest
+unread letter has waited instead: clear until it's waited 30 minutes, smoke
+after that, fire after 3 hours ("2 unread, the oldest waiting 45m"). That
+shows mail nobody is reading, not just mail that's arrived. Either flag can
+be used alone.
+
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
 anyone sees.
@@ -539,9 +546,9 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]
-deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
+deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h]
 deaddrop gc [--days 30]
-deaddrop watch [--every 1m] [--no-hooks] [--for H]
+deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
