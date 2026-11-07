@@ -28,7 +28,10 @@ type Message struct {
 	// Persona: who is speaking for the sender, when it's one of their
 	// robots ("Release manager"). A label under the sender, never another
 	// sender: the box and the signature are still theirs. Added in 0.4.
-	Persona     string    `json:"persona,omitempty"`
+	Persona string `json:"persona,omitempty"`
+	// For: the helpers it's addressed to, in the recipient's box (0.6).
+	// Each gets a copy in their own pigeonhole, with its own state.
+	For         []string  `json:"for,omitempty"`
 	Thread      string    `json:"thread,omitempty"`
 	FollowUp    string    `json:"follow_up,omitempty"`
 	Raised      string    `json:"raised,omitempty"`
@@ -54,7 +57,9 @@ type Message struct {
 	// Where it is, worked out from its path, never stored in it.
 	Box   string `json:"box"`
 	State string `json:"state"` // unread, read or archived
-	path  string
+	// Pigeonhole: whose copy this is, a helper's, or "" for the person's.
+	Pigeonhole string `json:"pigeonhole,omitempty"`
+	path       string
 	// Header lines this version doesn't know, from a later one: kept as
 	// they are and written back, so rewriting a message never drops them.
 	unknown []string
@@ -198,6 +203,9 @@ func (m *Message) renderAs(forDisplay bool) []byte {
 	if m.Persona != "" {
 		fmt.Fprintf(&b, "persona: %s\n", q(m.Persona))
 	}
+	if len(m.For) > 0 {
+		fmt.Fprintf(&b, "for: [%s]\n", strings.Join(m.For, ", "))
+	}
 	if m.Thread != "" {
 		fmt.Fprintf(&b, "thread: %s\n", m.Thread)
 	}
@@ -274,6 +282,8 @@ func parseMessage(data []byte, withBody bool) (*Message, error) {
 			m.Urgency = v
 		case "persona":
 			m.Persona = unquote(v)
+		case "for":
+			m.For = list(v)
 		case "thread":
 			m.Thread = v
 		case "follow_up":

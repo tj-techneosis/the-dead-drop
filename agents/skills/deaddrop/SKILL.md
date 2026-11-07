@@ -73,6 +73,11 @@ EOF
   their box, your label ("alice, as Release manager"). Use the role the
   person gave you, or describe what you're doing for them. Never send as
   anyone else.
+- **For one of their helpers:** `--for <helper>` puts it in that helper's
+  own pigeonhole in the person's box (`--for planner`). A helper reads its
+  own with `--for <helper>` on `inbox`, `pull`, `mark`, `watch` (or
+  `DEADDROP_FOR` for the session). If you're a helper with a pigeonhole,
+  read only yours.
 - **Answering a message:** `deaddrop reply ID < answer.md` sends it back to
   the sender with its topic tags, "Re: " and a thread link (`persona-…`
   tags stay behind; `--untag T` drops another, `--tag T` adds yours). Or
@@ -232,6 +237,8 @@ deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread] [--jso
 deaddrop show ID [--json]
 deaddrop sent [--to WHO]... [--tag T]... [--json]
 deaddrop with WHO | thread ID [--json]   # both sides, in time order
+deaddrop threads [--json]                # every thread, newest activity first
+deaddrop inbox --for HELPER              # a helper's pigeonhole ('*': all of them)
 deaddrop file ID [NAME]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]...
 deaddrop status [--json]

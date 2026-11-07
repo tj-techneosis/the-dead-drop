@@ -141,7 +141,7 @@ func cmdFollowUp(args []string) error {
 		return err
 	}
 	defer unlock()
-	m, err := findMessage(dir, box, f.pos[1], true)
+	m, err := findAnywhere(dir, box, f.pos[1], true)
 	if err != nil {
 		fmt.Println(err.Error() + "; nothing to follow up")
 		return nil

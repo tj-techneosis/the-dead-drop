@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // Threads and conversations: both sides of the mail, in time order. Your own
@@ -62,17 +64,20 @@ func gist(body string) string {
 
 // letters gathers your mail, both ways: everything in your box (archived
 // too) and everything you sent.
+// lettersFor is the pigeonhole thread and with read: --for, or the person's.
+var lettersFor []string
+
 func letters() (string, []*Letter, string, error) {
 	me, err := whoAmI()
 	if err != nil {
 		return "", nil, "", err
 	}
 	var notes []string
-	out, err := self("pull", "--all", "--json")
+	out, err := self(append([]string{"pull", "--all", "--json"}, lettersFor...)...)
 	if err != nil && strings.Contains(err.Error(), "unknown flag --all") {
 		// A store from before 0.4: no archived mail to be had.
 		notes = append(notes, "filed (archived) letters aren't shown")
-		out, err = self("pull", "--json")
+		out, err = self(append([]string{"pull", "--json"}, lettersFor...)...)
 	}
 	if err != nil {
 		return "", nil, "", err
@@ -198,11 +203,12 @@ func threadOf(ls []*Letter, id string) ([]*Letter, error) {
 }
 
 func cmdThread(args []string) error {
-	const u = "thread ID [--json|--html]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false})
+	const u = "thread ID [--for HELPER|'*'] [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
+	lettersFor = forArgs(f)
 	if len(f.pos) != 1 {
 		return badf(u, "which letter's thread?")
 	}
@@ -221,11 +227,12 @@ func cmdThread(args []string) error {
 }
 
 func cmdWith(args []string) error {
-	const u = "with WHO [--tag T]... [--json|--html]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "tag": true})
+	const u = "with WHO [--tag T]... [--for HELPER|'*'] [--json|--html]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "tag": true, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
+	lettersFor = forArgs(f)
 	if len(f.pos) != 1 {
 		return badf(u, "with whom?")
 	}
@@ -317,4 +324,202 @@ func seen(l *Letter) string {
 		return "not yet read"
 	}
 	return "seen by " + strings.Join(read, ", ")
+}
+
+// ---- threads: the topics ----
+
+// Topic is one thread, as a list of topics shows it.
+type Topic struct {
+	Root         string        `json:"root"` // its first letter's id
+	Subject      string        `json:"subject"`
+	Started      time.Time     `json:"started"`
+	Last         time.Time     `json:"last"`
+	Count        int           `json:"count"`
+	Unread       int           `json:"unread"` // letters to you, not yet read
+	Tags         []string      `json:"tags"`   // every tag its letters carry
+	Participants []Participant `json:"participants"`
+	Letters      []*Letter     `json:"letters,omitempty"` // with --letters
+}
+
+// Participant is one seal in a thread: who wrote, as whom, for whom.
+type Participant struct {
+	Box       string `json:"box"`
+	Persona   string `json:"persona,omitempty"`
+	For       string `json:"for,omitempty"`
+	Signature string `json:"signature"` // the least trusted of their letters
+}
+
+// Topics is what threads hands out.
+type Topics struct {
+	Box         string   `json:"box"`
+	For         string   `json:"for,omitempty"`
+	Topics      []*Topic `json:"topics"`
+	SentMissing string   `json:"sent_missing,omitempty"`
+}
+
+// groups splits letters into threads, each in time order.
+func groups(ls []*Letter) [][]*Letter {
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(x string) string {
+		for parent[x] != "" && parent[x] != x {
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b string) {
+		if ra, rb := find(a), find(b); ra != rb {
+			parent[ra] = rb
+		}
+	}
+	for _, l := range ls {
+		ids := l.ids()
+		for _, x := range ids {
+			union(x, ids[0])
+		}
+		if l.Thread != "" {
+			union(ids[0], l.Thread)
+		}
+	}
+	byRoot := map[string][]*Letter{}
+	var order []string
+	for _, l := range ls {
+		r := find(l.ids()[0])
+		if _, ok := byRoot[r]; !ok {
+			order = append(order, r)
+		}
+		byRoot[r] = append(byRoot[r], l)
+	}
+	out := make([][]*Letter, 0, len(order))
+	for _, r := range order {
+		out = append(out, byRoot[r])
+	}
+	return out
+}
+
+var trustRank = map[string]int{sigBad: 0, sigUnknown: 1, sigUnsigned: 2, sigVerified: 3}
+
+func topicOf(me string, g []*Letter) *Topic {
+	t := &Topic{Root: g[0].ID, Subject: g[0].Subject, Started: g[0].Sent, Last: g[0].Sent, Count: len(g), Tags: []string{}}
+	for len(t.Subject) > 4 && strings.EqualFold(t.Subject[:4], "re: ") {
+		t.Subject = t.Subject[4:]
+	}
+	seen := map[string]int{}
+	for _, l := range g {
+		if l.Sent.After(t.Last) {
+			t.Last = l.Sent
+		}
+		if !l.Mine && l.State == "unread" {
+			t.Unread++
+		}
+		for _, tag := range l.Tags {
+			if !contains(t.Tags, tag) {
+				t.Tags = append(t.Tags, tag)
+			}
+		}
+		box := l.From
+		if l.Mine {
+			box = me
+		}
+		p := Participant{Box: box, Persona: l.Persona, For: strings.Join(l.For, ","), Signature: l.Signature}
+		k := p.Box + "\x00" + p.Persona + "\x00" + p.For
+		if i, ok := seen[k]; ok {
+			if trustRank[p.Signature] < trustRank[t.Participants[i].Signature] {
+				t.Participants[i].Signature = p.Signature
+			}
+			continue
+		}
+		seen[k] = len(t.Participants)
+		t.Participants = append(t.Participants, p)
+	}
+	return t
+}
+
+func cmdThreads(args []string) error {
+	const u = "threads [--for HELPER|'*'] [--since 7d|DATE] [--limit N] [--letters [--bodies]] [--json]"
+	f, err := parseFlags(args, map[string]bool{"for": true, "since": true, "limit": true, "letters": false, "bodies": false, "json": false})
+	if err != nil {
+		return bad(u, err)
+	}
+	if len(f.pos) > 0 {
+		return badf(u, "threads takes no words of its own")
+	}
+	if f.has("bodies") && !f.has("letters") {
+		return badf(u, "--bodies goes with --letters")
+	}
+	since := flags{vals: map[string][]string{}}
+	if f.has("since") {
+		since.vals["since"] = f.all("since")
+	}
+	fl, err := filterOf(since)
+	if err != nil {
+		return bad(u, err)
+	}
+	limit := 0
+	if f.has("limit") {
+		if limit, err = strconv.Atoi(f.get("limit")); err != nil || limit < 1 {
+			return badf(u, "--limit is a whole number, at least 1")
+		}
+	}
+	lettersFor = forArgs(f)
+	me, ls, missing, err := letters()
+	if err != nil {
+		return err
+	}
+	out := &Topics{Box: me, For: f.get("for"), Topics: []*Topic{}, SentMissing: missing}
+	for _, g := range groups(ls) {
+		t := topicOf(me, g)
+		if !fl.since.IsZero() && t.Last.Before(fl.since) {
+			continue
+		}
+		if f.has("letters") {
+			t.Letters = g
+			if !f.has("bodies") {
+				for _, l := range g {
+					l.Body = ""
+				}
+			}
+		}
+		out.Topics = append(out.Topics, t)
+	}
+	sort.SliceStable(out.Topics, func(i, j int) bool { return out.Topics[i].Last.After(out.Topics[j].Last) })
+	if limit > 0 && len(out.Topics) > limit {
+		out.Topics = out.Topics[:limit]
+	}
+	if f.has("json") {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	if missing != "" {
+		fmt.Println("(" + missing + ")")
+	}
+	if len(out.Topics) == 0 {
+		fmt.Println("No threads yet.")
+		return nil
+	}
+	at := now()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "LAST\tLETTERS\tUNREAD\tWHO\tSUBJECT\tROOT")
+	for _, t := range out.Topics {
+		var who []string
+		for _, p := range t.Participants {
+			w := p.Box
+			if p.Persona != "" {
+				w += " as " + p.Persona
+			}
+			if p.Signature == sigBad {
+				w += " ✗"
+			}
+			if !contains(who, w) {
+				who = append(who, w)
+			}
+		}
+		unread := "-"
+		if t.Unread > 0 {
+			unread = strconv.Itoa(t.Unread)
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\n", ago(t.Last, at), t.Count, unread, cleanLine(strings.Join(who, ", "), 60), cleanLine(t.Subject, 70), t.Root)
+	}
+	return tw.Flush()
 }

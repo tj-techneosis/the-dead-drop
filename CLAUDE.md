@@ -67,6 +67,9 @@ Claude Code setup.
   a reading command with the store elsewhere print the store's verdict
   instead of checking here. Bad is said loudly wherever a message shows.
   What's signed (`signedPayload`) changes only with a new version line.
+- **A helper is a pigeonhole, never a box.** `<box>/for/<helper>/`, its own
+  state; one letter, a copy per helper, one seal. Older versions never look
+  there. Replies route by persona, never by what the original was for.
 - **A persona is a label, never a sender.** Signed with the message; the box,
   the key and the replies stay the person's.
 - **`sent` lists only the caller's mail** (or `--box`'s), never anything

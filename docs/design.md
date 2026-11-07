@@ -86,6 +86,16 @@ to know which one is talking. A persona is a label under the sender, never a
 sender: the box, the key and the replies stay the person's. It's in the
 header and in the signature, so it's as trustworthy as the sender's name.
 
+**Helpers.** One person, several assistants, each wanting only its own mail
+and its own read state. A box per assistant would multiply boxes and keys
+(each would sign as a name only the person's key can back); tags would be
+copied onto replies and could be stuck on by anyone. So a box has a
+pigeonhole per helper, `<box>/for/<helper>/`, the same new/read/archive
+folders again: state stays "which folder it's in", and each helper's copy
+has its own. The address is part of the letter and its signature; replies
+route by the persona that wrote (its name made into a pigeonhole's), never
+by what the original was for. One box, one key, one person.
+
 ## Signatures
 
 Everyone may reach the store as one login, so nothing on the store can tell
@@ -97,8 +107,9 @@ and checked where the reader is:
   sign`, namespace `deaddrop`), through the agent if they like. The key
   never reaches the store, so the store and its login can't sign.
 - **What's signed** is a canonical text of what the sender chose: from (and
-  persona, in v2 of the text; a message without one is signed as v1, as
-  0.3 did), the
+  persona, in v2 of the text, and the helpers it's for, in v3; each is used
+  only when there's something to say, so older letters verify as they
+  always did), the
   recipients, subject, tags, urgency, thread, each attachment's name and
   sha256, when it was signed, and the body. The sender works it out with
   the same code the store uses, and the store checks the signature is of

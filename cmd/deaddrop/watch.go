@@ -30,6 +30,7 @@ const inboxVersion = 1
 type InboxFile struct {
 	Version   int          `json:"version"`
 	Box       string       `json:"box"`
+	For       string       `json:"for,omitempty"` // the helper whose pigeonhole this is
 	CheckedAt time.Time    `json:"checked_at"`
 	OK        bool         `json:"ok"`
 	Error     string       `json:"error,omitempty"`
@@ -73,9 +74,23 @@ func stateDir() string {
 	return filepath.Join(home, ".local", "state", "deaddrop")
 }
 
-func inboxPath() string     { return filepath.Join(stateDir(), "inbox.json") }
-func announcedPath() string { return filepath.Join(stateDir(), "announced.json") }
-func hooksDir() string      { return filepath.Join(filepath.Dir(configPath()), "new.d") }
+// watchFor is the helper a watch, or a bar, is for: "" is the person.
+var watchFor string
+
+func inboxPath() string {
+	if watchFor != "" {
+		return filepath.Join(stateDir(), "inbox-"+watchFor+".json")
+	}
+	return filepath.Join(stateDir(), "inbox.json")
+}
+
+func announcedPath() string {
+	if watchFor != "" {
+		return filepath.Join(stateDir(), "announced-"+watchFor+".json")
+	}
+	return filepath.Join(stateDir(), "announced.json")
+}
+func hooksDir() string { return filepath.Join(filepath.Dir(configPath()), "new.d") }
 
 // self runs this deaddrop with args and returns what it printed. It goes
 // through the usual dispatch, so it reaches the store over ssh when the
@@ -158,7 +173,11 @@ func watchPass(hooks bool) (passResult, error) {
 
 	at := now().UTC()
 	prev := readInbox()
-	out, ferr := self("inbox", "--read", "--json")
+	fetch := []string{"inbox", "--read", "--json"}
+	if watchFor != "" {
+		fetch = append(fetch, "--for", watchFor)
+	}
+	out, ferr := self(fetch...)
 	var ms []Message
 	if ferr == nil {
 		if err := json.Unmarshal(out, &ms); err != nil {
@@ -166,7 +185,7 @@ func watchPass(hooks bool) (passResult, error) {
 		}
 	}
 	if ferr != nil {
-		f := &InboxFile{Version: inboxVersion, Box: box, Messages: []InboxEntry{}}
+		f := &InboxFile{Version: inboxVersion, Box: box, For: watchFor, Messages: []InboxEntry{}}
 		if prev != nil && prev.Box == box {
 			f = prev
 			f.Version = inboxVersion
@@ -179,7 +198,7 @@ func watchPass(hooks bool) (passResult, error) {
 		return r, ferr
 	}
 
-	f := &InboxFile{Version: inboxVersion, Box: box, CheckedAt: at, OK: true, LastOKAt: &at, Messages: []InboxEntry{}}
+	f := &InboxFile{Version: inboxVersion, Box: box, For: watchFor, CheckedAt: at, OK: true, LastOKAt: &at, Messages: []InboxEntry{}}
 	for _, m := range ms {
 		if m.State != "unread" && m.State != "read" {
 			continue
@@ -303,6 +322,7 @@ func runHooks(box string, e InboxEntry) {
 			"DEADDROP_MSG_SIGNATURE="+e.Signature,
 			"DEADDROP_MSG_SIGNED_BY="+e.SignedBy,
 			"DEADDROP_MSG_PERSONA="+e.Persona,
+			"DEADDROP_MSG_FOR="+watchFor,
 		)
 		if err := c.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: hook %s, for %s: %v\n", name, e.ID, err)
@@ -311,13 +331,29 @@ func runHooks(box string, e InboxEntry) {
 	}
 }
 
+// setWatchFor takes a watch's or a bar's --for: one helper, never "*".
+func setWatchFor(f flags) error {
+	helper, all, err := pigeonholeOf(f)
+	if err != nil {
+		return err
+	}
+	if all {
+		return fmt.Errorf("--for: one helper (a watch keeps one pigeonhole's file)")
+	}
+	watchFor = helper
+	return nil
+}
+
 // minEvery keeps a looping watch from hammering the store.
 const minEvery = 10 * time.Second
 
 func cmdWatch(args []string) error {
-	const u = "watch [--every 1m] [--no-hooks]"
-	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false})
+	const u = "watch [--every 1m] [--no-hooks] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"every": true, "no-hooks": false, "for": true})
 	if err != nil {
+		return bad(u, err)
+	}
+	if err := setWatchFor(f); err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) > 0 {
@@ -380,8 +416,8 @@ func say(r passResult) {
 // ---- show ----
 
 func cmdShow(args []string) error {
-	const u = "show ID [--json|--html [--fragment]] [--box WHO]"
-	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false})
+	const u = "show ID [--json|--html [--fragment]] [--box WHO] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"json": false, "html": false, "fragment": false, "box": true, "raw": false, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -411,7 +447,7 @@ func cmdShow(args []string) error {
 		if err != nil {
 			return err
 		}
-		if m, err = findMessage(dir, box, f.pos[0], true); err != nil {
+		if m, err = findFor(dir, box, f, f.pos[0], true); err != nil {
 			return err
 		}
 		prepare([]*Message{m}, f.has("raw"), dir)
@@ -526,9 +562,12 @@ func cmdOpen(args []string) error {
 // ---- bar: the inbox file as a menu ----
 
 func cmdBar(args []string) error {
-	const u = "bar [--format text|swiftbar]"
-	f, err := parseFlags(args, map[string]bool{"format": true})
+	const u = "bar [--format text|swiftbar] [--for HELPER]"
+	f, err := parseFlags(args, map[string]bool{"format": true, "for": true})
 	if err != nil {
+		return bad(u, err)
+	}
+	if err := setWatchFor(f); err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) > 0 {

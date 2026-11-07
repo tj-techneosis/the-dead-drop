@@ -63,7 +63,11 @@ class Threads(DeadDrop):
                          ["To carol", "Carol to alice"])
         # Bob's view of the same conversation is his.
         mine = [l["mine"] for l in json.loads(self.dd("with", "alice", "--json", DEADDROP_FROM="bob").stdout)["letters"]]
-        self.assertEqual(mine, [False, True, False, True])
+        # Alice's thanks went to bob's Release manager, so it's in that
+        # helper's pigeonhole, not bob's own.
+        self.assertEqual(mine, [False, True, True])
+        rm = json.loads(self.dd("with", "alice", "--for", "release-manager", "--json", DEADDROP_FROM="bob").stdout)["letters"]
+        self.assertEqual([(l["mine"], l["subject"]) for l in rm if not l["mine"]], [(False, "Re: Requests for tool X")])
 
     def test_the_page(self):
         a, b = self.conversation()

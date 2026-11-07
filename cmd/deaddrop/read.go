@@ -46,7 +46,7 @@ func prepare(ms []*Message, raw bool, dir string) {
 			m.AttachmentSizes = nil
 			for _, a := range m.Attachments {
 				size := int64(-1)
-				if info, err := os.Stat(filepath.Join(dir, m.Box, "files", m.ID, a)); err == nil {
+				if info, err := os.Stat(filepath.Join(filesDir(dir, m), a)); err == nil {
 					size = info.Size()
 				}
 				m.AttachmentSizes = append(m.AttachmentSizes, size)

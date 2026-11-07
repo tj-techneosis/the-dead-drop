@@ -314,3 +314,12 @@ exec {BIN} "$@"
         self.assertIn("before 0.4", c["sent_missing"])
         self.assertIn("your side isn't shown", c["sent_missing"])
         self.assertIn("archived", c["sent_missing"])
+
+    def test_helpers_over_ssh(self):
+        self.rdd("send", "--to", "bob", "--for", "planner", input="# Lock\n\nx\n", env=self.signed_env("alice"))
+        bob = self.signed_env("bob")
+        self.assertEqual(json.loads(self.rdd("inbox", "--json", env=bob).stdout), [])
+        ms = json.loads(self.rdd("inbox", "--json", env=dict(DEADDROP_FOR="planner", **bob)).stdout)
+        self.assertEqual([(m["subject"], m["signature"], m["pigeonhole"]) for m in ms], [("Lock", "verified", "planner")])
+        t = json.loads(self.rdd("threads", "--json", env=self.signed_env("alice")).stdout)
+        self.assertEqual(t["topics"][0]["participants"][0]["for"], "planner")

@@ -49,7 +49,8 @@ config with a setting it doesn't know stops every command there. (From 0.3,
 a machine reaching the store also needs the store on 0.3 or later, to hand
 out signed messages. From 0.4: a reader older than 0.4 doesn't know
 personas, and reads a signed message with one as bad; upgrade every machine
-that reads mail before anyone sends `--as`.)
+that reads mail before anyone sends `--as`. Mail `--for` a helper (0.6) is
+filed where older versions never look, so they can't misread it.)
 
 ## Sending
 
@@ -77,6 +78,7 @@ answered with a status: `--untag proposal --tag status`).
 | `--follow-up 2d` | raise it to urgent if it's still unread then (a span or a time) |
 | `--from automation` | a job's reports. You send as yourself or as `automation`, never as someone else |
 | `--as NAME` | one of your assistants is writing for you: a label under your name, like `--as "Release manager"`. `$DEADDROP_AS` sets it for a whole session |
+| `--for HELPER` | for one of the recipient's helpers, into its own pigeonhole in their box (repeatable). See below |
 
 **Never put a secret in a message.** Everyone who can read the store can
 read every box. Name where the secret lives instead. `send` refuses the
@@ -196,6 +198,41 @@ your box and your key; the persona says which of your helpers is talking,
 everywhere the sender shows (`alice, as Release manager`). It's signed with
 the message, so it can't be added, changed or taken off without the
 signature failing. It's never a sender of its own: replies go to you.
+
+### Helpers: a pigeonhole each
+
+People who hand work to several assistants want each one to see only its
+own mail. So a box has a pigeonhole per helper, besides the person's own:
+
+```sh
+deaddrop send --to bob --for planner --for reviewer < plan.md   # one letter, two helpers
+deaddrop inbox --for planner          # the planner's queue (DEADDROP_FOR=planner, once)
+deaddrop inbox --for '*'              # every pigeonhole in the box, for whoever's minding it
+deaddrop mark read ID                 # by id, wherever it is; by --tag, in the --for pigeonhole
+deaddrop watch --for planner          # its own inbox file, its own hooks (DEADDROP_MSG_FOR)
+```
+
+- **A helper exists once something's addressed to it**, like a box: no
+  list, no setup. Mail with no `--for` is the person's own, and their
+  `inbox` stays theirs.
+- **Each helper has its own copy, with its own state.** When one files a
+  letter, it's still unread for the others. It's one letter: `sent`,
+  `thread` and `threads` put the copies together.
+- **The address is sealed into the signature.** A copy moved to another
+  pigeonhole, or with a `for` added or taken off, reads as bad.
+- **Replies find their way back.** Answering "bob, as Release manager"
+  goes to bob's `release-manager` pigeonhole (a persona's pigeonhole is its
+  name, lowercase, with dashes), unless you say `--for`. What a letter was
+  for is never copied back.
+- `inbox`, `pull`, `show`, `file`, `mark`, `watch`, `bar`, `thread`,
+  `with` and `threads` take `--for`, or `$DEADDROP_FOR` for a helper's
+  whole session.
+
+**Every thread at a glance.** `deaddrop threads` lists them, newest activity
+first: subject, when it started and last moved, how many letters, how many
+unread, every tag, and who's in it (box, persona, helper, and the least
+trusted of their signatures). `--letters` (and `--bodies`) adds the letters,
+`--since` and `--limit` page it, `--json` for a front end.
 
 ## One store, many machines
 
@@ -425,7 +462,7 @@ What gets reported, and when, belongs to whoever books it.
 
 ```
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
-              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] < body.md
+              [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]... < body.md
 deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--json]
@@ -439,7 +476,8 @@ deaddrop firetower [--next 6m|TIME|none] [--box WHO]...
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO
-deaddrop thread ID [--json|--html]
+deaddrop thread ID [--for H] [--json|--html]
+deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json]
 deaddrop with WHO [--tag T]... [--json|--html]
 deaddrop bar [--format text|swiftbar]
 deaddrop upgrade [--check] | version | help

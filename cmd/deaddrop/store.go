@@ -20,6 +20,8 @@ import (
 //	<dir>/<who>/read/<id>.md      read
 //	<dir>/<who>/archive/<id>.md   filed
 //	<dir>/<who>/files/<id>/...    attachments that came with a message
+//	<dir>/<who>/for/<helper>/...  a helper's own pigeonhole: the same again,
+//	                              for mail addressed --for that helper
 
 var stateDirs = []struct{ state, dir string }{
 	{"unread", "new"},
@@ -146,12 +148,44 @@ func boxes(dir string) []string {
 	return out
 }
 
-// loadBox reads a box's messages in the given states. A file that can't be
-// read is reported on stderr and skipped, never dropped silently.
+// slotDir is a pigeonhole: a person's own (helper ""), or one of their
+// helpers'.
+func slotDir(dir, box, helper string) string {
+	if helper == "" {
+		return filepath.Join(dir, box)
+	}
+	return filepath.Join(dir, box, "for", helper)
+}
+
+// filesDir is where a message's attachments are, beside it.
+func filesDir(dir string, m *Message) string {
+	return filepath.Join(slotDir(dir, m.Box, m.Pigeonhole), "files", m.ID)
+}
+
+// helpers are the helpers a box has pigeonholes for.
+func helpers(dir, box string) []string {
+	var out []string
+	ents, _ := os.ReadDir(filepath.Join(dir, box, "for"))
+	for _, e := range ents {
+		if e.IsDir() && boxRE.MatchString(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// loadBox reads a person's own pigeonhole in the given states.
 func loadBox(dir, box string, states []string, withBody bool) []*Message {
+	return loadSlot(dir, box, "", states, withBody)
+}
+
+// loadSlot reads one pigeonhole's messages in the given states. A file that
+// can't be read is reported on stderr and skipped, never dropped silently.
+func loadSlot(dir, box, helper string, states []string, withBody bool) []*Message {
 	var out []*Message
 	for _, state := range states {
-		folder := filepath.Join(dir, box, dirFor(state))
+		folder := filepath.Join(slotDir(dir, box, helper), dirFor(state))
 		ents, _ := os.ReadDir(folder)
 		for _, e := range ents {
 			n := e.Name()
@@ -166,9 +200,18 @@ func loadBox(dir, box string, states []string, withBody bool) []*Message {
 				}
 				continue
 			}
-			m.Box, m.State = box, state
+			m.Box, m.Pigeonhole, m.State = box, helper, state
 			out = append(out, m)
 		}
+	}
+	return out
+}
+
+// loadAll reads a person's pigeonhole and every helper's.
+func loadAll(dir, box string, states []string, withBody bool) []*Message {
+	out := loadSlot(dir, box, "", states, withBody)
+	for _, h := range helpers(dir, box) {
+		out = append(out, loadSlot(dir, box, h, states, withBody)...)
 	}
 	return out
 }
@@ -189,13 +232,32 @@ func readMessage(path string, withBody bool) (*Message, error) {
 	return m, nil
 }
 
-// findMessage finds one message in a box, in any state.
+// findMessage finds one message in a person's own pigeonhole, in any state.
 func findMessage(dir, box, id string, withBody bool) (*Message, error) {
+	return findIn(dir, box, "", id, withBody)
+}
+
+// findAnywhere looks in the person's pigeonhole, then each helper's.
+func findAnywhere(dir, box, id string, withBody bool) (*Message, error) {
+	m, err := findIn(dir, box, "", id, withBody)
+	if err == nil {
+		return m, nil
+	}
+	for _, h := range helpers(dir, box) {
+		if m, err2 := findIn(dir, box, h, id, withBody); err2 == nil {
+			return m, nil
+		}
+	}
+	return nil, err
+}
+
+// findIn finds one message in one pigeonhole, in any state.
+func findIn(dir, box, helper, id string, withBody bool) (*Message, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
 	}
 	for _, s := range stateDirs {
-		path := filepath.Join(dir, box, s.dir, id+".md")
+		path := filepath.Join(slotDir(dir, box, helper), s.dir, id+".md")
 		m, err := readMessage(path, withBody)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -203,8 +265,11 @@ func findMessage(dir, box, id string, withBody bool) (*Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %v", path, err)
 		}
-		m.Box, m.State = box, s.state
+		m.Box, m.Pigeonhole, m.State = box, helper, s.state
 		return m, nil
+	}
+	if helper != "" {
+		return nil, fmt.Errorf("no message %s for %s in %s's box", id, helper, box)
 	}
 	return nil, fmt.Errorf("no message %s in %s's box", id, box)
 }
@@ -215,7 +280,7 @@ func move(dir string, m *Message, state string) error {
 	if m.State == state {
 		return nil
 	}
-	to := filepath.Join(dir, m.Box, dirFor(state), m.ID+".md")
+	to := filepath.Join(slotDir(dir, m.Box, m.Pigeonhole), dirFor(state), m.ID+".md")
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
 	}

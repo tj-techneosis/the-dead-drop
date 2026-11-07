@@ -26,6 +26,7 @@ type SentMessage struct {
 // SentCopy is one recipient's copy, and whether they've read it.
 type SentCopy struct {
 	Box   string `json:"box"`
+	For   string `json:"for,omitempty"` // the helper whose pigeonhole it's in
 	ID    string `json:"id"`
 	State string `json:"state"` // unread, read or archived
 }
@@ -46,7 +47,7 @@ func gatherSent(dir, who string) []*SentMessage {
 	byKey := map[string]*SentMessage{}
 	var out []*SentMessage
 	for _, box := range boxes(dir) {
-		for _, m := range loadBox(dir, box, []string{"unread", "read", "archived"}, true) {
+		for _, m := range loadAll(dir, box, []string{"unread", "read", "archived"}, true) {
 			if m.From != who {
 				continue
 			}
@@ -57,11 +58,16 @@ func gatherSent(dir, who string) []*SentMessage {
 				byKey[k] = s
 				out = append(out, s)
 			}
-			s.Copies = append(s.Copies, SentCopy{Box: box, ID: m.ID, State: m.State})
+			s.Copies = append(s.Copies, SentCopy{Box: box, For: m.Pigeonhole, ID: m.ID, State: m.State})
 		}
 	}
 	for _, s := range out {
-		sort.Slice(s.Copies, func(i, j int) bool { return s.Copies[i].Box < s.Copies[j].Box })
+		sort.Slice(s.Copies, func(i, j int) bool {
+			if s.Copies[i].Box != s.Copies[j].Box {
+				return s.Copies[i].Box < s.Copies[j].Box
+			}
+			return s.Copies[i].For < s.Copies[j].For
+		})
 		if s.Sig == "" {
 			// Unsigned: it went wherever its copies are (and wherever it says,
 			// from 0.4 on).
@@ -81,12 +87,15 @@ func gatherSent(dir, who string) []*SentMessage {
 // as a recipient, so a stray copy someone put in another box can't make the
 // real message look forged.
 func verifyAs(s *SentMessage) string {
+	pick := s.Copies[0]
 	for _, c := range s.Copies {
-		if contains(s.Recipients, c.Box) {
-			return c.Box
+		if contains(s.Recipients, c.Box) && (len(s.For) == 0 && c.For == "" || contains(s.For, c.For)) {
+			pick = c
+			break
 		}
 	}
-	return s.Copies[0].Box
+	s.Pigeonhole = pick.For
+	return pick.Box
 }
 
 func sortSent(ss []*SentMessage) {
@@ -199,7 +208,11 @@ func cmdSent(args []string) error {
 	for _, s := range ss {
 		var to []string
 		for _, c := range s.Copies {
-			to = append(to, c.Box+" ("+c.State+")")
+			if c.For != "" {
+				to = append(to, c.Box+"/"+c.For+" ("+c.State+")")
+			} else {
+				to = append(to, c.Box+" ("+c.State+")")
+			}
 		}
 		tags := strings.Join(s.Tags, ",")
 		if tags == "" {

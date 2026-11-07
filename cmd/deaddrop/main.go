@@ -34,6 +34,7 @@ On your own machine:
   deaddrop watch [--every 1m]      keep the inbox file current, run new.d hooks
   deaddrop open ID                 read one in the browser, and mark it read
   deaddrop thread ID | with WHO    both sides, in time order (--json, --html)
+  deaddrop threads [--letters] [--json]   every thread, newest activity first
   deaddrop open --thread ID | --with WHO   the same, in the browser
   deaddrop bar [--format swiftbar] the inbox file as a line, or a menu
   deaddrop key                     your line for everyone's allowed_signers
@@ -143,7 +144,7 @@ func dispatch(cmd string, args []string) error {
 	// These run on the caller's machine, and reach the store the way any
 	// other command does.
 	if run, ok := here[cmd]; ok {
-		return run(args)
+		return run(withFor(cmd, args))
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -156,6 +157,7 @@ func dispatch(cmd string, args []string) error {
 	}
 	// A send is signed here, on the sender's own machine, before it goes.
 	args = withPersona(cmd, args)
+	args = withFor(cmd, args)
 	if cmd, args, err = signOutgoing(cmd, args); err != nil {
 		return err
 	}
@@ -174,7 +176,7 @@ func dispatch(cmd string, args []string) error {
 		err = run(args)
 	}
 	if err == nil && cmd == "mark" {
-		refreshInbox()
+		refreshInbox(args)
 	}
 	return err
 }
@@ -210,9 +212,17 @@ func arrivedHere(cmd string) error {
 // refreshInbox brings a watched inbox file up to date after a mark, so a
 // viewer shows the change at once. Only for the person whose file it is, and
 // never on the store's machine on someone else's behalf.
-func refreshInbox() {
+func refreshInbox(args []string) {
 	if os.Getenv("DEADDROP_LOCAL") == "1" || hops() > 0 {
 		return
+	}
+	// The pigeonhole the mark was in: a helper's has its own inbox file.
+	for i, a := range args {
+		if a == "--for" && i+1 < len(args) && args[i+1] != "*" {
+			watchFor = strings.ToLower(args[i+1])
+		} else if strings.HasPrefix(a, "--for=") && a != "--for=*" {
+			watchFor = strings.ToLower(strings.TrimPrefix(a, "--for="))
+		}
 	}
 	in := readInbox()
 	if in == nil {
@@ -232,12 +242,13 @@ var readsHere = map[string]bool{"inbox": true, "ls": true, "pull": true, "show":
 var viaHost string
 
 var here = map[string]func([]string) error{
-	"key":    cmdKey,
-	"thread": cmdThread,
-	"with":   cmdWith,
-	"watch":  cmdWatch,
-	"open":   cmdOpen,
-	"bar":    cmdBar,
+	"key":     cmdKey,
+	"thread":  cmdThread,
+	"threads": cmdThreads,
+	"with":    cmdWith,
+	"watch":   cmdWatch,
+	"open":    cmdOpen,
+	"bar":     cmdBar,
 }
 
 var commands = map[string]func([]string) error{
