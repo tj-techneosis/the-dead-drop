@@ -35,8 +35,14 @@ Then in `~/.claude/settings.json`:
 }
 ```
 
-Try it: `echo '{}' | ~/.claude/hooks/unread-mail UserPromptSubmit`
+Try it: `echo '{}' | DEADDROP_HOOK_QUIET=0 ~/.claude/hooks/unread-mail UserPromptSubmit`
 prints the line when there's unread mail, and nothing when there isn't.
+(Without `DEADDROP_HOOK_QUIET=0`, a second try within five minutes is quiet.)
+
+**Upgrading from 0.7.2's copy:** the event is now the command's argument.
+An old setting without it still works on `UserPromptSubmit` (as plain
+text), but add the argument to both entries as above. A helper's session
+(`$DEADDROP_FOR`) is told its own pigeonhole's count.
 
 It reads counts with `deaddrop status`, which is quick over a reused ssh
 connection. With the store on another machine, each check is one round trip.

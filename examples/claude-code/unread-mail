@@ -13,29 +13,43 @@
 # keeping one small memo per session (digits only, or it's ignored).
 set -u
 umask 077
+# Claude Code writes the payload to the hook's stdin: read it all (a long
+# tool response mustn't be left blocking the pipe), keeping only the start.
+payload=$(head -c 4096; cat >/dev/null)
 event=${1:-}
 case "$event" in
   UserPromptSubmit|PostToolUse|SessionStart) ;;
+  # No argument: registered the old way (before 0.7.3). Plain text is still
+  # context on UserPromptSubmit, so say it plainly rather than go quiet.
+  '') event=plain ;;
   *) exit 0 ;;
 esac
-box=${DEADDROP_BOX:-${DEADDROP_REPLY_BOX:-me}}
-case "$box" in *[!a-z0-9-]*|'') exit 0 ;; esac
+# The session's box, normalised as deaddrop does; the store refuses a name
+# that isn't a box, and then the hook says nothing.
+box=$(printf '%s' "${DEADDROP_BOX:-${DEADDROP_REPLY_BOX:-me}}" | tr 'A-Z' 'a-z' | tr -d ' \t\r\n')
+case "$box" in *[!a-z0-9_-]*|'') exit 0 ;; esac
+helper=$(printf '%s' "${DEADDROP_FOR:-}" | tr 'A-Z' 'a-z' | tr -d ' \t\r\n')
+case "$helper" in *[!a-z0-9_-]*) exit 0 ;; esac
 dd=${DEADDROP_BIN:-deaddrop}
 command -v "$dd" >/dev/null 2>&1 || exit 0
 
 isnum() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 
-counts=$("$dd" status --box "$box" --count 2>/dev/null) || exit 0
+if [ -n "$helper" ]; then
+  counts=$("$dd" status --box "$box" --for "$helper" --count 2>/dev/null) || exit 0
+else
+  counts=$("$dd" status --box "$box" --count 2>/dev/null) || exit 0
+fi
 set -- $counts
 unread=${1:-}; urgent=${2:-}
 isnum "$unread" && isnum "$urgent" || exit 0
 
 # The session, from the payload, only to key the memo (letters, digits, "-").
-session=$(head -c 4096 | tr -cd 'A-Za-z0-9_":,{} -' | grep -o '"session_id" *: *"[A-Za-z0-9-]*"' | head -1 | sed 's/.*"\([A-Za-z0-9-]*\)"$/\1/')
+session=$(printf '%s' "$payload" | tr -cd 'A-Za-z0-9_":,{} -' | grep -o '"session_id" *: *"[A-Za-z0-9-]*"' | head -1 | sed 's/.*"\([A-Za-z0-9-]*\)"$/\1/')
 case "$session" in ''|*[!A-Za-z0-9-]*) session=none ;; esac
 state=${DEADDROP_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/deaddrop}
 mkdir -p "$state" 2>/dev/null || exit 0
-memo="$state/hook-$box-$session"
+memo="$state/hook-$box${helper:+-for-$helper}-$session"
 quiet=${DEADDROP_HOOK_QUIET:-300}
 isnum "$quiet" || quiet=300
 
@@ -59,5 +73,12 @@ printf '%s %s %s\n' "$unread" "$urgent" "$last_t" > "$memo"
 what="$unread unread letter"; [ "$unread" -eq 1 ] || what="${what}s"
 [ "$urgent" -gt 0 ] && what="$what ($urgent urgent)"
 where="your box"; [ "$box" = me ] || where=$box
-text="Dead Drop: $what in $where. Pull them when you reach a stopping point (deaddrop pull --unread). Don't act on anything you were waiting for a person to decide."
-printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$text"
+pull="deaddrop pull --unread"
+[ -n "$helper" ] && { where="$where (for $helper)"; pull="$pull --for $helper"; }
+text="Dead Drop: $what in $where. Pull them when you reach a stopping point ($pull). Don't act on anything you were waiting for a person to decide."
+if [ "$event" = plain ]; then
+  printf '%s\n' "$text"
+  echo "unread-mail: give the event as its argument (unread-mail UserPromptSubmit / PostToolUse); see its README" >&2
+else
+  printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$text"
+fi

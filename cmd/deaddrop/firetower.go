@@ -117,7 +117,7 @@ func cmdFiretower(args []string) error {
 			// By what's unheard: mail that's arrived since anyone last read
 			// the box. Readers who pull and don't mark stay clear; a box
 			// nobody reads goes to fire on its own.
-			unheard, waited := unheardWait(dir, box)
+			unheard, waited := unheardWait(dir, box, false)
 			switch {
 			case s.Urgent > 0:
 				// Urgent is fire either way; the line still says how
@@ -127,7 +127,13 @@ func cmdFiretower(args []string) error {
 			case fireAfter > 0 && waited >= fireAfter:
 				status = "red"
 			}
-			redByAge = fireAfter > 0 && unheard > 0 && waited >= fireAfter
+			// Red by age from the letters that aren't urgent: an old urgent
+			// letter is ring_urgent's, already rung.
+			if fireAfter > 0 {
+				if n, w := unheardWait(dir, box, true); n > 0 && w >= fireAfter {
+					redByAge = true
+				}
+			}
 			if unheard > 0 {
 				msg += fmt.Sprintf(", %d unheard, the oldest %s", unheard, spanWords(waited))
 			}
@@ -145,8 +151,10 @@ func cmdFiretower(args []string) error {
 		out, err := exec.Command(tower, a...).CombinedOutput()
 		if err != nil {
 			failed = append(failed, box+": "+strings.TrimSpace(string(out)))
-			if wasOnFire[box] {
-				onFire[box] = true // not reported, so not known to be out
+			if wasOnFire[box] || (firstRing && status == "red") {
+				// Not reported, so not known to be out; and on the first run a
+				// fire is noted whether or not the board took it.
+				onFire[box] = true
 			}
 			continue
 		}
@@ -173,10 +181,14 @@ func cmdFiretower(args []string) error {
 		fmt.Printf("mail/%s/inbox  %s  %s\n", box, status, msg)
 	}
 	if f.has("ring") {
-		// Boxes not reported this run (--box named others) keep their mark.
-		for b := range wasOnFire {
-			if !contains(list, b) {
-				onFire[b] = true
+		// Boxes not reported this run because --box named others keep their
+		// mark. Without --box every box was reported, so a mark for a box
+		// that's gone goes with it (a new box of that name rings afresh).
+		if f.has("box") {
+			for b := range wasOnFire {
+				if !contains(list, b) {
+					onFire[b] = true
+				}
 			}
 		}
 		if err := writeFireList(onFire); err != nil {
@@ -251,14 +263,23 @@ func ringFire(box, line string) error {
 // the earlier of the store's time for its file and the date it gives
 // itself: a letter can make itself look older (louder on the board), never
 // fresher (hidden).
-func unheardWait(dir, box string) (int, time.Duration) {
+func unheardWait(dir, box string, skipUrgent bool) (int, time.Duration) {
 	at, heard := now(), heardAt(dir, box, "")
 	n := 0
 	var most time.Duration
 	for _, m := range loadBox(dir, box, []string{"unread"}, false) {
+		if skipUrgent && m.Urgency == urgent {
+			continue
+		}
 		arrived := m.Sent
-		if info, err := os.Stat(m.path); err == nil && (arrived.IsZero() || info.ModTime().Before(arrived)) {
-			arrived = info.ModTime()
+		if info, err := os.Stat(m.path); err == nil {
+			mt := info.ModTime()
+			// No date, a date later than the file, or one from before this
+			// tool existed (1970 would read as a wait of centuries): the
+			// store's own time for the file.
+			if arrived.IsZero() || mt.Before(arrived) || arrived.Year() < 2000 {
+				arrived = mt
+			}
 		}
 		if !arrived.After(heard) {
 			continue

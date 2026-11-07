@@ -1403,13 +1403,13 @@ func countFiles(dir string) int {
 }
 
 func cmdStatus(args []string) error {
-	const u = "status [--box WHO]... [--json] | status --box WHO --count"
-	f, err := parseFlags(args, map[string]bool{"json": false, "box": true, "count": false})
+	const u = "status [--box WHO]... [--json] | status --box WHO [--for HELPER] --count"
+	f, err := parseFlags(args, map[string]bool{"json": false, "box": true, "count": false, "for": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) > 0 {
-		return badf(u, "status takes --box and --json, nothing else")
+		return badf(u, "status takes --box, --json, --count and --for, nothing else")
 	}
 	dir, err := storeDir()
 	if err != nil {
@@ -1442,6 +1442,22 @@ func cmdStatus(args []string) error {
 	if f.has("count") {
 		if !f.has("box") || len(out) != 1 {
 			return badf(u, "--count: one --box")
+		}
+		if f.has("for") {
+			// A helper's own pigeonhole, which is what its session reads.
+			helper, all, err := pigeonholeOf(f)
+			if err != nil || all {
+				return badf(u, "--count --for: one helper")
+			}
+			unread, urgentN := 0, 0
+			for _, m := range loadSlot(dir, out[0].Box, helper, []string{"unread"}, false) {
+				unread++
+				if m.Urgency == urgent {
+					urgentN++
+				}
+			}
+			fmt.Printf("%d %d\n", unread, urgentN)
+			return nil
 		}
 		fmt.Printf("%d %d\n", out[0].Unread, out[0].Urgent)
 		return nil

@@ -116,6 +116,15 @@ class Firetower(DeadDrop):
         self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")
         self.assertEqual(len(self.rings()), 1)
 
+    def test_an_old_urgent_letter_isnt_rung_again_with_ring_urgent(self):
+        self.config.write_text("ring_urgent = true\n")
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring", ok=None)  # first run
+        self.send("a\n", "--to", "bob", "--urgent")
+        before = len(self.rings())
+        self.clock = at(300)
+        self.dd("firetower", "--box", "bob", "--fire-after", "3h", "--ring")
+        self.assertEqual(len(self.rings()), before)  # ring_urgent rang it as it came
+
     def test_a_broken_fire_list_is_said_not_rung_from(self):
         self.send("a\n", "--to", "bob")
         self.dd("firetower", "--box", "bob", "--ring")
