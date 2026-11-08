@@ -285,22 +285,24 @@ class Watch(DeadDrop):
         self.addCleanup(side.close)
         self.addCleanup(folder.close)
         fcntl.flock(side, fcntl.LOCK_EX)
-        fcntl.flock(folder, fcntl.LOCK_EX)  # what 0.7.9's watches held
         p = subprocess.run([BIN, "watch"], env=self.env(), capture_output=True, text=True, timeout=10)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.inbox_file()["unread"], 1)
-        # Its own box's lock it does wait for.
+        # Its own box's lock it waits for; and the folder's, for its writes,
+        # so a watch from before 0.7.10 (which holds only that) never writes
+        # the same files at once.
         own = open(self.state / "inbox.json.lock", "w")
         self.addCleanup(own.close)
-        fcntl.flock(own, fcntl.LOCK_EX)
-        w = subprocess.Popen([BIN, "watch"], env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            time.sleep(1)
-            self.assertIsNone(w.poll())
-        finally:
-            fcntl.flock(own, fcntl.LOCK_UN)
-            w.communicate(timeout=10)
-        self.assertEqual(w.returncode, 0)
+        for held in (own, folder):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            w = subprocess.Popen([BIN, "watch"], env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                time.sleep(1)
+                self.assertIsNone(w.poll())
+            finally:
+                fcntl.flock(held, fcntl.LOCK_UN)
+                w.communicate(timeout=10)
+            self.assertEqual(w.returncode, 0)
 
     def test_a_box_named_in_capitals_ME_is_me(self):
         self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")

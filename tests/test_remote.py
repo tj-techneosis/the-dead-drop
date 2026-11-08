@@ -657,6 +657,25 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner, *gate_args], input=input,
                               capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
 
+    def test_file_behind_the_gate_hands_over_as_stored(self):
+        # Like every other read behind the gate: the key holder's own
+        # deaddrop checks the signature; the store neither judges nor keeps
+        # a ledger on its behalf.
+        att = self.tmp / "notes.txt"
+        att.write_text("the attached bytes\n")
+        id = self.dd("send", "--to", "alice", "--attach", str(att), input="# With a file\n\nx\n",
+                     DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout, "the attached bytes\n")
+        self.assertNotIn("isn't signed", p.stderr)  # the store didn't judge it
+        # Still the file that was sent: a changed one isn't handed over.
+        stored = next(self.far_store.rglob("notes.txt"))
+        stored.write_text("changed\n")
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("isn't the file that was sent", p.stderr)
+
     def test_a_typed_line_may_have_extra_spaces(self):
         # A person at a shell types two spaces now and then; a shell reads
         # them as one, and so does the gate.

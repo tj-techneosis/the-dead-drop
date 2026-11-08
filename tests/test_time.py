@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 
-from _binary import BIN, DeadDrop, at
+from _binary import BIN, DeadDrop, at, script
 
 
 class Firetower(DeadDrop):
@@ -403,7 +403,8 @@ class Ring(DeadDrop):
         self.assertIn("not rung: alice has rung bob 4 times in the last hour", p.stderr)
         self.assertEqual(len(self.calls(self.cron_calls)), 4)
         self.assertIn("urgent", self.dd("inbox", "bob", DEADDROP_NOW=at(5)).stdout)
-        self.assertIn("not rung", (self.dir / "gate.log").read_text())
+        self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(5))
+        self.assertEqual((self.dir / "gate.log").read_text().count("rings held"), 1)  # one line an hour, not one a letter
         # Another box, or another sender, still rings; so does alice, an hour on.
         self.send("x\n", "--to", "carol", "--urgent", DEADDROP_NOW=at(6))
         self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(6), DEADDROP_FROM="dave")
@@ -418,6 +419,24 @@ class Ring(DeadDrop):
         p = self.dd("send", "--to", "late", "--urgent", input="x\n", DEADDROP_NOW=at(1))
         self.assertIn("alice has rung 32 times in the last hour", p.stderr)
         self.assertEqual(len(self.calls(self.cron_calls)), 32)
+
+    def test_a_ring_that_fails_doesnt_spend_the_cap(self):
+        self.config.write_text("ring_urgent = true\n")
+        broken = script(self.tmp / "broken-cron", "exit 1\n")
+        for i in range(5):
+            self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(i), DEADDROP_CRONTINENTAL=str(broken))
+        self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(6),
+                DEADDROP_CRONTINENTAL=str(self.tmp / "no-such-cron"))
+        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(7))
+        self.assertEqual(len(self.calls(self.cron_calls)), 1)  # rung: nothing before it went out
+
+    def test_automation_isnt_capped(self):
+        # Only the store login's own jobs send as automation; one job's
+        # urgent mail mustn't hold another's ring.
+        self.config.write_text("ring_urgent = true\n")
+        for i in range(6):
+            self.send("x\n", "--to", "bob", "--urgent", "--from", "automation", DEADDROP_NOW=at(i))
+        self.assertEqual(len(self.calls(self.cron_calls)), 6)
 
     def test_a_raised_follow_up_rings(self):
         self.config.write_text("ring_urgent = true\n")

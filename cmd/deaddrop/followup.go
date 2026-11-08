@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -199,15 +198,20 @@ func ring(box string, m *Message) {
 	if err != nil || !c.RingUrgent {
 		return
 	}
-	if ok, why := ringAllowed(m.From, box); !ok {
-		// The letter is still urgent and on the board: only the ring is held.
-		fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: %s\n", m.ID, why)
-		gateLog("not rung: %s to %s: %s", m.ID, box, why)
-		return
-	}
 	cron, err := crontinental()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "deaddrop: ring_urgent is on, but "+err.Error())
+		return
+	}
+	// Counted only once there's something to ring with, and given back if
+	// the ring fails: a ring that never went out doesn't spend the cap.
+	ok, why, first, refund := ringAllowed(m.From, box)
+	if !ok {
+		// The letter is still urgent and on the board: only the ring is held.
+		fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: %s\n", m.ID, why)
+		if first {
+			gateLog("rings held: %s to %s: %s (the first this hour; more aren't noted)", m.ID, box, why)
+		}
 		return
 	}
 	text := box + ": urgent mail waiting"
@@ -220,6 +224,7 @@ func ring(box string, m *Message) {
 		a = append(a, "--tag", "deaddrop-for="+m.Pigeonhole) // routed like the pigeonhole's own ring
 	}
 	if out, err := exec.Command(cron, append(a, "--title", "Dead Drop", text)...).CombinedOutput(); err != nil {
+		refund()
 		fmt.Fprintf(os.Stderr, "deaddrop: could not ring: %s\n", strings.TrimSpace(string(out)))
 	}
 }
@@ -227,70 +232,109 @@ func ring(box string, m *Message) {
 // Rings are capped per sender, so no one sender (a gated key's above all)
 // can page whoever reads the store's notify hooks without end: so many an
 // hour to one box, and so many in all. The in-all cap is a send's most
-// copies, so one urgent letter to everyone still rings everyone.
+// copies, so one urgent letter to everyone still rings everyone. Not
+// automation: only the store login's own jobs send as it (a gated key
+// can't), and one job's urgent mail mustn't hold another's ring.
 const (
 	ringsPerBox   = 4
 	ringsInAll    = maxCopies
 	ringsInterval = time.Hour
 )
 
+// ringBook is rings.json: per sender, "box time" for each ring in the last
+// interval, and for each box a held ring was noted for, when.
+type ringBook struct {
+	Rung map[string][]string `json:"rung"`
+	Held map[string][]string `json:"held,omitempty"`
+}
+
 // ringAllowed counts a ring against the sender's caps and says whether it
-// may ring. Kept in rings.json at the store's top, under its own lock. A
-// count that can't be kept rings anyway: the cap is a guard, and urgent mail
-// failing to ring is worse than one ring too many.
-func ringAllowed(from, box string) (bool, string) {
+// may ring; refund takes the count back. first: a held ring is the first
+// held to that box this interval (so gate.log gets one line, not one a
+// letter). Kept in rings.json at the store's top, under its own lock. A
+// count that can't be kept rings anyway: the cap is a guard, and urgent
+// mail failing to ring is worse than one ring too many.
+func ringAllowed(from, box string) (ok bool, why string, first bool, refund func()) {
+	refund = func() {}
+	from = strings.ToLower(from)
+	if from == automation {
+		return true, "", false, refund
+	}
 	dir, err := storeDir()
 	if err != nil {
-		return true, ""
+		return true, "", false, refund
 	}
-	lf, err := os.OpenFile(filepath.Join(dir, ".rings.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	unlock, err := lockFile(filepath.Join(dir, ".rings.lock"))
 	if err != nil {
-		return true, ""
+		return true, "", false, refund
 	}
-	defer lf.Close()
-	if syscall.Flock(int(lf.Fd()), syscall.LOCK_EX) != nil {
-		return true, ""
-	}
-	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	defer unlock()
 	path := filepath.Join(dir, "rings.json")
-	// sender -> "box at time" for each ring in the last interval
-	kept := map[string][]string{}
+	var book ringBook
 	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &kept)
+		json.Unmarshal(b, &book)
 	}
 	t := now()
-	since := t.Add(-ringsInterval)
-	from = strings.ToLower(from)
-	all, toBox := 0, 0
-	for who, rs := range kept {
-		var live []string
-		for _, r := range rs {
-			b, at, ok := strings.Cut(r, " ")
-			when, err := time.Parse(time.RFC3339, at)
-			if !ok || err != nil || !when.After(since) || when.After(t.Add(time.Minute)) {
-				continue
-			}
-			live = append(live, r)
-			if who == from {
-				all++
-				if b == box {
-					toBox++
+	live := func(m map[string][]string) map[string][]string {
+		out := map[string][]string{}
+		for who, rs := range m {
+			for _, r := range rs {
+				_, at, ok := strings.Cut(r, " ")
+				when, err := time.Parse(time.RFC3339, at)
+				if ok && err == nil && when.After(t.Add(-ringsInterval)) && !when.After(t.Add(time.Minute)) {
+					out[who] = append(out[who], r)
 				}
 			}
 		}
-		if len(live) == 0 {
-			delete(kept, who)
-		} else {
-			kept[who] = live
+		return out
+	}
+	book.Rung, book.Held = live(book.Rung), live(book.Held)
+	all, toBox := len(book.Rung[from]), 0
+	for _, r := range book.Rung[from] {
+		if b, _, _ := strings.Cut(r, " "); b == box {
+			toBox++
 		}
 	}
-	if toBox >= ringsPerBox {
-		return false, fmt.Sprintf("%s has rung %s %d times in the last hour", from, box, toBox)
+	stamp := box + " " + t.UTC().Format(time.RFC3339)
+	if toBox >= ringsPerBox || all >= ringsInAll {
+		why = fmt.Sprintf("%s has rung %s %d times in the last hour", from, box, toBox)
+		if toBox < ringsPerBox {
+			why = fmt.Sprintf("%s has rung %d times in the last hour", from, all)
+		}
+		first = true
+		for _, r := range book.Held[from] {
+			if b, _, _ := strings.Cut(r, " "); b == box {
+				first = false
+			}
+		}
+		if first {
+			book.Held[from] = append(book.Held[from], stamp)
+			writeJSONFile(path, &book)
+		}
+		return false, why, first, refund
 	}
-	if all >= ringsInAll {
-		return false, fmt.Sprintf("%s has rung %d times in the last hour", from, all)
+	book.Rung[from] = append(book.Rung[from], stamp)
+	if writeJSONFile(path, &book) != nil {
+		return true, "", false, refund
 	}
-	kept[from] = append(kept[from], box+" "+t.UTC().Format(time.RFC3339))
-	writeJSONFile(path, kept)
-	return true, ""
+	refund = func() {
+		u, err := lockFile(filepath.Join(dir, ".rings.lock"))
+		if err != nil {
+			return
+		}
+		defer u()
+		var b ringBook
+		if raw, err := os.ReadFile(path); err != nil || json.Unmarshal(raw, &b) != nil {
+			return
+		}
+		rs := b.Rung[from]
+		for i := len(rs) - 1; i >= 0; i-- {
+			if rs[i] == stamp {
+				b.Rung[from] = append(rs[:i:i], rs[i+1:]...)
+				writeJSONFile(path, &b)
+				return
+			}
+		}
+	}
+	return true, "", false, refund
 }

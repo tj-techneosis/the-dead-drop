@@ -61,7 +61,9 @@ EOF
   inventing near-duplicates.
 - **Urgency:** normal by default. `--fyi` for things nobody needs to act
   on (most automated reports). `--urgent` only when the person says it's
-  urgent or it blocks someone.
+  urgent or it blocks someone. Where the store rings for urgent mail, rings
+  are capped per sender (4 an hour to a box, 32 in all): past that the letter
+  is still urgent, but `send` says it wasn't rung.
 - **Files:** `--attach FILE` (repeatable) for logs, CSVs, screenshots. The
   reader fetches them with `deaddrop file ID NAME`. Up to 16 files, 64 MB
   each, 256 MB in all; more than that goes in one archive. Each copy stores
@@ -262,9 +264,9 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
-deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--read|--all] [--for H] [--json]
+deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d|TIME] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
+deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < doc.md
+deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
 deaddrop sent [--to WHO]... [--tag T]... [--since 7d] [--box WHO] [--json]
@@ -283,7 +285,7 @@ deaddrop key                             # this machine's line for everyone's al
 deaddrop send ... --ask                  # needs the recipient's decision (question first)
 deaddrop asks [--for H] [--json]         # what's waiting on the person's (or a helper's) decision
 deaddrop open --threads                  # every thread on one page, in the browser
-deaddrop open ID [--for H]               # read it in the browser, mark it read
+deaddrop open ID [--box WHO] [--for H]   # read it in the browser, mark it read
 # --for H: a helper's pigeonhole ('*', on inbox, pull, mark, thread, with, threads and asks:
 # every one; watch, wait, bar and open take one); DEADDROP_FOR sets it for a session
 ```

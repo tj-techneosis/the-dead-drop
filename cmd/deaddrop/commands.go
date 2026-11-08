@@ -1269,6 +1269,16 @@ func handOver(m *Message, name string, data []byte) error {
 	if !contains(m.Attachments, name) {
 		return fmt.Errorf("%s has no attachment %q", m.ID, name)
 	}
+	if gateRead != nil {
+		// Behind the gate the bytes go as stored, like every other read: the
+		// key holder's own deaddrop checks who signed them, against its own
+		// list, and the store keeps no ledger on its behalf.
+		if err := checkAttachment(m, name, data); err != nil {
+			return err
+		}
+		_, err := os.Stdout.Write(data)
+		return err
+	}
 	verify(m)
 	if err := checkAttachment(m, name, data); err != nil {
 		return err

@@ -682,9 +682,13 @@ default, and like the board it names only the box, unless the box is in
 Rings are capped per sender, so no one sender (a gated key's above all) can
 page whoever reads those hooks without end: 4 an hour to any one box, and 32
 an hour in all (a send's most copies, so one urgent letter to everyone still
-rings everyone). A letter past the cap is still urgent and still on the
-board; only its ring is held, said to the sender and noted in the store's
-`gate.log`. The counts are kept in `rings.json` at the store's top.
+rings everyone). Only rings that went out count. `automation` isn't capped:
+only the store login's own jobs send as it (a gated key can't), and one
+runaway job mustn't hold another's alarm. A letter past the cap is still
+urgent and still on the board; only its ring is held. On a send the sender is
+told; a held ring from a raised follow-up shows only in that job's output.
+The first held ring to a box in an hour is noted in the store's `gate.log`.
+The counts are kept in `rings.json` at the store's top.
 
 ## Reports of your own
 
@@ -704,7 +708,7 @@ What gets reported, and when, belongs to whoever books it.
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
               [--reply-box BOX] [--ask] < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
+deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--for H] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
@@ -718,7 +722,7 @@ deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--f
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]
-deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--box WHO] [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
 deaddrop asks [--for H] [--json]

@@ -165,7 +165,8 @@ func lockState() (func(), error) { return lockFile(filepath.Join(stateDir(), ".l
 
 // lockInbox holds one inbox file (one box, one pigeonhole) for a watch pass,
 // fetch included: a watch on a side box, waiting on a slow store, never holds
-// up the caller's own watch or another box's.
+// up the caller's own watch or another box's. The folder's lock (lockState)
+// is taken too, but only for the writes after the fetch.
 func lockInbox() (func(), error) { return lockFile(inboxPath() + ".lock") }
 
 func lockFile(path string) (func(), error) {
@@ -214,7 +215,6 @@ func watchPass(hooks bool) (passResult, error) {
 	}()
 
 	at := now().UTC()
-	prev := readInbox()
 	// The box is always named: the caller's own included, so a session's
 	// default box (DEADDROP_BOX) never fills the person's own file.
 	fetch := []string{"inbox", box, "--read", "--json"}
@@ -222,6 +222,16 @@ func watchPass(hooks bool) (passResult, error) {
 		fetch = append(fetch, "--for", watchFor)
 	}
 	out, ferr := self(fetch...)
+	// The writes also take the state folder's lock, briefly and only after
+	// the fetch: a watch from before 0.7.10, which takes only that lock,
+	// never writes the same files at once (as during an upgrade).
+	unlockBox := unlock
+	unlockFolder, err := lockState()
+	if err != nil {
+		return r, err
+	}
+	unlock = func() { unlockFolder(); unlockBox() }
+	prev := readInbox()
 	var ms []Message
 	if ferr == nil {
 		if err := json.Unmarshal(out, &ms); err != nil {
