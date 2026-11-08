@@ -405,9 +405,10 @@ Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
 special. The gate reads the command line remote mode sends (sshd hands it over
 as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 
-- it's exactly the shape remote mode writes (single-quoted words), or a plain
-  `deaddrop <command> <words>` a person types, with nothing a shell would
-  read, so a shell, `scp`, `sftp` or a pipe gets nothing;
+- it's exactly the shape remote mode writes (single-quoted words, one space
+  apart), or a plain `deaddrop <command> <words>` a person types (spaces
+  between words however many), with nothing a shell would read, so a shell,
+  `scp`, `sftp` or a pipe gets nothing;
 - reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
   mode always asks), so the store doesn't check signatures or keep a ledger
   on the key's behalf; files come only as remote mode sends them
@@ -425,9 +426,18 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   Where the store and its config are is the owner's to say in the line
   itself (`--dir /srv/drop --config /srv/drop/config.toml`), or else their
   usual place in the account's home. What goes wrong that the key holder
-  isn't told (a broken config) goes in `gate.log` at the store's top;
-- `file` and `reply` check signatures on the store, against the store's own
-  list (they record nothing outside the key's boxes).
+  isn't told (a broken config, notify's output, an error naming the store's
+  folder, which the key sees as `<store>`) goes in `gate.log` at the store's
+  top: a line like one already written that hour (ids aside) isn't written
+  again, each key adds at most 20 lines in its hour (from its first line), a
+  line is cut at 300 bytes, what's held back is counted and said by
+  the next line logged after the hour, and the log rolls over to
+  `gate.log.1` at 1 MB. `--dir` and `--config` are full
+  paths written plainly (no `//`, `/./`, `..` or trailing `/`);
+- `file` hands an attachment over as stored (checked against the sum it was
+  sent with), and the key holder's own deaddrop checks who signed it;
+  `reply` checks the original's signature on the store, against the store's
+  own list (it records nothing outside the key's boxes).
 
 Every send and reply has the same limits behind the gate as anywhere: a
 document of 8 MB, 16 attachments of 64 MB each and 256 MB in all, 32 copies
@@ -625,7 +635,7 @@ once it's waited that long. Every lookout is tagged `mail`.
 
 With `--ring`, a box that's just gone to fire also runs `crontinental notify
 --urgent` on the store's machine, once per fire (not every run), tagged
-`deaddrop-box=<box>` so that machine's notify hooks can send it to whoever
+`deaddrop_box=<box>` so that machine's notify hooks can send it to whoever
 minds that box. It says what the board says: counts, unless the box is in
 `board_detail`. The first `--ring` run notes what's already on fire and
 rings nothing; a ring that fails is said (the run exits non-zero) and tried
@@ -635,7 +645,7 @@ isn't rung again: `ring_urgent` already rang it as it arrived.
 The board counts a box's own mail. With `--pigeonholes`, each helper's
 pigeonhole in it gets a lookout of its own too, `mail/<box>/for/<helper>`,
 by the same rules, heard when that pigeonhole is read (`pull --for
-<helper>`), and rung (with `--ring`) tagged `deaddrop-for=<helper>` as well.
+<helper>`), and rung (with `--ring`) tagged `deaddrop_for=<helper>` as well.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -678,6 +688,24 @@ mail, which rings whatever notify hooks are set up there. It's off by
 default, and like the board it names only the box, unless the box is in
 `board_detail`: then it says who the message is from and its subject too.
 
+Rings are capped per sender, so no one sender (a gated key's above all) can
+page whoever reads those hooks without end: 4 an hour to any one box, and 32
+an hour in all (a send's most copies, so one urgent letter to everyone still
+rings everyone). Only rings that went out count. `automation` isn't capped:
+only the store login's own jobs send as it (a gated key can't), and one
+runaway job mustn't hold another's alarm. A letter past the cap is still
+urgent and still on the board; only its ring is held. On a send the sender is
+told; a held ring from a raised follow-up shows only in that job's output.
+The first held ring to a box in an hour (and the first held by the in-all
+cap) is noted in the store's `gate.log`. A ring that failed doesn't count.
+Behind the gate a key past its cap is told only that the ring was held, not
+its count. A raised follow-up's ring is the store's own job, so it counts in a
+bucket of its own (the same caps again, per sender), never against what the
+sender's next send may ring: one sender's letters can ring a box at most 8
+times an hour, 4 as sent and 4 as followed up.
+The counts are kept in
+`rings.json` at the store's top.
+
 ## Reports of your own
 
 The Dead Drop has no report feature. A report is any job that ends in
@@ -696,7 +724,7 @@ What gets reported, and when, belongs to whoever books it.
 deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
               [--reply-box BOX] [--ask] < body.md
-deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
+deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since …] [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since …] [--unread|--all] [--for H] [--json]
 deaddrop show ID [--json|--html [--fragment]] [--box WHO] [--for H]
@@ -710,7 +738,7 @@ deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--f
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]
-deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--for H]
+deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--box WHO] [--for H]
 deaddrop thread ID [--for H] [--json|--html]
 deaddrop threads [--for H] [--since …] [--limit N] [--letters [--bodies]] [--json|--html]
 deaddrop asks [--for H] [--json]

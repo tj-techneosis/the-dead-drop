@@ -199,7 +199,11 @@ func loadSlot(dir, box, helper string, states []string, withBody bool) []*Messag
 			m, err := readMessage(path, withBody)
 			if err != nil {
 				if !errors.Is(err, os.ErrNotExist) {
-					fmt.Fprintf(os.Stderr, "deaddrop: skipping %s: %v\n", path, err)
+					if gateRead != nil {
+						gateLog("skipping %s: %v", path, err) // the owner's to see
+					} else {
+						fmt.Fprintf(os.Stderr, "deaddrop: skipping %s: %v\n", path, err)
+					}
 				}
 				continue
 			}

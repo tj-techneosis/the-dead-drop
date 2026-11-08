@@ -286,15 +286,15 @@ func writeFireList(on map[string]bool) error {
 }
 
 // ringFire rings for a box that's gone to fire: the box and the board's own
-// line (counts, unless the box is in board_detail), tagged deaddrop-box=<box>.
+// line (counts, unless the box is in board_detail), tagged deaddrop_box=<box>.
 func ringFire(box, helper, line string) error {
 	cron, err := crontinental()
 	if err != nil {
 		return err
 	}
-	a := []string{"notify", "--urgent", "--tag", "deaddrop-box=" + box, "--title", "Dead Drop: " + box}
+	a := []string{"notify", "--urgent", "--tag", "deaddrop_box=" + box, "--title", "Dead Drop: " + box}
 	if helper != "" {
-		a = []string{"notify", "--urgent", "--tag", "deaddrop-box=" + box, "--tag", "deaddrop-for=" + helper, "--title", "Dead Drop: " + box + " (for " + helper + ")"}
+		a = []string{"notify", "--urgent", "--tag", "deaddrop_box=" + box, "--tag", "deaddrop_for=" + helper, "--title", "Dead Drop: " + box + " (for " + helper + ")"}
 	}
 	if out, err := exec.Command(cron, append(a, line)...).CombinedOutput(); err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {

@@ -262,6 +262,53 @@ class Watch(DeadDrop):
         self.dd("open", id2, DEADDROP_OPENER=str(broken), ok=False)
         self.assertEqual(self.files("alice", "new"), [id2])  # not shown, so not read
 
+    def test_open_box_me_is_my_own_box_with_a_side_box_set(self):
+        # A session with a side box (DEADDROP_BOX) opening its person's own
+        # letter: --box me is theirs, not the side box.
+        opened = self.tmp / "opened"
+        opener = script(self.tmp / "opener", f'cp "$1" "{opened}"\n')
+        id = self.send("# Mine\n\nfor alice\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.send("# Side\n\nx\n", "--to", "side", DEADDROP_FROM="bob")
+        for me in ("me", "ME"):
+            self.dd("open", id, "--box", me, "--keep-unread", DEADDROP_OPENER=str(opener), DEADDROP_BOX="side")
+            self.assertIn("for alice", opened.read_text())
+            opened.unlink()
+
+    def test_a_watch_holds_only_its_own_boxs_lock(self):
+        # A watch on a side box waiting on a slow store holds that box's lock
+        # across its fetch; the caller's own watch mustn't wait behind it.
+        import fcntl
+        self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.state.mkdir(parents=True, exist_ok=True)
+        side = open(self.state / "inbox@side.json.lock", "w")
+        folder = open(self.state / ".lock", "w")
+        self.addCleanup(side.close)
+        self.addCleanup(folder.close)
+        fcntl.flock(side, fcntl.LOCK_EX)
+        p = subprocess.run([BIN, "watch"], env=self.env(), capture_output=True, text=True, timeout=10)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.inbox_file()["unread"], 1)
+        # Its own box's lock it waits for; and the folder's, for its writes,
+        # so a watch from before 0.7.10 (which holds only that) never writes
+        # the same files at once.
+        own = open(self.state / "inbox.json.lock", "w")
+        self.addCleanup(own.close)
+        for held in (own, folder):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            w = subprocess.Popen([BIN, "watch"], env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                time.sleep(1)
+                self.assertIsNone(w.poll())
+            finally:
+                fcntl.flock(held, fcntl.LOCK_UN)
+                w.communicate(timeout=10)
+            self.assertEqual(w.returncode, 0)
+
+    def test_a_box_named_in_capitals_ME_is_me(self):
+        self.send("# Mine\n\nx\n", "--to", "alice", DEADDROP_FROM="bob")
+        self.assertEqual(self.dd("status", "--box", "ME", "--count").stdout.split(), ["1", "0"])
+        self.assertIn("Mine", self.dd("inbox", "ME").stdout)
+
     # ---- bar ----
 
     def test_bar(self):

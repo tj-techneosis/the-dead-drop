@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -26,19 +28,188 @@ import (
 // reading command picks checked against --read. A shell, scp, sftp, a port
 // forward or anything else is refused: there's nothing for them to run.
 
+// gateLogMax bounds gate.log: past it, the log becomes gate.log.1 (one old
+// one kept) and starts again, so nothing a key does can fill the disk with it.
+const gateLogMax = 1 << 20
+
+// gateIDs are message ids in a line: a repeat is the same line with other ids.
+var gateIDs = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d{6}-[a-z][a-z0-9_-]*-[0-9a-f]{4}`)
+
+// gateLogPerKey is how many lines one key may add to gate.log in its hour
+// (from its first line; so at most twice that in any rolling hour). Past it
+// they're counted, and the next line after the hour says how many were held.
+// Each line is cut at gateLogLine. So a key can't wash the owner's history
+// out, whatever words it makes vary: at most ~12 KB an hour.
+const (
+	gateLogPerKey = 20
+	gateLogLine   = 300
+)
+
 // gateLog notes, for the store's owner, what went wrong that a key holder
 // isn't told: one line in gate.log at the store's top (the owner's folder).
+// Under .gate.lock, kept in gate.seen.json:
+//   - a line like one written this hour (the same words, ids aside) isn't
+//     written again; the next line after the hour says how many it stood
+//     for (the count waits in gate.seen.json until something is logged);
+//   - each key adds at most gateLogPerKey lines in its hour, the rest
+//     counted the same way;
+//   - a line is cut at gateLogLine bytes;
+//   - the log rolls over to gate.log.1 at 1 MB.
+//
+// So the book holds at most twice gateLogPerKey kinds per key, and
+// everything in it goes an hour after it came.
 func gateLog(format string, a ...any) {
 	dir, err := storeDir()
-	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+	if err != nil {
+		// A config that can't be read is a thing to log: the usual place.
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share", "deaddrop")
+	}
+	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "gate.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	unlock, err := lockFile(filepath.Join(dir, ".gate.lock"))
 	if err != nil {
 		return
 	}
+	defer unlock()
+	who := gateAs
+	if who == "" {
+		who = "-"
+	}
+	// One line each: a newline or control character in an error (a path,
+	// notify's output) can't start a line of its own.
+	line := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return ' '
+		}
+		return r
+	}, fmt.Sprintf(format, a...))
+	if len(line) > gateLogLine {
+		line = strings.ToValidUTF8(line[:gateLogLine], "") + "…(cut)"
+	}
+	kind := who + " " + gateIDs.ReplaceAllString(line, "<id>")
+	t := now().UTC()
+	bookPath := filepath.Join(dir, "gate.seen.json")
+	var book gateBook
+	if b, err := os.ReadFile(bookPath); err == nil {
+		json.Unmarshal(b, &book)
+	}
+	if book.Kinds == nil {
+		// An early 0.7.10 build's book: a flat map of kinds. Its counts
+		// carry over.
+		book.Kinds = map[string]gateSeen{}
+		if b, err := os.ReadFile(bookPath); err == nil {
+			var flat map[string]gateSeen
+			if json.Unmarshal(b, &flat) == nil {
+				for k, v := range flat {
+					if k != "kinds" && k != "keys" {
+						book.Kinds[k] = v
+					}
+				}
+			}
+		}
+	}
+	if book.Keys == nil {
+		book.Keys = map[string]gateSeen{}
+	}
+	stale := func(v gateSeen) bool { return t.Sub(v.First) > time.Hour || v.First.After(t.Add(time.Minute)) }
+	// What the hour before held back, said now, before it's forgotten.
+	// Kept aside, so a write that fails forgets nothing.
+	var out []string
+	oldKinds, oldKeys := map[string]gateSeen{}, map[string]gateSeen{}
+	for k, v := range book.Kinds {
+		if stale(v) {
+			if v.More > 0 {
+				out = append(out, fmt.Sprintf("(%d more like this in the hour before: %s)", v.More, k))
+			}
+			oldKinds[k] = v
+			delete(book.Kinds, k)
+		}
+	}
+	for k, v := range book.Keys {
+		if stale(v) {
+			if v.More > 0 {
+				out = append(out, fmt.Sprintf("(%d more lines from %s held in the hour before)", v.More, k))
+			}
+			oldKeys[k] = v
+			delete(book.Keys, k)
+		}
+	}
+	sort.Strings(out)
+	budget, have := book.Keys[who]
+	if !have {
+		budget = gateSeen{First: t}
+	}
+	written := false
+	switch v, ok := book.Kinds[kind]; {
+	case ok:
+		v.More++
+		book.Kinds[kind] = v
+	case budget.Lines >= gateLogPerKey:
+		budget.More++
+	default:
+		out = append(out, line)
+		written = true
+	}
+	if len(out) > 0 && !gateAppend(dir, t, out) {
+		// Nothing went in (one write): the hour before's counts stay to be
+		// said, and this line, if it was to be written, is counted as held.
+		for k, v := range oldKinds {
+			book.Kinds[k] = v
+		}
+		for k, v := range oldKeys {
+			if k != who {
+				book.Keys[k] = v
+			} else {
+				budget.More += v.More // said with this hour's, later
+			}
+		}
+		if written {
+			budget.More++
+		}
+	} else if written {
+		budget.Lines++
+		book.Kinds[kind] = gateSeen{First: t}
+	}
+	book.Keys[who] = budget
+	writeJSONFile(bookPath, &book)
+}
+
+// gateAppend adds lines to gate.log, rolling it over at 1 MB (under the
+// caller's .gate.lock), and says whether they went in.
+func gateAppend(dir string, t time.Time, lines []string) bool {
+	path := filepath.Join(dir, "gate.log")
+	if st, err := os.Stat(path); err == nil && st.Size() >= gateLogMax {
+		os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", now().UTC().Format(time.RFC3339), fmt.Sprintf(format, a...))
+	// One write, so it goes in whole or not at all (as near as a file
+	// allows).
+	var b strings.Builder
+	for _, l := range lines {
+		fmt.Fprintf(&b, "%s %s\n", t.Format(time.RFC3339), l)
+	}
+	_, err = f.WriteString(b.String())
+	return err == nil
+}
+
+// gateSeen is a kind of line, or a key's budget: since when, how many were
+// written (a budget's), and how many held back since.
+type gateSeen struct {
+	First time.Time `json:"first"`
+	Lines int       `json:"lines,omitempty"`
+	More  int       `json:"more,omitempty"`
+}
+
+// gateBook is gate.seen.json.
+type gateBook struct {
+	Kinds map[string]gateSeen `json:"kinds"`
+	Keys  map[string]gateSeen `json:"keys"`
 }
 
 // gateRead is the boxes a gated caller may read: nil when not gated.
@@ -97,8 +268,8 @@ func cmdGate(args []string) error {
 		}
 	}
 	for _, k := range []string{"dir", "config"} {
-		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k))) {
-			return badf(u, "--%s: one full path", k)
+		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k)) || filepath.Clean(f.get(k)) != f.get(k)) {
+			return badf(u, "--%s: one full path, written plainly (no //, /./, .. or trailing /)", k)
 		}
 	}
 	// Nothing from the environment sshd built (AcceptEnv, environment= in
@@ -139,6 +310,14 @@ func cmdGate(args []string) error {
 	} else if c.Host != "" {
 		return refused("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
 	}
+	// The store by its full path from here on, so every path an error
+	// carries is spelled the way gateClean looks for it (a config's dir may
+	// be relative).
+	if d, err := storeDir(); err == nil {
+		if abs, err := filepath.Abs(d); err == nil {
+			os.Setenv("DEADDROP_DIR", abs)
+		}
+	}
 	line, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND")
 	if !ok {
 		return refused("this key is for the Dead Drop's remote mode only: set host on your machine and run deaddrop there")
@@ -150,11 +329,11 @@ func cmdGate(args []string) error {
 	if len(words) == 0 {
 		return refused("this key runs one deaddrop command: say which (send, inbox, pull, …)")
 	}
+	if words[0] == "" {
+		return refused("this key runs one deaddrop command, and '' isn't one: say which (send, inbox, pull, …)")
+	}
 	if !gateCommands[words[0]] {
-		what := "nothing"
-		if len(words) > 0 {
-			what = cleanLine(words[0], 40)
-		}
+		what := cleanLine(words[0], 40)
 		return refused("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
 	}
 	cmd, rest := words[0], words[1:]
@@ -167,7 +346,41 @@ func cmdGate(args []string) error {
 	os.Setenv("DEADDROP_FROM", as)
 	os.Setenv("DEADDROP_HOPS", fmt.Sprint(max(hops, 1)))
 	gateAs, gateRead = as, read
-	return dispatch(cmd, rest)
+	return gateClean(dispatch(cmd, rest))
+}
+
+// gateClean keeps where the store lives from a key holder: an error naming
+// the store's folder or the account's home goes to gate.log whole, and to
+// the key with those parts as <store> and ~. Its exit code stays.
+func gateClean(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	clean := msg
+	// As errors spell it: filepath.Join cleans, so the pattern is clean
+	// and absolute too (a relative one would match any word).
+	if dir, derr := storeDir(); derr == nil && dir != "" {
+		if abs, aerr := filepath.Abs(dir); aerr == nil && abs != "/" {
+			clean = strings.ReplaceAll(clean, abs, "<store>")
+		}
+	}
+	if home, herr := os.UserHomeDir(); herr == nil && len(home) > 1 {
+		clean = strings.ReplaceAll(clean, home, "~")
+	}
+	if clean == msg {
+		return err
+	}
+	gateLog("%s", msg)
+	var ee exitError
+	if errors.As(err, &ee) {
+		return exitError{ee.code, clean}
+	}
+	var ue usageError
+	if errors.As(err, &ue) {
+		return err // usage text names no paths
+	}
+	return errors.New(clean)
 }
 
 // gateCheck is what a gated command line may not say, beyond the boxes
@@ -212,7 +425,7 @@ func gateWords(line string) ([]string, int, error) {
 	if len(line) > 64*1024 {
 		return nil, 0, fmt.Errorf("a command line that long isn't one")
 	}
-	rest, hops := line, 0
+	rest, hops, typed := line, 0, false
 	if m := gatePrefix.FindStringSubmatch(rest); m != nil {
 		rest = rest[len(m[0]):]
 		n, err := strconv.Atoi(m[1])
@@ -220,10 +433,13 @@ func gateWords(line string) ([]string, int, error) {
 			return nil, 0, fmt.Errorf("a hop count that isn't one")
 		}
 		hops = n
-	} else if rest == "deaddrop" {
+	} else if strings.TrimRight(rest, " ") == "deaddrop" {
 		return nil, 0, nil
 	} else if strings.HasPrefix(rest, "deaddrop ") {
-		rest = strings.TrimPrefix(rest, "deaddrop ")
+		// A line a person typed: spaces between words are spaces, however
+		// many (a shell would read them so). Remote mode's own line is
+		// held to the one space it writes.
+		rest, typed = strings.Trim(strings.TrimPrefix(rest, "deaddrop "), " "), true
 	} else {
 		return nil, 0, fmt.Errorf("not a deaddrop command")
 	}
@@ -249,6 +465,9 @@ func gateWords(line string) ([]string, int, error) {
 			return nil, 0, fmt.Errorf("characters a shell would read")
 		}
 		rest = rest[1:]
+		if typed {
+			rest = strings.TrimLeft(rest, " ")
+		}
 	}
 	for _, w := range words {
 		if strings.ContainsRune(w, 0) {

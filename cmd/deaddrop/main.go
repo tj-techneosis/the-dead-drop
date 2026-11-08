@@ -19,7 +19,7 @@ Leave something:
   deaddrop send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi]
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
                 [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] [--ask] < body.md
-  deaddrop reply ID [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
+  deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
                 [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
 
 Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
@@ -35,13 +35,13 @@ Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
 On your own machine:
   deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   keep the inbox file current, run new.d hooks
   deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]   block until mail not yet reported, then print a line per letter
-  deaddrop open ID [--keep-unread] [--for H]   read one in the browser, and mark it read
+  deaddrop open ID [--keep-unread] [--box WHO] [--for H]   read one in the browser, and mark it read
   deaddrop thread ID | with WHO [--tag T]... [--for H] [--json|--html]   both sides, in time order
   deaddrop asks [--for H] [--json]   letters that need your decision, not yet answered
   deaddrop people [--for H] [--json] everyone in your mail, and their personas
   deaddrop threads [--for H] [--since D] [--limit N] [--letters [--bodies]] [--json|--html]
                                    every thread, newest activity first
-  deaddrop open --thread ID | --with WHO | --threads [--for H]   the same, in the browser
+  deaddrop open --thread ID | --with WHO | --threads [--box WHO] [--for H]   the same, in the browser
   deaddrop bar [--format text|swiftbar] [--for H]   the inbox file as a line, or a menu
   deaddrop key                     your line for everyone's allowed_signers
 

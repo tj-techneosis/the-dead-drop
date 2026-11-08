@@ -364,7 +364,15 @@ launchd, systemd and cron.
   send (sending again would only make two).
 - **The ring**, off by default, is `crontinental notify --urgent` when
   urgent mail arrives or a follow-up raises one. Like the board, it names
-  the box and nothing else, unless the box is in `board_detail`.
+  the box and nothing else, unless the box is in `board_detail`. Rings are
+  capped per sender (4 an hour to a box, 32 in all, and as many again for
+  its raised follow-ups, which count apart so a send's fate never says
+  whether a letter was read; not `automation`, which only the store login's
+  own jobs send as), so a key can't page without end: past the cap the letter is still urgent and on the board, only the
+  ring is held, and the owner sees it once an hour in `gate.log`, where
+  each key adds at most 20 lines in its hour, each cut at 300 bytes. A gated
+  key that sets off a failing ring or booking is told only that it failed;
+  notify's output goes to `gate.log`.
 
 ## Reports people set up
 

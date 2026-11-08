@@ -657,6 +657,106 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner, *gate_args], input=input,
                               capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
 
+    def test_file_behind_the_gate_hands_over_as_stored(self):
+        # Like every other read behind the gate: the key holder's own
+        # deaddrop checks the signature; the store neither judges nor keeps
+        # a ledger on its behalf.
+        att = self.tmp / "notes.txt"
+        att.write_text("the attached bytes\n")
+        id = self.dd("send", "--to", "alice", "--attach", str(att), input="# With a file\n\nx\n",
+                     DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout, "the attached bytes\n")
+        self.assertNotIn("isn't signed", p.stderr)  # the store didn't judge it
+        # Still the file that was sent: a changed one isn't handed over.
+        stored = next(self.far_store.rglob("notes.txt"))
+        stored.write_text("changed\n")
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("isn't the file that was sent", p.stderr)
+
+    def test_a_gated_key_isnt_told_the_stores_details(self):
+        # A missing attachment's path is the owner's, in gate.log; the key
+        # gets a word.
+        att = self.tmp / "notes.txt"
+        att.write_text("x\n")
+        id = self.dd("send", "--to", "alice", "--attach", str(att), input="# F\n\nx\n",
+                     DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        next(self.far_store.rglob("notes.txt")).unlink()
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("isn't there to hand over", p.stderr)
+        self.assertNotIn(str(self.far_store), p.stderr)
+        self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
+        # notify's output behind the gate: a Go test (ring_test.go), since the
+        # gate runs the account's own crontinental, never a stand-in.
+
+    def test_a_gated_error_never_names_the_stores_folder(self):
+        # A letter the store can't read, asked for by id: the key is told
+        # it's broken, never where the store keeps it.
+        id = self.far_send("alice", "# Fine\n\nx\n")
+        f = next(self.far_store.rglob(id + ".md"))
+        f.write_text("not a message at all")
+        p = self.gate(f"deaddrop show {id} --raw")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn(str(self.far_store), p.stderr)
+        self.assertNotIn(str(self.far), p.stderr)
+        self.assertIn("<store>", p.stderr)
+        self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
+
+    def test_a_relative_store_in_the_config_is_still_hidden(self):
+        # The gate takes the store by its full path, so errors spell it the
+        # way it's hidden, whatever the config says.
+        id = self.far_send("alice", "# Fine\n\nx\n")
+        next(self.far_store.rglob(id + ".md")).write_text("not a message at all")
+        cfg = self.tmp / "relative.toml"
+        cfg.write_text('dir = "../share/deaddrop"\n')  # from the gate's folder: the same store
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "DEADDROP_NOW": self.clock,
+               "SSH_ORIGINAL_COMMAND": f"deaddrop show {id} --raw"}
+        p = subprocess.run([str(self.far / ".local" / "bin" / "deaddrop"), "gate", "--as", "alice", "--read", "alice",
+                            "--config", str(cfg)], capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn("share/deaddrop", p.stderr)
+        self.assertIn("<store>", p.stderr)
+
+    def test_the_gates_dir_is_written_plainly(self):
+        # Errors spell paths cleaned; a --dir written otherwise wouldn't
+        # match when the gate hides it.
+        for d in (str(self.far_store) + "/", str(self.far_store).replace("/", "//", 1),
+                  str(self.far_store.parent) + "/./" + self.far_store.name):
+            p = self.gate("deaddrop status --box alice --count", gate_args=("--dir", d))
+            self.assertEqual(p.returncode, 2, (d, p.stderr))
+            self.assertIn("written plainly", p.stderr)
+
+    def test_a_typed_line_may_have_extra_spaces(self):
+        # A person at a shell types two spaces now and then; a shell reads
+        # them as one, and so does the gate.
+        self.far_send("alice", "# Hi\n\nx\n")
+        for line in ("deaddrop  status --box alice --count", "deaddrop status  --box alice   --count  ",
+                     "deaddrop status --box alice --count "):
+            p = self.gate(line)
+            self.assertEqual(p.returncode, 0, (line, p.stderr))
+            self.assertEqual(p.stdout.split()[0], "1")
+        p = self.gate("deaddrop  ")
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("say which", p.stderr)
+
+    def test_remote_modes_own_line_is_held_to_one_space(self):
+        self.far_send("alice", "# Hi\n\nx\n")
+        line = "d='deaddrop'; DEADDROP_HOPS=1 DEADDROP_FROM='alice' exec \"$d\" 'status'  '--box' 'alice' '--count'"
+        p = self.gate(line)
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("characters a shell would read", p.stderr)
+        self.assertEqual(self.gate(line.replace("  ", " ")).returncode, 0)  # the control
+
+    def test_an_empty_command_word_is_said(self):
+        line = "d='deaddrop'; DEADDROP_HOPS=1 DEADDROP_FROM='alice' exec \"$d\" '' 'inbox'"
+        p = self.gate(line)
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("'' isn't one", p.stderr)
+        self.assertNotIn("can't run :", p.stderr)
+
     def test_sent_shows_only_copies_in_readable_boxes(self):
         self.rdd("send", "--to", "alice-helper", "--to", "carol", input="# To two\\n\\nx\\n")
         rows = json.loads(self.rdd("sent", "--json").stdout)

@@ -11,11 +11,11 @@ crontinental every 5m --name deaddrop-firetower --forever --notify fail -- \
 
 # Or: only the boxes people are meant to empty (not shared shelves), by how
 # long mail has waited unheard, and ring whoever minds a box once when it
-# goes to fire (route deaddrop-box=<box> in this machine's notify hooks):
+# goes to fire (route deaddrop_box=<box> in this machine's notify hooks):
 #   deaddrop firetower --box alice --box alice-helper --box bob \
 #     --smoke-after 30m --fire-after 3h --ring --pigeonholes
 # (--pigeonholes: each helper's pigeonhole gets mail/<box>/for/<helper> too,
-# and its ring carries deaddrop-for=<helper> as well as deaddrop-box=<box>.)
+# and its ring carries deaddrop_for=<helper> as well as deaddrop_box=<box>.)
 
 # Archived mail goes after 30 days.
 crontinental every 04:00 --name deaddrop-gc --forever --notify fail -- \

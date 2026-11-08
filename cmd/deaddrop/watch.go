@@ -161,11 +161,19 @@ func writeJSONFile(path string, v any) error {
 	return writeAtomic(path, append(b, '\n'), 0o600)
 }
 
-func lockState() (func(), error) {
-	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+func lockState() (func(), error) { return lockFile(filepath.Join(stateDir(), ".lock")) }
+
+// lockInbox holds one inbox file (one box, one pigeonhole) for a watch pass,
+// fetch included: a watch on a side box, waiting on a slow store, never holds
+// up the caller's own watch or another box's. The folder's lock (lockState)
+// is taken too, but only for the writes after the fetch.
+func lockInbox() (func(), error) { return lockFile(inboxPath() + ".lock") }
+
+func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(stateDir(), ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +203,7 @@ func watchPass(hooks bool) (passResult, error) {
 			return r, err
 		}
 	}
-	unlock, err := lockState()
+	unlock, err := lockInbox()
 	if err != nil {
 		return r, err
 	}
@@ -207,7 +215,6 @@ func watchPass(hooks bool) (passResult, error) {
 	}()
 
 	at := now().UTC()
-	prev := readInbox()
 	// The box is always named: the caller's own included, so a session's
 	// default box (DEADDROP_BOX) never fills the person's own file.
 	fetch := []string{"inbox", box, "--read", "--json"}
@@ -215,6 +222,16 @@ func watchPass(hooks bool) (passResult, error) {
 		fetch = append(fetch, "--for", watchFor)
 	}
 	out, ferr := self(fetch...)
+	// The writes also take the state folder's lock, briefly and only after
+	// the fetch: a watch from before 0.7.10, which takes only that lock,
+	// never writes the same files at once (as during an upgrade).
+	unlockBox := unlock
+	unlockFolder, err := lockState()
+	if err != nil {
+		return r, err
+	}
+	unlock = func() { unlockFolder(); unlockBox() }
+	prev := readInbox()
 	var ms []Message
 	if ferr == nil {
 		if err := json.Unmarshal(out, &ms); err != nil {
@@ -604,6 +621,14 @@ func cmdOpen(args []string) error {
 		// What it shows and marks is in that box: the commands it runs read
 		// there by default (defaultBox).
 		os.Setenv("DEADDROP_BOX", watchBox)
+	} else if f.has("box") {
+		// --box naming the caller's own: its own box, even with a side box
+		// set in the environment (which the commands it runs would read).
+		me, err := whoAmI()
+		if err != nil {
+			return err
+		}
+		os.Setenv("DEADDROP_BOX", me)
 	}
 	var page []byte
 	var name, id string

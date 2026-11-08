@@ -22,6 +22,9 @@ for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
   (cd "$root" && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
     -ldflags "-s -w -X main.version=$version" -o "$dir/build/deaddrop" ./cmd/deaddrop)
   cp -R "$root/agents" "$root/examples" "$dir/"
+  # The bar widget's manifest says the release it came with (x.y.z, no v).
+  sed "s/\"version\": \"[^\"]*\"/\"version\": \"${version#v}\"/" "$root/examples/omarchy/deaddrop/manifest.json" \
+    >"$dir/examples/omarchy/deaddrop/manifest.json"
   cp "$root/install.sh" "$root/LICENSE" "$root/README.md" "$dir/"
   mkdir -p "$dir/docs" && cp "$root/docs/design.md" "$dir/docs/"
   echo "$version" >"$dir/VERSION"
