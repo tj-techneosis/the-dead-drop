@@ -39,10 +39,10 @@ var gateIDs = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d{6}-[a-z][a-z0-9_-]*-[0-9a-f
 // (from its first line; so at most twice that in any rolling hour). Past it
 // they're counted, and the next line after the hour says how many were held.
 // Each line is cut at gateLogLine. So a key can't wash the owner's history
-// out, whatever words it makes vary: at most ~40 KB an hour.
+// out, whatever words it makes vary: at most ~12 KB an hour.
 const (
 	gateLogPerKey = 20
-	gateLogLine   = 1000
+	gateLogLine   = 300
 )
 
 // gateLog notes, for the store's owner, what went wrong that a key holder
@@ -53,7 +53,7 @@ const (
 //     for (the count waits in gate.seen.json until something is logged);
 //   - each key adds at most gateLogPerKey lines in its hour, the rest
 //     counted the same way;
-//   - a line is cut at gateLogLine characters;
+//   - a line is cut at gateLogLine bytes;
 //   - the log rolls over to gate.log.1 at 1 MB.
 //
 // So the book holds at most twice gateLogPerKey kinds per key, and
@@ -79,7 +79,7 @@ func gateLog(format string, a ...any) {
 	}
 	line := fmt.Sprintf(format, a...)
 	if len(line) > gateLogLine {
-		line = line[:gateLogLine] + "…(cut)"
+		line = strings.ToValidUTF8(line[:gateLogLine], "") + "…(cut)"
 	}
 	kind := who + " " + gateIDs.ReplaceAllString(line, "<id>")
 	t := now().UTC()

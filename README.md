@@ -430,7 +430,7 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   folder, which the key sees as `<store>`) goes in `gate.log` at the store's
   top: a line like one already written that hour (ids aside) isn't written
   again, each key adds at most 20 lines in its hour (from its first line), a
-  line is cut at 1,000 characters, what's held back is counted and said by
+  line is cut at 300 bytes, what's held back is counted and said by
   the next line logged after the hour, and the log rolls over to
   `gate.log.1` at 1 MB. `--dir` and `--config` are full
   paths written plainly (no `//`, `/./`, `..` or trailing `/`);
