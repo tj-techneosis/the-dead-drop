@@ -173,3 +173,54 @@ func TestGateLogBudgetsEachKey(t *testing.T) {
 		t.Errorf("the book kept the hour before: %d bytes", len(bk))
 	}
 }
+
+// A line a key can make long is cut, so its 20 can't roll the log over.
+func TestGateLogCutsALongLine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	gateLog("--box: %q is not a name", strings.Repeat("x", 60000))
+	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
+	if len(b) > gateLogLine+100 || !strings.Contains(string(b), "(cut)") {
+		t.Errorf("%d bytes", len(b))
+	}
+}
+
+// A write that fails forgets nothing: the hour before's counts stay to be
+// said, and the line is counted as held.
+func TestGateLogFailedWriteKeepsCounts(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	gateLog("trouble %s", "2026-11-02T153000-bob-0001")
+	gateLog("trouble %s", "2026-11-02T153001-bob-0002") // held: 1 more
+	log := filepath.Join(dir, "gate.log")
+	os.Chmod(log, 0o400)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	gateLog("other")
+	os.Chmod(log, 0o600)
+	gateLog("again")
+	b, _ := os.ReadFile(log)
+	if strings.Count(string(b), "1 more like this") != 1 || strings.Contains(string(b), "other") {
+		t.Errorf("%q", b)
+	}
+	// "other" never went in: counted as held, to be said the hour after.
+	t.Setenv("DEADDROP_NOW", "2026-11-02T17:32:00Z")
+	gateLog("later")
+	b, _ = os.ReadFile(log)
+	if !strings.Contains(string(b), "1 more lines from - held") {
+		t.Errorf("%q", b)
+	}
+}
+
+// An early 0.7.10 build's flat book: its counts carry over.
+func TestGateLogReadsTheEarlyFlatBook(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	os.WriteFile(filepath.Join(dir, "gate.seen.json"), []byte(`{"old kind":{"first":"2026-11-02T15:00:00Z","more":3}}`), 0o600)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	gateLog("now")
+	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
+	if !strings.Contains(string(b), "3 more like this in the hour before: old kind") {
+		t.Errorf("%q", b)
+	}
+}

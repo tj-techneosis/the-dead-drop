@@ -370,7 +370,7 @@ launchd, systemd and cron.
   whether a letter was read; not `automation`, which only the store login's
   own jobs send as), so a key can't page without end: past the cap the letter is still urgent and on the board, only the
   ring is held, and the owner sees it once an hour in `gate.log`, where
-  each key adds at most 20 lines an hour. A gated
+  each key adds at most 20 lines in its hour, each cut at 1,000 characters. A gated
   key that sets off a failing ring or booking is told only that it failed;
   notify's output goes to `gate.log`.
 

@@ -429,8 +429,10 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   isn't told (a broken config, notify's output, an error naming the store's
   folder, which the key sees as `<store>`) goes in `gate.log` at the store's
   top: a line like one already written that hour (ids aside) isn't written
-  again, each key adds at most 20 lines an hour, what's held back is counted
-  and said the hour after, and the log rolls over to `gate.log.1` at 1 MB. `--dir` and `--config` are full
+  again, each key adds at most 20 lines in its hour (from its first line), a
+  line is cut at 1,000 characters, what's held back is counted and said by
+  the next line logged after the hour, and the log rolls over to
+  `gate.log.1` at 1 MB. `--dir` and `--config` are full
   paths written plainly (no `//`, `/./`, `..` or trailing `/`);
 - `file` hands an attachment over as stored (checked against the sum it was
   sent with), and the key holder's own deaddrop checks who signed it;

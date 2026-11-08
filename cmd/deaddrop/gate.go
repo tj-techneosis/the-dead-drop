@@ -35,22 +35,29 @@ const gateLogMax = 1 << 20
 // gateIDs are message ids in a line: a repeat is the same line with other ids.
 var gateIDs = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d{6}-[a-z][a-z0-9_-]*-[0-9a-f]{4}`)
 
-// gateLogPerKey is how many lines one key may add to gate.log an hour.
-// Past it they're counted, and the hour after says how many were held: a
-// key can't wash the owner's history out, whatever words it makes vary.
-const gateLogPerKey = 20
+// gateLogPerKey is how many lines one key may add to gate.log in its hour
+// (from its first line; so at most twice that in any rolling hour). Past it
+// they're counted, and the next line after the hour says how many were held.
+// Each line is cut at gateLogLine. So a key can't wash the owner's history
+// out, whatever words it makes vary: at most ~40 KB an hour.
+const (
+	gateLogPerKey = 20
+	gateLogLine   = 1000
+)
 
 // gateLog notes, for the store's owner, what went wrong that a key holder
 // isn't told: one line in gate.log at the store's top (the owner's folder).
 // Under .gate.lock, kept in gate.seen.json:
 //   - a line like one written this hour (the same words, ids aside) isn't
-//     written again; the hour after, a line says how many it stood for;
-//   - each key adds at most gateLogPerKey lines an hour, the rest counted
-//     the same way;
+//     written again; the next line after the hour says how many it stood
+//     for (the count waits in gate.seen.json until something is logged);
+//   - each key adds at most gateLogPerKey lines in its hour, the rest
+//     counted the same way;
+//   - a line is cut at gateLogLine characters;
 //   - the log rolls over to gate.log.1 at 1 MB.
 //
-// So the book holds at most gateLogPerKey kinds per key an hour, and
-// everything in it goes after an hour.
+// So the book holds at most twice gateLogPerKey kinds per key, and
+// everything in it goes an hour after it came.
 func gateLog(format string, a ...any) {
 	dir, err := storeDir()
 	if err != nil {
@@ -71,6 +78,9 @@ func gateLog(format string, a ...any) {
 		who = "-"
 	}
 	line := fmt.Sprintf(format, a...)
+	if len(line) > gateLogLine {
+		line = line[:gateLogLine] + "…(cut)"
+	}
 	kind := who + " " + gateIDs.ReplaceAllString(line, "<id>")
 	t := now().UTC()
 	bookPath := filepath.Join(dir, "gate.seen.json")
@@ -79,19 +89,34 @@ func gateLog(format string, a ...any) {
 		json.Unmarshal(b, &book)
 	}
 	if book.Kinds == nil {
+		// An early 0.7.10 build's book: a flat map of kinds. Its counts
+		// carry over.
 		book.Kinds = map[string]gateSeen{}
+		if b, err := os.ReadFile(bookPath); err == nil {
+			var flat map[string]gateSeen
+			if json.Unmarshal(b, &flat) == nil {
+				for k, v := range flat {
+					if k != "kinds" && k != "keys" {
+						book.Kinds[k] = v
+					}
+				}
+			}
+		}
 	}
 	if book.Keys == nil {
 		book.Keys = map[string]gateSeen{}
 	}
 	stale := func(v gateSeen) bool { return t.Sub(v.First) > time.Hour || v.First.After(t.Add(time.Minute)) }
 	// What the hour before held back, said now, before it's forgotten.
+	// Kept aside, so a write that fails forgets nothing.
 	var out []string
+	oldKinds, oldKeys := map[string]gateSeen{}, map[string]gateSeen{}
 	for k, v := range book.Kinds {
 		if stale(v) {
 			if v.More > 0 {
 				out = append(out, fmt.Sprintf("(%d more like this in the hour before: %s)", v.More, k))
 			}
+			oldKinds[k] = v
 			delete(book.Kinds, k)
 		}
 	}
@@ -100,6 +125,7 @@ func gateLog(format string, a ...any) {
 			if v.More > 0 {
 				out = append(out, fmt.Sprintf("(%d more lines from %s held in the hour before)", v.More, k))
 			}
+			oldKeys[k] = v
 			delete(book.Keys, k)
 		}
 	}
@@ -108,6 +134,7 @@ func gateLog(format string, a ...any) {
 	if !have {
 		budget = gateSeen{First: t}
 	}
+	written := false
 	switch v, ok := book.Kinds[kind]; {
 	case ok:
 		v.More++
@@ -116,11 +143,27 @@ func gateLog(format string, a ...any) {
 		budget.More++
 	default:
 		out = append(out, line)
-		budget.Lines++
-		book.Kinds[kind] = gateSeen{First: t}
+		written = true
 	}
 	if len(out) > 0 && !gateAppend(dir, t, out) {
-		return // not written, so not noted: the next try writes it
+		// Nothing went in (one write): the hour before's counts stay to be
+		// said, and this line, if it was to be written, is counted as held.
+		for k, v := range oldKinds {
+			book.Kinds[k] = v
+		}
+		for k, v := range oldKeys {
+			if k != who {
+				book.Keys[k] = v
+			} else {
+				budget.More += v.More // said with this hour's, later
+			}
+		}
+		if written {
+			budget.More++
+		}
+	} else if written {
+		budget.Lines++
+		book.Kinds[kind] = gateSeen{First: t}
 	}
 	book.Keys[who] = budget
 	writeJSONFile(bookPath, &book)
@@ -138,12 +181,14 @@ func gateAppend(dir string, t time.Time, lines []string) bool {
 		return false
 	}
 	defer f.Close()
+	// One write, so it goes in whole or not at all (as near as a file
+	// allows).
+	var b strings.Builder
 	for _, l := range lines {
-		if _, err := fmt.Fprintf(f, "%s %s\n", t.Format(time.RFC3339), l); err != nil {
-			return false
-		}
+		fmt.Fprintf(&b, "%s %s\n", t.Format(time.RFC3339), l)
 	}
-	return true
+	_, err = f.WriteString(b.String())
+	return err == nil
 }
 
 // gateSeen is a kind of line, or a key's budget: since when, how many were
