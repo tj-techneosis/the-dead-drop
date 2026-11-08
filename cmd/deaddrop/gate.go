@@ -35,12 +35,22 @@ const gateLogMax = 1 << 20
 // gateIDs are message ids in a line: a repeat is the same line with other ids.
 var gateIDs = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d{6}-[a-z][a-z0-9_-]*-[0-9a-f]{4}`)
 
+// gateLogPerKey is how many lines one key may add to gate.log an hour.
+// Past it they're counted, and the hour after says how many were held: a
+// key can't wash the owner's history out, whatever words it makes vary.
+const gateLogPerKey = 20
+
 // gateLog notes, for the store's owner, what went wrong that a key holder
 // isn't told: one line in gate.log at the store's top (the owner's folder).
-// A line like one already written this hour (the same words, ids aside) isn't
-// written again; when the hour turns, the next one says how many it stood
-// for. So a key repeating something can't wash out the owner's history, and
-// 1 MB with one old file bounds the disk. All under .gate.lock.
+// Under .gate.lock, kept in gate.seen.json:
+//   - a line like one written this hour (the same words, ids aside) isn't
+//     written again; the hour after, a line says how many it stood for;
+//   - each key adds at most gateLogPerKey lines an hour, the rest counted
+//     the same way;
+//   - the log rolls over to gate.log.1 at 1 MB.
+//
+// So the book holds at most gateLogPerKey kinds per key an hour, and
+// everything in it goes after an hour.
 func gateLog(format string, a ...any) {
 	dir, err := storeDir()
 	if err != nil {
@@ -56,46 +66,98 @@ func gateLog(format string, a ...any) {
 		return
 	}
 	defer unlock()
-	line := fmt.Sprintf(format, a...)
-	kind := gateIDs.ReplaceAllString(line, "<id>")
-	t := now().UTC()
-	seenPath := filepath.Join(dir, "gate.seen.json")
-	seen := map[string]gateSeen{}
-	if b, err := os.ReadFile(seenPath); err == nil {
-		json.Unmarshal(b, &seen)
+	who := gateAs
+	if who == "" {
+		who = "-"
 	}
-	for k, v := range seen {
-		if k != kind && t.Sub(v.First) > time.Hour && v.More == 0 {
-			delete(seen, k)
+	line := fmt.Sprintf(format, a...)
+	kind := who + " " + gateIDs.ReplaceAllString(line, "<id>")
+	t := now().UTC()
+	bookPath := filepath.Join(dir, "gate.seen.json")
+	var book gateBook
+	if b, err := os.ReadFile(bookPath); err == nil {
+		json.Unmarshal(b, &book)
+	}
+	if book.Kinds == nil {
+		book.Kinds = map[string]gateSeen{}
+	}
+	if book.Keys == nil {
+		book.Keys = map[string]gateSeen{}
+	}
+	stale := func(v gateSeen) bool { return t.Sub(v.First) > time.Hour || v.First.After(t.Add(time.Minute)) }
+	// What the hour before held back, said now, before it's forgotten.
+	var out []string
+	for k, v := range book.Kinds {
+		if stale(v) {
+			if v.More > 0 {
+				out = append(out, fmt.Sprintf("(%d more like this in the hour before: %s)", v.More, k))
+			}
+			delete(book.Kinds, k)
 		}
 	}
-	if v, ok := seen[kind]; ok && t.Sub(v.First) <= time.Hour && !v.First.After(t) {
-		v.More++
-		seen[kind] = v
-		writeJSONFile(seenPath, seen)
-		return
-	} else if ok && v.More > 0 {
-		line += fmt.Sprintf(" (and %d more like it in the hour before)", v.More)
+	for k, v := range book.Keys {
+		if stale(v) {
+			if v.More > 0 {
+				out = append(out, fmt.Sprintf("(%d more lines from %s held in the hour before)", v.More, k))
+			}
+			delete(book.Keys, k)
+		}
 	}
-	seen[kind] = gateSeen{First: t}
-	writeJSONFile(seenPath, seen)
+	sort.Strings(out)
+	budget, have := book.Keys[who]
+	if !have {
+		budget = gateSeen{First: t}
+	}
+	switch v, ok := book.Kinds[kind]; {
+	case ok:
+		v.More++
+		book.Kinds[kind] = v
+	case budget.Lines >= gateLogPerKey:
+		budget.More++
+	default:
+		out = append(out, line)
+		budget.Lines++
+		book.Kinds[kind] = gateSeen{First: t}
+	}
+	if len(out) > 0 && !gateAppend(dir, t, out) {
+		return // not written, so not noted: the next try writes it
+	}
+	book.Keys[who] = budget
+	writeJSONFile(bookPath, &book)
+}
+
+// gateAppend adds lines to gate.log, rolling it over at 1 MB (under the
+// caller's .gate.lock), and says whether they went in.
+func gateAppend(dir string, t time.Time, lines []string) bool {
 	path := filepath.Join(dir, "gate.log")
 	if st, err := os.Stat(path); err == nil && st.Size() >= gateLogMax {
 		os.Rename(path, path+".1")
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return
+		return false
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", t.Format(time.RFC3339), line)
+	for _, l := range lines {
+		if _, err := fmt.Fprintf(f, "%s %s\n", t.Format(time.RFC3339), l); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
-// gateSeen is one kind of gate.log line: when it was last written, and how
-// many like it have come since.
+// gateSeen is a kind of line, or a key's budget: since when, how many were
+// written (a budget's), and how many held back since.
 type gateSeen struct {
 	First time.Time `json:"first"`
+	Lines int       `json:"lines,omitempty"`
 	More  int       `json:"more,omitempty"`
+}
+
+// gateBook is gate.seen.json.
+type gateBook struct {
+	Kinds map[string]gateSeen `json:"kinds"`
+	Keys  map[string]gateSeen `json:"keys"`
 }
 
 // gateRead is the boxes a gated caller may read: nil when not gated.
@@ -195,6 +257,14 @@ func cmdGate(args []string) error {
 		return refused("the store's config can't be read")
 	} else if c.Host != "" {
 		return refused("this machine isn't the store (its config sends commands to another machine): the gate won't run here")
+	}
+	// The store by its full path from here on, so every path an error
+	// carries is spelled the way gateClean looks for it (a config's dir may
+	// be relative).
+	if d, err := storeDir(); err == nil {
+		if abs, err := filepath.Abs(d); err == nil {
+			os.Setenv("DEADDROP_DIR", abs)
+		}
 	}
 	line, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND")
 	if !ok {

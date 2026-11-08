@@ -705,6 +705,21 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("<store>", p.stderr)
         self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
 
+    def test_a_relative_store_in_the_config_is_still_hidden(self):
+        # The gate takes the store by its full path, so errors spell it the
+        # way it's hidden, whatever the config says.
+        id = self.far_send("alice", "# Fine\n\nx\n")
+        next(self.far_store.rglob(id + ".md")).write_text("not a message at all")
+        cfg = self.tmp / "relative.toml"
+        cfg.write_text('dir = "../share/deaddrop"\n')  # from the gate's folder: the same store
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "DEADDROP_NOW": self.clock,
+               "SSH_ORIGINAL_COMMAND": f"deaddrop show {id} --raw"}
+        p = subprocess.run([str(self.far / ".local" / "bin" / "deaddrop"), "gate", "--as", "alice", "--read", "alice",
+                            "--config", str(cfg)], capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn("share/deaddrop", p.stderr)
+        self.assertIn("<store>", p.stderr)
+
     def test_the_gates_dir_is_written_plainly(self):
         # Errors spell paths cleaned; a --dir written otherwise wouldn't
         # match when the gate hides it.

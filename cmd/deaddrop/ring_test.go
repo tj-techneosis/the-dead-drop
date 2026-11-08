@@ -122,7 +122,7 @@ func TestGateLogWritesARepeatOnceAnHour(t *testing.T) {
 	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
 	gateLog("could not ring: %s to bob", "2026-11-02T163100-bob-0004")
 	b, _ = os.ReadFile(filepath.Join(dir, "gate.log"))
-	if !strings.Contains(string(b), "and 2 more like it") {
+	if !strings.Contains(string(b), "2 more like this in the hour before") {
 		t.Errorf("the hour after: %q", b)
 	}
 }
@@ -141,5 +141,35 @@ func TestGateLogNotesABrokenConfig(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(home, ".local", "share", "deaddrop", "gate.log"))
 	if err != nil || !strings.Contains(string(b), "the config can't be read") {
 		t.Errorf("not noted: %v %q", err, b)
+	}
+}
+
+// One key adds at most gateLogPerKey lines an hour, however its words vary;
+// the rest are counted and said the hour after. Another key isn't held.
+func TestGateLogBudgetsEachKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	gateAs = "bob"
+	for i := 0; i < gateLogPerKey+30; i++ {
+		gateLog("could not ring to box%d", i)
+	}
+	gateAs = "carol"
+	gateLog("carol's own trouble")
+	gateAs = ""
+	defer func() { gateAs = "" }()
+	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
+	if n := strings.Count(string(b), "could not ring"); n != gateLogPerKey || !strings.Contains(string(b), "carol's own trouble") {
+		t.Fatalf("%d lines from bob: %q", n, b)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	gateAs = "bob"
+	gateLog("later")
+	b, _ = os.ReadFile(filepath.Join(dir, "gate.log"))
+	if !strings.Contains(string(b), "30 more lines from bob held in the hour before") {
+		t.Errorf("the hour after: %q", b)
+	}
+	if bk, _ := os.ReadFile(filepath.Join(dir, "gate.seen.json")); len(bk) > 2000 {
+		t.Errorf("the book kept the hour before: %d bytes", len(bk))
 	}
 }

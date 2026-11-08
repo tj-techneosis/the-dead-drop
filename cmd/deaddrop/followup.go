@@ -218,9 +218,10 @@ func ring(box string, m *Message, raised bool) {
 	ok, why, first, refund := ringAllowed(bucket, box)
 	if !ok {
 		// The letter is still urgent and on the board: only the ring is held.
-		// A gated key isn't shown the count: its follow-ups are in it, and
-		// they ring only while the letter's unread, which would tell it a
-		// box's read state it can't see.
+		// A gated key isn't shown the count: it's the store's book, and
+		// what a key is told stays to what it did (held, or not). Its own
+		// sends are all a send's count holds; follow-ups have a bucket
+		// of their own, so whether it's held never says a box's read state.
 		if gateRead != nil {
 			fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: past this sender's ring cap\n", m.ID)
 		} else {
