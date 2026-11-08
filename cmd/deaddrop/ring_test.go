@@ -349,7 +349,32 @@ func TestGateRefusesAStaleSignature(t *testing.T) {
 		t.Errorf("ten minutes and more behind: %v", err)
 	}
 	_, err = gateSignatureIs("bob", "eA==", "2026-11-02T15:35:00Z", []byte("x")) // five minutes ahead
+	if err == nil || !strings.Contains(err.Error(), "clock is fast") {
+		t.Errorf("five minutes ahead: %v", err)
+	}
+	_, err = gateSignatureIs("bob", "eA==", "2026-11-02T15:19:59Z", []byte("x")) // just past ten minutes behind
 	if err == nil || !strings.Contains(err.Error(), "sign it again") {
 		t.Errorf("%v", err)
+	}
+}
+
+// Under --signed only ed25519 is carried: an ECDSA signature verifies in two
+// forms, so its seal could be carried twice.
+func TestGateRefusesAnECDSASeal(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	k := filepath.Join(t.TempDir(), "k")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ecdsa", "-N", "", "-f", k).CombinedOutput(); err != nil {
+		t.Skipf("no ecdsa: %s", out)
+	}
+	sig, err := sign(k, []byte("a letter"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateSealReserve(sig); err == nil || !strings.Contains(err.Error(), "ed25519") {
+		t.Fatalf("an ECDSA seal: %v", err)
+	}
+	if _, err := gateSealReserve(testSig(t, []byte("a letter"))); err != nil {
+		t.Fatalf("the control, ed25519: %v", err)
 	}
 }

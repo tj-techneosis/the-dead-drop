@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -259,6 +260,9 @@ func gateSignatureIs(who, sig, signedAtText string, payload []byte) (release fun
 		return release, refused("this key's letters are signed as they're sent, and this one has no time of signing")
 	}
 	if d := now().Sub(signedAt); d > gateSignedFresh || d < -gateSignedAhead {
+		if signedAt.After(now()) {
+			return release, refused("this letter was signed %s, ahead of the store's clock: the signing machine's clock is fast (set it right, then send again)", signedAt.UTC().Format(time.RFC3339))
+		}
 		return release, refused("this key's letters are signed as they're sent, and this one was signed %s: sign it again", signedAt.UTC().Format(time.RFC3339))
 	}
 	path, done, err := sigFile(sig)
@@ -284,9 +288,14 @@ func gateSignatureIs(who, sig, signedAtText string, payload []byte) (release fun
 // until its owner looks: a replay check that starts empty checks nothing.
 func gateSealReserve(sig string) (release func(), err error) {
 	release = func() {}
-	_, raw, ok := sshsig(sig)
+	pub, raw, ok := sshsig(sig)
 	if !ok {
 		return release, refused("this key's letter has a signature the store can't read")
+	}
+	// Only ed25519, whose signatures have one form: an ECDSA one verifies in
+	// two (s and n-s), so its seal could be carried twice under two hashes.
+	if t, ok := sshString(pub); !ok || t != "ssh-ed25519" {
+		return release, refused("this key's letters are signed with an ed25519 key; this one is signed with %s", cleanLine(t, 40))
 	}
 	h := sha256.Sum256(raw)
 	key := hex.EncodeToString(h[:])
@@ -314,7 +323,7 @@ func gateSealReserve(sig string) (release func(), err error) {
 	defer unlock()
 	seen, err := read()
 	if err != nil {
-		gateLog("--signed refused: %s can't be read (%v); move it aside to start again", path, err)
+		gateLog("--signed refused: %s can't be read (%v); --signed letters are refused while it stays; leave it 20 minutes (so any seal it held has expired), then move it aside", path, err)
 		return release, refused("this key's letter couldn't be checked just now (its owner can see why)")
 	}
 	t := now()
@@ -324,7 +333,7 @@ func gateSealReserve(sig string) (release func(), err error) {
 		}
 	}
 	if _, ok := seen[key]; ok {
-		return release, refused("this letter's seal has been carried already: sign it again to send it again")
+		return release, refused("this letter's seal has been carried already, or is being carried now (a dropped connection?): check whether it arrived, and sign it again to send it again")
 	}
 	seen[key] = t
 	if writeJSONFile(path, seen) != nil {
@@ -733,4 +742,17 @@ func gateBookFollowUps(who string, n int) (giveBack func(int), err error) {
 		writeJSONFile(path, b)
 	}
 	return giveBack, nil
+}
+
+// sshString reads the first ssh string (length-prefixed) of b: a public
+// key's type.
+func sshString(b []byte) (string, bool) {
+	if len(b) < 4 {
+		return "", false
+	}
+	n := int(binary.BigEndian.Uint32(b[:4]))
+	if n < 0 || 4+n > len(b) {
+		return "", false
+	}
+	return string(b[4 : 4+n]), true
 }
