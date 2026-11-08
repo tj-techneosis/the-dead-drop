@@ -626,7 +626,7 @@ once it's waited that long. Every lookout is tagged `mail`.
 
 With `--ring`, a box that's just gone to fire also runs `crontinental notify
 --urgent` on the store's machine, once per fire (not every run), tagged
-`deaddrop-box=<box>` so that machine's notify hooks can send it to whoever
+`deaddrop_box=<box>` so that machine's notify hooks can send it to whoever
 minds that box. It says what the board says: counts, unless the box is in
 `board_detail`. The first `--ring` run notes what's already on fire and
 rings nothing; a ring that fails is said (the run exits non-zero) and tried
@@ -636,7 +636,7 @@ isn't rung again: `ring_urgent` already rang it as it arrived.
 The board counts a box's own mail. With `--pigeonholes`, each helper's
 pigeonhole in it gets a lookout of its own too, `mail/<box>/for/<helper>`,
 by the same rules, heard when that pigeonhole is read (`pull --for
-<helper>`), and rung (with `--ring`) tagged `deaddrop-for=<helper>` as well.
+<helper>`), and rung (with `--ring`) tagged `deaddrop_for=<helper>` as well.
 
 The board says "moved" when new mail comes in. By default only counts go to
 the board, never subjects or senders, because boards can be on screens
@@ -687,8 +687,10 @@ only the store login's own jobs send as it (a gated key can't), and one
 runaway job mustn't hold another's alarm. A letter past the cap is still
 urgent and still on the board; only its ring is held. On a send the sender is
 told; a held ring from a raised follow-up shows only in that job's output.
-The first held ring to a box in an hour is noted in the store's `gate.log`.
-The counts are kept in `rings.json` at the store's top.
+The first held ring to a box in an hour (and the first held by the in-all
+cap) is noted in the store's `gate.log`. A ring that failed doesn't count.
+The counts are kept in
+`rings.json` at the store's top.
 
 ## Reports of your own
 

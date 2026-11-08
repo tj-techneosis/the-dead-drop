@@ -200,7 +200,7 @@ func ring(box string, m *Message) {
 	}
 	cron, err := crontinental()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "deaddrop: ring_urgent is on, but "+err.Error())
+		ringTrouble("ring_urgent is on, but " + err.Error())
 		return
 	}
 	// Counted only once there's something to ring with, and given back if
@@ -219,14 +219,35 @@ func ring(box string, m *Message) {
 		text = summaryLine(box+": urgent from", m)
 	}
 	// Tagged with the message, so a viewer can fold the ring into it.
-	a := []string{"notify", "--urgent", "--tag", "drop=" + m.ID, "--tag", "deaddrop-box=" + box}
+	a := []string{"notify", "--urgent", "--tag", "drop=" + m.ID, "--tag", "deaddrop_box=" + box}
 	if m.Pigeonhole != "" {
-		a = append(a, "--tag", "deaddrop-for="+m.Pigeonhole) // routed like the pigeonhole's own ring
+		a = append(a, "--tag", "deaddrop_for="+m.Pigeonhole) // routed like the pigeonhole's own ring
 	}
 	if out, err := exec.Command(cron, append(a, "--title", "Dead Drop", text)...).CombinedOutput(); err != nil {
+		// Given back: nothing went out. That rests on Crontinental's notify
+		// (0.11) running every hook and exiting 0 whatever they did, and
+		// failing only before any hook runs. A Crontinental that reports a
+		// hook's failure in its exit code would make this refund a ring that
+		// went out: keep the count then.
 		refund()
-		fmt.Fprintf(os.Stderr, "deaddrop: could not ring: %s\n", strings.TrimSpace(string(out)))
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		ringTrouble("could not ring: " + detail)
 	}
+}
+
+// ringTrouble says why a ring didn't go: to whoever's there, unless that's a
+// gated key, which gets a word and no more (notify's output is the store
+// machine's own business), the detail going to gate.log for the owner.
+func ringTrouble(detail string) {
+	if gateRead != nil {
+		gateLog("%s", detail)
+		fmt.Fprintln(os.Stderr, "deaddrop: the store couldn't ring for this letter (its owner can see why)")
+		return
+	}
+	fmt.Fprintln(os.Stderr, "deaddrop: "+detail)
 }
 
 // Rings are capped per sender, so no one sender (a gated key's above all)
@@ -270,10 +291,7 @@ func ringAllowed(from, box string) (ok bool, why string, first bool, refund func
 	}
 	defer unlock()
 	path := filepath.Join(dir, "rings.json")
-	var book ringBook
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &book)
-	}
+	book := readRingBook(path)
 	t := now()
 	live := func(m map[string][]string) map[string][]string {
 		out := map[string][]string{}
@@ -297,18 +315,21 @@ func ringAllowed(from, box string) (ok bool, why string, first bool, refund func
 	}
 	stamp := box + " " + t.UTC().Format(time.RFC3339)
 	if toBox >= ringsPerBox || all >= ringsInAll {
-		why = fmt.Sprintf("%s has rung %s %d times in the last hour", from, box, toBox)
+		// Noted once an hour per box held by its own cap, and once in all
+		// for the in-all cap (whatever boxes it's sent to after), so the
+		// held book stays as small as the rung one.
+		why, held := fmt.Sprintf("%s has rung %s %d times in the last hour", from, box, toBox), box
 		if toBox < ringsPerBox {
-			why = fmt.Sprintf("%s has rung %d times in the last hour", from, all)
+			why, held = fmt.Sprintf("%s has rung %d times in the last hour", from, all), "*"
 		}
 		first = true
 		for _, r := range book.Held[from] {
-			if b, _, _ := strings.Cut(r, " "); b == box {
+			if b, _, _ := strings.Cut(r, " "); b == held {
 				first = false
 			}
 		}
 		if first {
-			book.Held[from] = append(book.Held[from], stamp)
+			book.Held[from] = append(book.Held[from], held+" "+t.UTC().Format(time.RFC3339))
 			writeJSONFile(path, &book)
 		}
 		return false, why, first, refund
@@ -323,10 +344,7 @@ func ringAllowed(from, box string) (ok bool, why string, first bool, refund func
 			return
 		}
 		defer u()
-		var b ringBook
-		if raw, err := os.ReadFile(path); err != nil || json.Unmarshal(raw, &b) != nil {
-			return
-		}
+		b := readRingBook(path)
 		rs := b.Rung[from]
 		for i := len(rs) - 1; i >= 0; i-- {
 			if rs[i] == stamp {
@@ -337,4 +355,31 @@ func ringAllowed(from, box string) (ok bool, why string, first bool, refund func
 		}
 	}
 	return true, "", false, refund
+}
+
+// readRingBook reads rings.json, in either shape: {"rung": …, "held": …}, or
+// an early 0.7.10 build's flat sender map, read as rung, so the counts
+// survive the change. Unreadable is empty: the cap is a guard.
+func readRingBook(path string) ringBook {
+	book := ringBook{Rung: map[string][]string{}, Held: map[string][]string{}}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return book
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil {
+		return book
+	}
+	if _, ok := top["rung"]; ok {
+		json.Unmarshal(b, &book)
+	} else {
+		json.Unmarshal(b, &book.Rung)
+	}
+	if book.Rung == nil {
+		book.Rung = map[string][]string{}
+	}
+	if book.Held == nil {
+		book.Held = map[string][]string{}
+	}
+	return book
 }

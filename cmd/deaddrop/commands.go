@@ -692,7 +692,12 @@ func deliver(dir string, d draft) error {
 		if !d.followUp.IsZero() {
 			if err := bookFollowUp(dir, m); err != nil {
 				// The mail is in the box; sending again would only make two.
-				fmt.Fprintf(os.Stderr, "deaddrop: %s is delivered, but its follow-up isn't booked: %v\n", m.ID, err)
+				if gateRead != nil {
+					gateLog("%s: follow-up not booked: %v", m.ID, err)
+					fmt.Fprintf(os.Stderr, "deaddrop: %s is delivered, but its follow-up isn't booked (the store's owner can see why)\n", m.ID)
+				} else {
+					fmt.Fprintf(os.Stderr, "deaddrop: %s is delivered, but its follow-up isn't booked: %v\n", m.ID, err)
+				}
 			}
 		}
 		if m.Urgency == urgent && !rung[to] {
@@ -1255,6 +1260,11 @@ func cmdFile(args []string) error {
 	}
 	data, err := os.ReadFile(filepath.Join(filesDir(dir, m), name))
 	if err != nil {
+		if gateRead != nil {
+			// Where the store keeps it is nobody's business who holds a key.
+			gateLog("file %s %s: %v", m.ID, name, err)
+			return fmt.Errorf("%s's %s isn't there to hand over", m.ID, name)
+		}
 		return err
 	}
 	return handOver(m, name, data)

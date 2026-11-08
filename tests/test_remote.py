@@ -676,6 +676,22 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("isn't the file that was sent", p.stderr)
 
+    def test_a_gated_key_isnt_told_the_stores_details(self):
+        # A missing attachment's path is the owner's, in gate.log; the key
+        # gets a word.
+        att = self.tmp / "notes.txt"
+        att.write_text("x\n")
+        id = self.dd("send", "--to", "alice", "--attach", str(att), input="# F\n\nx\n",
+                     DEADDROP_DIR=str(self.far_store), DEADDROP_FROM="carol").stdout.split()[1]
+        next(self.far_store.rglob("notes.txt")).unlink()
+        p = self.gate(f"deaddrop file {id} notes.txt")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("isn't there to hand over", p.stderr)
+        self.assertNotIn(str(self.far_store), p.stderr)
+        self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
+        # notify's output behind the gate: a Go test (ring_test.go), since the
+        # gate runs the account's own crontinental, never a stand-in.
+
     def test_a_typed_line_may_have_extra_spaces(self):
         # A person at a shell types two spaces now and then; a shell reads
         # them as one, and so does the gate.

@@ -84,7 +84,7 @@ class Firetower(DeadDrop):
         self.dd("firetower", "--box", "bob", "--box", "bob", *ages)  # named twice: one ring
         rings = self.rings()
         self.assertEqual(len(rings), 1)
-        self.assertIn("deaddrop-box=bob", rings[0])
+        self.assertIn("deaddrop_box=bob", rings[0])
         self.assertEqual(rings[0][-1], "1 unread, 1 unheard, the oldest 3h")  # the board's line, no letter text
         # Still on fire: no second ring. Heard, then a new fire: one more.
         self.clock = at(210)
@@ -159,7 +159,7 @@ class Firetower(DeadDrop):
         self.config.write_text("ring_urgent = true\n")
         self.send("a\n", "--to", "bob", "--for", "planner", "--urgent")
         rings = self.rings()
-        self.assertTrue(rings and "deaddrop-for=planner" in rings[-1], rings)
+        self.assertTrue(rings and "deaddrop_for=planner" in rings[-1], rings)
 
     def test_pigeonholes_on_the_board(self):
         self.send("a\n", "--to", "bob", "--for", "planner")
@@ -175,7 +175,7 @@ class Firetower(DeadDrop):
         self.assertEqual(last["mail/bob/for/planner"][2], "red")   # the planner's: waited 3h unheard
         rings = self.rings()
         self.assertEqual(len(rings), 1)
-        self.assertIn("deaddrop-for=planner", rings[0])
+        self.assertIn("deaddrop_for=planner", rings[0])
         # The planner's pull hears its pigeonhole, not bob's.
         self.dd("pull", "bob", "--for", "planner")
         self.dd("firetower", *ages)
@@ -420,15 +420,42 @@ class Ring(DeadDrop):
         self.assertIn("alice has rung 32 times in the last hour", p.stderr)
         self.assertEqual(len(self.calls(self.cron_calls)), 32)
 
-    def test_a_ring_that_fails_doesnt_spend_the_cap(self):
+    def test_a_ring_that_couldnt_start_doesnt_spend_the_cap(self):
+        self.config.write_text("ring_urgent = true\n")
+        cant = self.tmp / "not-runnable"
+        cant.write_text("#!/bin/sh\n")  # not executable: notify never starts
+        for i in range(5):
+            self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(i), DEADDROP_CRONTINENTAL=str(cant))
+        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(6))
+        self.assertEqual(len(self.calls(self.cron_calls)), 1)
+
+    def test_a_notify_that_fails_doesnt_count(self):
+        # Crontinental's notify fails only before any hook runs (it exits 0
+        # whatever its hooks do), so a failure rang nothing.
         self.config.write_text("ring_urgent = true\n")
         broken = script(self.tmp / "broken-cron", "exit 1\n")
         for i in range(5):
             self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(i), DEADDROP_CRONTINENTAL=str(broken))
-        self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(6),
-                DEADDROP_CRONTINENTAL=str(self.tmp / "no-such-cron"))
-        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(7))
-        self.assertEqual(len(self.calls(self.cron_calls)), 1)  # rung: nothing before it went out
+        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(6))
+        self.assertEqual(len(self.calls(self.cron_calls)), 1)
+
+    def test_the_in_all_cap_is_noted_once_whatever_boxes_follow(self):
+        self.config.write_text("ring_urgent = true\n")
+        to = [w for i in range(32) for w in ("--to", f"a{i}")]
+        self.send("x\n", *to, "--urgent", DEADDROP_NOW=at(0))
+        more = [w for i in range(10) for w in ("--to", f"b{i}")]
+        self.dd("send", *more, "--urgent", input="x\n", DEADDROP_NOW=at(1))
+        self.assertEqual((self.dir / "gate.log").read_text().count("rings held"), 1)
+        book = json.loads((self.dir / "rings.json").read_text())
+        self.assertEqual(len(book["held"]["alice"]), 1)
+
+    def test_an_early_flat_rings_file_is_still_counted(self):
+        self.config.write_text("ring_urgent = true\n")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        stamp = at(0)
+        (self.dir / "rings.json").write_text(json.dumps({"alice": [f"bob {stamp}"] * 4}))
+        p = self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(1))
+        self.assertIn("not rung", p.stderr)
 
     def test_automation_isnt_capped(self):
         # Only the store login's own jobs send as automation; one job's
@@ -437,6 +464,21 @@ class Ring(DeadDrop):
         for i in range(6):
             self.send("x\n", "--to", "bob", "--urgent", "--from", "automation", DEADDROP_NOW=at(i))
         self.assertEqual(len(self.calls(self.cron_calls)), 6)
+
+    def test_every_ring_tag_is_one_crontinental_takes(self):
+        # Crontinental refuses a tag name that isn't letters, digits and _
+        # starting with a letter: a ring tagged otherwise never goes out.
+        import re
+        self.config.write_text("ring_urgent = true\n")
+        self.send("x\n", "--to", "bob", "--for", "planner", "--urgent")
+        self.dd("firetower", "--ring", "--next", "none")
+        self.send("y\n", "--to", "carol", "--urgent", DEADDROP_FROM="dave")
+        calls = self.calls(self.cron_calls)
+        self.assertTrue(calls)
+        for c in calls:
+            for i, w in enumerate(c):
+                if w == "--tag":
+                    self.assertRegex(c[i + 1].split("=")[0], r"^[A-Za-z][A-Za-z0-9_]*$", c)
 
     def test_a_raised_follow_up_rings(self):
         self.config.write_text("ring_urgent = true\n")
