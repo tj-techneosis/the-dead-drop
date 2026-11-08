@@ -398,8 +398,17 @@ use the Dead Drop, as one name, reading only the boxes it's given. On the
 store's machine, one line per key in that login's `~/.ssh/authorized_keys`:
 
 ```
-restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper" ssh-ed25519 AAAA… bob's laptop
+restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper --signed" ssh-ed25519 AAAA… bob's laptop
 ```
+
+The line is taken only as written plainly: one `--as` and one `--read`, in
+lowercase, the boxes comma-separated with no spaces and none twice. So what
+you read in `authorized_keys` is exactly what the gate does. `--signed`
+(optional) means every letter from the key must be signed by its `--as`:
+an unsigned `send` is refused, and so is a plain `reply` (a deaddrop with
+`sign_key` set always sends a reply as a signed letter). Leave it off for a
+key whose holder has no signing key yet; its letters then read as unsigned,
+which proves nothing about who sent them.
 
 Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
 special. The gate reads the command line remote mode sends (sshd hands it over
@@ -733,7 +742,7 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
-deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
+deaddrop gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]

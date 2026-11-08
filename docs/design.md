@@ -291,7 +291,10 @@ so there's nothing for a shell, scp or sftp to run. It sets who's asking
 itself, allows only the store's commands, and checks every box a reading
 command resolves (in `resolveBox`, where a named box and the default both
 pass) against its `--read`. Signing stays on the caller's machine; the gate
-only carries the letter.
+only carries the letter, holding its `from` and its signer to `--as`, and
+with `--signed` refusing one that isn't signed. Its own line is taken only
+in canonical form (lowercase, one `--read`, no spaces, no box twice), so a
+text check of `authorized_keys` and the gate can never read it differently.
 
 ## Your own machine: the inbox file and hooks
 
