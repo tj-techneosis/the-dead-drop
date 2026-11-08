@@ -805,14 +805,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertEqual(p.returncode, 5, p.stderr)
         self.assertIn("has no key for alice", p.stderr)
 
-    def test_follow_ups_a_key_books_are_capped_an_hour(self):
-        to = [w for i in range(20) for w in ("--to", f"box{i}")]
-        self.rdd("send", *to, "--follow-up", "1d", input="x\n")
-        p = self.rdd("send", *to, "--follow-up", "1d", input="x\n", ok=False)
-        self.assertEqual(p.returncode, 5, p.stderr)
-        self.assertIn("20 follow-ups booked in the last hour", p.stderr)
-        self.rdd("send", *to, input="x\n")  # without --follow-up: fine
-        # The hour turning: a Go test (the gate keeps no DEADDROP_NOW).
+    # The follow-up cap behind the gate is a Go test (TestGateFollowUpCap…):
+    # the gate runs the account's own crontinental, so a gated test that
+    # books a follow-up books a real job on whatever machine runs it.
 
     def test_the_gates_dir_is_written_plainly(self):
         # Errors spell paths cleaned; a --dir written otherwise wouldn't
