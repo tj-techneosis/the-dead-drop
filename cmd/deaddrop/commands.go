@@ -202,6 +202,9 @@ func draftOf(f flags) (draft, error) {
 		if d.signedBy != "" && strings.ToLower(d.signedBy) != gateAs {
 			return d, refused("this key signs only as %s", gateAs)
 		}
+		if gateSigned && d.signedBy == "" {
+			return d, refused("this key's letters are signed: set sign_key in your deaddrop's config (it signs as %s)", gateAs)
+		}
 		if len(d.attach) > 0 {
 			return d, refused("this key sends attachments the way remote mode does (--bundle), never --attach")
 		}

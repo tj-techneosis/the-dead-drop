@@ -720,6 +720,42 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertNotIn("share/deaddrop", p.stderr)
         self.assertIn("<store>", p.stderr)
 
+    def test_the_gate_line_is_taken_only_as_written_plainly(self):
+        # What an installer reads in authorized_keys is exactly what the gate
+        # does: nothing it would tidy is accepted.
+        exe = str(self.far / ".local" / "bin" / "deaddrop")
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "SSH_ORIGINAL_COMMAND": "deaddrop version"}
+        for line in (["--as", "Alice", "--read", "alice"], ["--as", "alice", "--read", "Alice"],
+                     ["--as", "alice", "--read", "alice, bob"], ["--as", "alice", "--read", "alice", "--read", "tj"],
+                     ["--as", "alice", "--read", "alice,alice"], ["--as", "alice", "--read", "alice,"]):
+            p = subprocess.run([exe, "gate", *line, "--dir", str(self.far_store)], capture_output=True, text=True, env=env)
+            self.assertEqual(p.returncode, 2, (line, p.stderr))
+        p = self.gate("deaddrop version")
+        self.assertEqual(p.returncode, 0, p.stderr)  # the control: alice,alice-helper as written
+
+    def signed_gate(self):
+        """The gate with --signed on its line."""
+        self.ssh = __import__("_binary").script(self.tmp / "ssh-gated-signed", f'''
+for last; do :; done
+exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
+  SSH_ORIGINAL_COMMAND="$last" "{self.far}/.local/bin/deaddrop" gate --as alice --read alice,alice-helper --signed \\
+  --dir "{self.far_store}" --config "{self.far}/.config/deaddrop/config.toml"
+''')
+
+    def test_signed_gate_refuses_an_unsigned_letter(self):
+        self.signed_gate()
+        p = self.rdd("send", "--to", "bob", input="# Unsigned\n\nx\n", ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("this key's letters are signed", p.stderr)
+        id = self.far_send("alice", "# To answer\n\nx\n")
+        p = self.rdd("reply", id, input="an unsigned answer\n", ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        # The control: signed by alice, both go.
+        self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice"))
+        self.rdd("reply", id, input="a signed answer\n", env=Remote.signed_env(self, "alice"))
+        ms = json.loads(self.dd("pull", "carol", "--json", DEADDROP_DIR=str(self.far_store)).stdout)
+        self.assertEqual([m.get("signed_by") for m in ms], ["alice"])
+
     def test_the_gates_dir_is_written_plainly(self):
         # Errors spell paths cleaned; a --dir written otherwise wouldn't
         # match when the gate hides it.

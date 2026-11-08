@@ -40,7 +40,11 @@ Claude Code setup.
   pinned clock (`DEADDROP_NOW`), and stand-ins for ssh, Crontinental and the
   Firetower (`DEADDROP_SSH`, `DEADDROP_CRONTINENTAL`, `DEADDROP_FIRETOWER`),
   so they never touch the machine's own mail, jobs or board.
-  `DEADDROP_BIN` points them at any build. A behaviour change comes with a
+  `DEADDROP_BIN` points them at any build. The suite's own build points
+  the pinned signers list (`systemSigners`) at a path that's never there,
+  so it passes on a machine with `/etc/deaddrop/allowed_signers`; a
+  `DEADDROP_BIN` build checked on such a machine reads its signatures as
+  unknown. A behaviour change comes with a
   test that fails without it.
 - **One static binary.** The standard library and BurntSushi/toml.
 - **The message file is a contract.** People and other tools read it.

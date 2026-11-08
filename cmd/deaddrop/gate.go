@@ -218,6 +218,11 @@ var gateRead map[string]bool
 // gateAs is the gated caller's name.
 var gateAs string
 
+// gateSigned: the line says --signed, so every letter from the key is signed
+// by its --as. An unsigned send, or a plain reply (a signing client always
+// turns a reply into a signed send first), is refused.
+var gateSigned bool
+
 // gateCommands are what a gated key may run: the store's own commands, as
 // remote mode sends them. Not gc, firetower or follow-up (the store's jobs),
 // and not the commands that run on a caller's machine.
@@ -245,28 +250,34 @@ func gateRefusal(box string) error {
 }
 
 func cmdGate(args []string) error {
-	const u = "gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   (an ssh forced command on the store's machine)"
-	f, err := parseFlags(args, map[string]bool{"as": true, "read": true, "dir": true, "config": true})
+	const u = "gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config FILE]   (an ssh forced command on the store's machine)"
+	f, err := parseFlags(args, map[string]bool{"as": true, "read": true, "signed": false, "dir": true, "config": true})
 	if err != nil {
 		return bad(u, err)
 	}
-	if len(f.pos) > 0 || len(f.all("as")) != 1 || !f.has("read") {
-		return badf(u, "one --as and at least one --read, nothing else")
+	// The line is taken only as written plainly: one --as and one --read, in
+	// lowercase, the boxes comma-separated with no spaces and none twice. So
+	// what a person or an installer reads in authorized_keys is exactly what
+	// the gate does: nothing it would tidy (case, spaces, a second --read)
+	// can say one thing to a text check and another here.
+	if len(f.pos) > 0 || len(f.all("as")) != 1 || len(f.all("read")) != 1 {
+		return badf(u, "one --as and one --read (boxes comma-separated), nothing else")
 	}
-	as := strings.ToLower(f.get("as"))
+	as := f.get("as")
 	if err := checkBox("--as", as); err != nil || as == automation || as == "me" {
-		return badf(u, "--as %s: a name, like bob", f.get("as"))
+		return badf(u, "--as %s: a name in lowercase, like bob", as)
 	}
 	read := map[string]bool{}
-	for _, raw := range f.all("read") {
-		for _, w := range strings.Split(raw, ",") {
-			b := strings.ToLower(strings.TrimSpace(w))
-			if err := checkBox("--read", b); err != nil || b == automation || b == "me" {
-				return badf(u, "--read %s: a box, like bob", w)
-			}
-			read[b] = true
+	for _, b := range strings.Split(f.get("read"), ",") {
+		if err := checkBox("--read", b); err != nil || b == automation || b == "me" {
+			return badf(u, "--read %q: boxes in lowercase, comma-separated with no spaces, like bob,bob-helper", f.get("read"))
 		}
+		if read[b] {
+			return badf(u, "--read names %s twice", b)
+		}
+		read[b] = true
 	}
+	gateSigned = f.has("signed")
 	for _, k := range []string{"dir", "config"} {
 		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k)) || filepath.Clean(f.get(k)) != f.get(k)) {
 			return badf(u, "--%s: one full path, written plainly (no //, /./, .. or trailing /)", k)
@@ -391,6 +402,10 @@ func gateCheck(cmd string, args []string, as string) error {
 	// flag's value can't read differently here and there. Here: status names
 	// its boxes, and reads come as stored.
 	switch cmd {
+	case "reply":
+		if gateSigned {
+			return refused("this key's letters are signed: reply from a deaddrop with sign_key set (it sends a signed letter)")
+		}
 	case "status":
 		if !hasFlag(args, "box") {
 			return refused("this key's status names its boxes: status --box %s", as)
