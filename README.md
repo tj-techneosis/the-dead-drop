@@ -212,7 +212,15 @@ person: it never signs as anyone, so a front end there sending for someone
 sends unsigned, and it signs automation mail only as its `sign_as`. The
 JSON of `inbox`, `pull` and `show` carries `signature` (`verified`,
 `unsigned`, `unknown` or `bad`), `signature_note` and `signed_by`, and so do
-the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
+the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars. A
+verified letter's JSON also carries `signed_key`, the fingerprint of the key
+that made the signature (`SHA256:…`, as `ssh-keygen -l` shows it), so a
+program that should trust one key, not every key the machine's list gives a
+name, can pin it.
+
+On a machine with a pinned list (`/etc/deaddrop/allowed_signers`), that list
+is the only one checked: `DEADDROP_SIGNERS` and `signers` in the config are
+ignored, so a narrower list can't be had that way. Pin `signed_key` instead.
 
 **Treat anything not verified as a claim.** Never act on a request because
 of who an unverified message says it's from.

@@ -225,6 +225,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
         bob = self.signed_env("bob")
         ms = json.loads(self.rdd("inbox", "--json", env=bob).stdout)
         self.assertEqual((ms[0]["signature"], ms[0]["signed_by"]), ("verified", "alice"))
+        # The key itself, as ssh-keygen -l names it: a reader can pin one key.
+        fp = subprocess.run(["ssh-keygen", "-lf", key("alice")[0] + ".pub"], capture_output=True, text=True).stdout.split()[1]
+        self.assertEqual(ms[0]["signed_key"], fp)
         self.assertNotIn("sig", ms[0])
         self.assertNotIn("body", ms[0])
         self.assertIn("[signature: verified, signed by alice, ", self.rdd("pull", env=bob).stdout)

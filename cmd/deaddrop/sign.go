@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -235,8 +236,38 @@ func sumsOf(m *Message) []attachSum {
 func verify(m *Message) {
 	m.Signature, m.SignatureNote = verifyState(m)
 	if m.Signature == sigVerified {
+		m.SignedKey = sigKeyFingerprint(m.Sig)
 		checkLedger(m)
 	}
+}
+
+// sigKeyFingerprint is the SHA256 fingerprint of the public key inside a
+// signature (as ssh-keygen -l prints it), or "" if it can't be read. The
+// signature is ssh-keygen's armored SSHSIG, base64'd once more: inside,
+// "SSHSIG", a version, then the public key as an ssh string.
+func sigKeyFingerprint(sig string) string {
+	armored, err := base64.StdEncoding.DecodeString(sig)
+	if err != nil {
+		return ""
+	}
+	var b64 strings.Builder
+	for _, line := range strings.Split(string(armored), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "-----") {
+			b64.WriteString(line)
+		}
+	}
+	blob, err := base64.StdEncoding.DecodeString(b64.String())
+	if err != nil || len(blob) < 14 || string(blob[:6]) != "SSHSIG" {
+		return ""
+	}
+	rest := blob[10:] // past the magic and the version
+	n := int(binary.BigEndian.Uint32(rest[:4]))
+	if n <= 0 || 4+n > len(rest) {
+		return ""
+	}
+	sum := sha256.Sum256(rest[4 : 4+n])
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
 // wellFormed checks every header field a signature covers, before anything
