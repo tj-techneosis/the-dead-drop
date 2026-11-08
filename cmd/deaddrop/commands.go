@@ -585,7 +585,7 @@ func deliver(dir string, d draft) error {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
 		if gateSigned {
-			if err := gateSignatureIs(gateAs, d.sig, payload); err != nil {
+			if err := gateSignatureIs(gateAs, d.sig, d.signedAt, payload); err != nil {
 				return err
 			}
 		}
@@ -596,6 +596,7 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	sent := now()
+	followUpsBooked := 0
 	type copyAt struct{ box, helper string }
 	var copies []copyAt
 	for _, to := range d.to {
@@ -618,9 +619,13 @@ func deliver(dir string, d draft) error {
 	// Behind the gate, the follow-ups a key books (Crontinental jobs, run as
 	// the store's login) are capped across sends too: so many an hour.
 	if gateRead != nil && !d.followUp.IsZero() {
-		if err := gateBookFollowUps(gateAs, len(copies)); err != nil {
+		giveBack, err := gateBookFollowUps(gateAs, len(copies))
+		if err != nil {
 			return err
 		}
+		// Counted up front, so two sends can't both pass; what isn't booked
+		// in the end is given back.
+		defer func() { giveBack(len(copies) - followUpsBooked) }()
 	}
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
@@ -705,7 +710,9 @@ func deliver(dir string, d draft) error {
 		}
 		fmt.Printf("sent %s to %s: %q\n", m.ID, where, m.Subject)
 		if !d.followUp.IsZero() {
-			if err := bookFollowUp(dir, m); err != nil {
+			if err := bookFollowUp(dir, m); err == nil {
+				followUpsBooked++
+			} else {
 				// The mail is in the box; sending again would only make two.
 				if gateRead != nil {
 					gateLog("%s: follow-up not booked: %v", m.ID, err)

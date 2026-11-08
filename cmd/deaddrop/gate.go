@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -229,25 +231,77 @@ var gateAs string
 // client always turns a reply into a signed send first), is refused.
 var gateSigned bool
 
+// gateSignedFresh is how old a --signed key's signature may be when it
+// arrives: a signing deaddrop signs the moment before it sends, so a letter
+// older than this is being sent again, not sent.
+const gateSignedFresh = 10 * time.Minute
+
 // gateSignatureIs checks, on the store, that sig is who's: by the store's
-// list of signers (the machine's pinned one where there is one). Readers
-// still check for themselves, against their own lists; this only keeps a
-// --signed key from sending a letter its own seat's key didn't sign.
-func gateSignatureIs(who, sig string, payload []byte) error {
+// list of signers (the machine's pinned one where there is one), signed
+// just now, and not a seal this gate has carried before. Readers still
+// check for themselves, against their own lists; this only keeps a --signed
+// key from sending a letter its seat's key didn't sign for this send.
+func gateSignatureIs(who, sig, signedAtText string, payload []byte) error {
 	signers := signersPath()
 	if !listsPrincipal(signers, who) {
 		gateLog("--signed, but %s has no key for %s", signers, who)
 		return refused("this key's letters are signed, and the store has no key for %s to check them by (its owner can see why)", who)
 	}
+	signedAt, err := time.Parse(time.RFC3339, signedAtText)
+	if err != nil {
+		return refused("this key's letters are signed as they're sent, and this one has no time of signing")
+	}
+	if d := now().Sub(signedAt); d > gateSignedFresh || d < -gateSignedFresh {
+		return refused("this key's letters are signed as they're sent, and this one was signed %s: sign it again", signedAt.UTC().Format(time.RFC3339))
+	}
 	path, done, err := sigFile(sig)
 	if err != nil {
-		return refused("this key's letters are signed by %s, and this signature isn't readable", who)
+		gateLog("--signed: the signature couldn't be checked: %v", err)
+		return refused("this key's letter couldn't be checked just now (its owner can see why)")
 	}
 	defer done()
 	c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", who, "-n", signNamespace, "-s", path)
 	c.Stdin = bytes.NewReader(payload)
-	if c.Run() != nil {
-		return refused("this key's letters are signed by %s's own key, and this one isn't", who)
+	if out, err := c.CombinedOutput(); err != nil {
+		gateLog("--signed: %s's signature isn't accepted by %s: %s", who, signers, strings.TrimSpace(string(out)))
+		return refused("this key's letters are signed by %s's own key as the store lists it, and this one isn't accepted (its owner can see why)", who)
+	}
+	// A seal carried once isn't carried again: kept as long as one could
+	// still pass the freshness check, in gate.seals.json.
+	return gateSealOnce(sig)
+}
+
+// gateSealOnce notes a seal the gate is about to carry, or refuses one it
+// has carried in the last 2 × gateSignedFresh.
+func gateSealOnce(sig string) error {
+	dir, err := storeDir()
+	if err != nil {
+		return err
+	}
+	unlock, err := lockFile(filepath.Join(dir, ".gate.seals.lock"))
+	if err != nil {
+		return refused("this key's letter couldn't be checked just now")
+	}
+	defer unlock()
+	path := filepath.Join(dir, "gate.seals.json")
+	seen := map[string]time.Time{}
+	if b, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(b, &seen)
+	}
+	t := now()
+	for k, at := range seen {
+		if t.Sub(at) > 2*gateSignedFresh || at.After(t.Add(time.Minute)) {
+			delete(seen, k)
+		}
+	}
+	h := sha256.Sum256([]byte(sig))
+	key := hex.EncodeToString(h[:])
+	if _, ok := seen[key]; ok {
+		return refused("this letter's seal has been delivered already: sign it again to send it again")
+	}
+	seen[key] = t
+	if writeJSONFile(path, seen) != nil {
+		return refused("this key's letter couldn't be checked just now")
 	}
 	return nil
 }
@@ -572,24 +626,31 @@ func gateLine(args []string) (gateArgs, error) {
 const gateFollowUpsPerHour = maxCopies
 
 // gateBookFollowUps counts n follow-ups against the key's hour, or refuses
-// the send (before anything is written) if they'd pass it. Kept in
-// followups.json at the store's top, under its own lock. A count that
-// can't be kept refuses: a follow-up is never urgent the way a ring is.
-func gateBookFollowUps(who string, n int) error {
+// the send (before anything is written) if they'd pass it. It hands back a
+// giveBack for those that in the end weren't booked. Kept in
+// followups.json at the store's top, under its own lock. A count that can't
+// be kept refuses: a follow-up is never urgent the way a ring is.
+func gateBookFollowUps(who string, n int) (giveBack func(int), err error) {
+	giveBack = func(int) {}
 	dir, err := storeDir()
 	if err != nil {
-		return err
+		return giveBack, err
 	}
-	unlock, err := lockFile(filepath.Join(dir, ".followups.lock"))
+	lock := filepath.Join(dir, ".followups.lock")
+	path := filepath.Join(dir, "followups.json")
+	read := func() map[string][]time.Time {
+		book := map[string][]time.Time{}
+		if b, err := os.ReadFile(path); err == nil {
+			json.Unmarshal(b, &book)
+		}
+		return book
+	}
+	unlock, err := lockFile(lock)
 	if err != nil {
-		return refused("the store can't count this key's follow-ups just now")
+		return giveBack, refused("the store can't count this key's follow-ups just now")
 	}
 	defer unlock()
-	path := filepath.Join(dir, "followups.json")
-	book := map[string][]time.Time{}
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &book)
-	}
+	book := read()
 	t := now()
 	for k, ts := range book {
 		var live []time.Time
@@ -605,13 +666,33 @@ func gateBookFollowUps(who string, n int) error {
 		}
 	}
 	if len(book[who])+n > gateFollowUpsPerHour {
-		return refused("this key has booked %d follow-ups in the last hour; at most %d an hour (send without --follow-up, or later)", len(book[who]), gateFollowUpsPerHour)
+		return giveBack, refused("this key has %d follow-ups booked in the last hour; at most %d an hour (send without --follow-up, or later)", len(book[who]), gateFollowUpsPerHour)
 	}
 	for i := 0; i < n; i++ {
 		book[who] = append(book[who], t)
 	}
 	if writeJSONFile(path, book) != nil {
-		return refused("the store can't count this key's follow-ups just now")
+		return giveBack, refused("the store can't count this key's follow-ups just now")
 	}
-	return nil
+	giveBack = func(k int) {
+		if k <= 0 {
+			return
+		}
+		u, err := lockFile(lock)
+		if err != nil {
+			return
+		}
+		defer u()
+		b := read()
+		ts := b[who]
+		for i := len(ts) - 1; i >= 0 && k > 0; i-- {
+			if ts[i].Equal(t) {
+				ts = append(ts[:i], ts[i+1:]...)
+				k--
+			}
+		}
+		b[who] = ts
+		writeJSONFile(path, b)
+	}
+	return giveBack, nil
 }

@@ -236,22 +236,64 @@ func TestGateLogKeepsOneLine(t *testing.T) {
 	}
 }
 
-// A gated key's follow-ups are capped an hour, and the hour turns.
+// A gated key's follow-ups are capped an hour, and the hour turns; ones a
+// send couldn't book are given back.
 func TestGateFollowUpCapTurnsWithTheHour(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DEADDROP_DIR", dir)
 	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
-	if err := gateBookFollowUps("bob", gateFollowUpsPerHour); err != nil {
+	book := func(who string, n int) (func(int), error) { return gateBookFollowUps(who, n) }
+	giveBack, err := book("bob", gateFollowUpsPerHour)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gateBookFollowUps("bob", 1); err == nil {
+	if _, err := book("bob", 1); err == nil {
 		t.Fatal("past the cap")
 	}
-	if err := gateBookFollowUps("carol", 1); err != nil {
+	giveBack(2) // two of them weren't booked in the end
+	if _, err := book("bob", 2); err != nil {
+		t.Fatalf("after giving back two: %v", err)
+	}
+	if _, err := book("carol", 1); err != nil {
 		t.Fatalf("another key: %v", err)
 	}
 	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
-	if err := gateBookFollowUps("bob", 1); err != nil {
+	if _, err := book("bob", 1); err != nil {
 		t.Fatalf("an hour on: %v", err)
+	}
+}
+
+// A seal the gate has carried isn't carried again, while it could still
+// pass the freshness check.
+func TestGateCarriesASealOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	if err := gateSealOnce("c2lnbmF0dXJl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateSealOnce("c2lnbmF0dXJl"); err == nil || !strings.Contains(err.Error(), "delivered already") {
+		t.Fatalf("a replay: %v", err)
+	}
+	if err := gateSealOnce("b3RoZXI="); err != nil {
+		t.Fatalf("another seal: %v", err)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:51:00Z") // past 2 × gateSignedFresh
+	if err := gateSealOnce("c2lnbmF0dXJl"); err != nil {
+		t.Fatalf("forgotten after the window (freshness refuses it anyway): %v", err)
+	}
+}
+
+// A signature from outside the window is refused before it's checked.
+func TestGateRefusesAStaleSignature(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	signers := filepath.Join(dir, "allowed_signers")
+	os.WriteFile(signers, []byte("bob ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"), 0o600)
+	t.Setenv("DEADDROP_SIGNERS", signers)
+	err := gateSignatureIs("bob", "eA==", "2026-11-02T15:00:00Z", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "sign it again") {
+		t.Errorf("%v", err)
 	}
 }

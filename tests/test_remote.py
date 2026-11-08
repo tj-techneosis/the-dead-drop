@@ -772,20 +772,24 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         p = self.rdd("reply", id, input="an unsigned answer\n", ok=False)
         self.assertEqual(p.returncode, 5, p.stderr)
         # The control: signed by alice, both go.
-        self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice"))
-        self.rdd("reply", id, input="a signed answer\n", env=Remote.signed_env(self, "alice"))
+        self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice", DEADDROP_NOW=None))
+        self.rdd("reply", id, input="a signed answer\n", env=Remote.signed_env(self, "alice", DEADDROP_NOW=None))
         ms = json.loads(self.dd("pull", "carol", "--json", DEADDROP_DIR=str(self.far_store)).stdout)
         self.assertEqual([m.get("signed_by") for m in ms], ["alice"])
         # Signed "alice" with bob's key: a good signature, the wrong key.
-        forged = Remote.signed_env(self, "alice", DEADDROP_SIGN_KEY=__import__("_binary").key("bob")[0])
+        forged = Remote.signed_env(self, "alice", DEADDROP_SIGN_KEY=__import__("_binary").key("bob")[0], DEADDROP_NOW=None)
         p = self.rdd("send", "--to", "carol", input="# Forged\n\nx\n", env=forged, ok=False)
         self.assertEqual(p.returncode, 5, p.stderr)
-        self.assertIn("alice's own key, and this one isn't", p.stderr)
+        self.assertIn("this one isn't accepted", p.stderr)
+        # A letter signed long ago (the near clock is days behind): refused.
+        p = self.rdd("send", "--to", "carol", input="# Old\n\nx\n", env=Remote.signed_env(self, "alice"), ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("sign it again", p.stderr)
         self.assertNotIn("Forged", self.dd("pull", "carol", DEADDROP_DIR=str(self.far_store)).stdout)
 
     def test_signed_gate_needs_the_stores_list(self):
         self.signed_gate()
-        p = self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice"), ok=False)
+        p = self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice", DEADDROP_NOW=None), ok=False)
         self.assertEqual(p.returncode, 5, p.stderr)
         self.assertIn("has no key for alice", p.stderr)
 
@@ -794,7 +798,7 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.rdd("send", *to, "--follow-up", "1d", input="x\n")
         p = self.rdd("send", *to, "--follow-up", "1d", input="x\n", ok=False)
         self.assertEqual(p.returncode, 5, p.stderr)
-        self.assertIn("booked 20 follow-ups in the last hour", p.stderr)
+        self.assertIn("20 follow-ups booked in the last hour", p.stderr)
         self.rdd("send", *to, input="x\n")  # without --follow-up: fine
         # The hour turning: a Go test (the gate keeps no DEADDROP_NOW).
 

@@ -414,9 +414,11 @@ The line is taken only in one form: `--as NAME --read BOXES`, then
 value its own word (no `--as=bob`). Names in lowercase, the boxes
 comma-separated with no spaces and none twice. So what you read in
 `authorized_keys` is what the gate does. sshd runs the command through the
-login's shell, so the line should hold no quotes, backslashes or `#`: the
-gate sees the words after the shell has read them, and an installer that
-checks the text should refuse those. `--signed`
+login's shell, and the gate sees the words only after the shell has read
+them, so an installer that checks the text should allow only what the shell
+leaves alone: letters, digits, `-`, `_`, `,`, `/`, `.` and single spaces
+between words. Refuse anything else (quotes, `\`, `#`, `$`, `~`, globs,
+braces, backticks, `;`, `|`, `&`, redirections, newlines). `--signed`
 (optional) means every letter from the key must be signed by its `--as`:
 an unsigned `send` is refused, and so is a plain `reply` (a deaddrop with
 `sign_key` set always sends a reply as a signed letter). Leave it off for a
@@ -444,8 +446,10 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
   signs as no one else; with `--signed`, only with `--as`'s own key, as the
   store's list of signers has it (the machine's pinned one where there is
-  one), checked before anything is written;
-- the follow-ups it books are capped at 32 an hour, across sends;
+  one), signed within the last 10 minutes, and never a seal the gate has
+  carried before, all checked before anything is written;
+- the follow-ups it books are capped at 32 an hour, across sends (ones a
+  send couldn't book in the end don't count);
 - nothing from the environment sshd built decides anything: no `DEADDROP_`
   setting, no `XDG_` folder, a fixed `PATH`, and `HOME` from the account.
   Where the store and its config are is the owner's to say in the line

@@ -238,6 +238,9 @@ func cmdSent(args []string) error {
 	var to []string
 	for _, raw := range f.all("to") {
 		for _, w := range strings.Split(raw, ",") {
+			if strings.TrimSpace(w) == "" {
+				return badf(u, "--to %q: an empty name (a stray comma?)", raw)
+			}
 			b, err := resolveBox("--to", strings.TrimSpace(w))
 			if err != nil {
 				return bad(u, err)
