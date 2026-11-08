@@ -12,5 +12,9 @@ import (
 // machine usually does.
 func TestMain(m *testing.M) {
 	syscall.Umask(0o022)
+	// A machine's pinned list of signers would be the only one checked, so
+	// on one that has it every signature in a test would read as unknown.
+	// The tests' own lists stand in, as the black-box suite's build does.
+	systemSigners = "/nonexistent/deaddrop-test/allowed_signers"
 	os.Exit(m.Run())
 }
