@@ -67,15 +67,15 @@ func TestHeldRingHidesTheCountBehindTheGate(t *testing.T) {
 	defer func() { cachedConfig = nil }()
 	m := &Message{ID: "2026-11-02T153000-bob-0001", From: "bob"}
 	for i := 0; i < ringsPerBox; i++ {
-		ring("carol", m)
+		ring("carol", m, false)
 	}
 	gateRead = map[string]bool{"bob": true}
-	got := captureStderr(t, func() { ring("carol", m) })
+	got := captureStderr(t, func() { ring("carol", m, false) })
 	gateRead = nil
 	if !strings.Contains(got, "not rung") || strings.Contains(got, "times") {
 		t.Errorf("a gated key was told %q", got)
 	}
-	if got := captureStderr(t, func() { ring("carol", m) }); !strings.Contains(got, "4 times") {
+	if got := captureStderr(t, func() { ring("carol", m, false) }); !strings.Contains(got, "4 times") {
 		t.Errorf("the owner wasn't told the count: %q", got)
 	}
 }
@@ -102,5 +102,44 @@ func TestRingBookReadsAFlatFileWithASenderNamedRung(t *testing.T) {
 	b := readRingBook(path)
 	if len(b.Rung["bob"]) != 1 || len(b.Rung["rung"]) != 1 {
 		t.Errorf("read as %+v", b)
+	}
+}
+
+// A line like one written this hour isn't written again; the next one after
+// the hour says how many it stood for.
+func TestGateLogWritesARepeatOnceAnHour(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	gateLog("could not ring: %s to bob", "2026-11-02T153000-bob-0001")
+	gateLog("could not ring: %s to bob", "2026-11-02T153001-bob-0002")
+	gateLog("could not ring: %s to bob", "2026-11-02T153002-bob-0003")
+	gateLog("something else")
+	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
+	if n := strings.Count(string(b), "could not ring"); n != 1 || !strings.Contains(string(b), "something else") {
+		t.Fatalf("this hour: %q", b)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	gateLog("could not ring: %s to bob", "2026-11-02T163100-bob-0004")
+	b, _ = os.ReadFile(filepath.Join(dir, "gate.log"))
+	if !strings.Contains(string(b), "and 2 more like it") {
+		t.Errorf("the hour after: %q", b)
+	}
+}
+
+// A config that can't be read is still noted, in the usual place.
+func TestGateLogNotesABrokenConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEADDROP_DIR", "")
+	cfg := filepath.Join(home, "broken.toml")
+	os.WriteFile(cfg, []byte("this is = = not toml"), 0o600)
+	t.Setenv("DEADDROP_CONFIG", cfg)
+	cachedConfig = nil
+	defer func() { cachedConfig = nil }()
+	gateLog("the config can't be read: x")
+	b, err := os.ReadFile(filepath.Join(home, ".local", "share", "deaddrop", "gate.log"))
+	if err != nil || !strings.Contains(string(b), "the config can't be read") {
+		t.Errorf("not noted: %v %q", err, b)
 	}
 }

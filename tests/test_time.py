@@ -488,10 +488,28 @@ class Ring(DeadDrop):
                 if w == "--tag":
                     self.assertRegex(c[i + 1].split("=")[0], r"^[A-Za-z][A-Za-z0-9_]*$", c)
 
+    def test_follow_up_rings_dont_count_against_the_sender(self):
+        # The store's job rings for a raised follow-up only while the letter
+        # is unread; counted against the sender, whether its own next send
+        # was held would tell it the box's read state.
+        self.config.write_text("ring_urgent = true\n")
+        for i in range(4):
+            self.send("x\n", "--to", "carol", "--follow-up", "1m", DEADDROP_NOW=at(i))
+        jobs = [c for c in self.calls(self.cron_calls) if c and c[0] != "notify"]
+        for c in jobs:
+            # The job names the installed deaddrop; run the one under test.
+            cmd = [BIN if w.endswith("/deaddrop") else w for w in c[c.index("--") + 1:]]
+            subprocess.run(cmd, check=True, capture_output=True, env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(5)))
+        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 4)
+        p = self.dd("send", "--to", "carol", "--urgent", input="x\n", DEADDROP_NOW=at(6))
+        self.assertNotIn("not rung", p.stderr)
+        self.assertEqual(len([c for c in self.calls(self.cron_calls) if c[0] == "notify"]), 5)
+
     def test_a_raised_follow_up_rings(self):
         self.config.write_text("ring_urgent = true\n")
         self.send("x\n", "--to", "bob", "--follow-up", "1m")
         c = self.calls(self.cron_calls)[0]
-        cmd = c[c.index("--") + 1:]
+        # The job names the installed deaddrop; run the one under test.
+        cmd = [BIN if w.endswith("/deaddrop") else w for w in c[c.index("--") + 1:]]
         subprocess.run(cmd, check=True, capture_output=True, env=self.env(DEADDROP_DIR=None, DEADDROP_NOW=at(1)))
         self.assertEqual(self.calls(self.cron_calls)[1][:2], ["notify", "--urgent"])

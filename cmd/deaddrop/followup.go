@@ -186,7 +186,7 @@ func cmdFollowUp(args []string) error {
 		}
 	}
 	if !already {
-		ring(box, m)
+		ring(box, m, true)
 	}
 	return nil
 }
@@ -194,7 +194,7 @@ func cmdFollowUp(args []string) error {
 // ring tells the store machine's notify hooks that urgent mail is waiting,
 // when the config asks for it. It says only which box, unless the box is in
 // board_detail: then who sent the message and its subject too.
-func ring(box string, m *Message) {
+func ring(box string, m *Message, raised bool) {
 	c, err := loadConfig()
 	if err != nil || !c.RingUrgent {
 		return
@@ -206,7 +206,16 @@ func ring(box string, m *Message) {
 	}
 	// Counted only once there's something to ring with, and given back if
 	// the ring fails: a ring that never went out doesn't spend the cap.
-	ok, why, first, refund := ringAllowed(m.From, box)
+	// A raised follow-up is the store's own job ringing, not the sender:
+	// it counts in a bucket of its own (still per sender, so one sender's
+	// follow-ups never hold another's), and nothing a sender is told
+	// depends on it. Else whether a send was held would say whether a
+	// follow-up rang, so whether its letter was read.
+	bucket := m.From
+	if raised {
+		bucket = strings.ToLower(m.From) + "+follow-up"
+	}
+	ok, why, first, refund := ringAllowed(bucket, box)
 	if !ok {
 		// The letter is still urgent and on the board: only the ring is held.
 		// A gated key isn't shown the count: its follow-ups are in it, and
@@ -286,7 +295,7 @@ type ringBook struct {
 func ringAllowed(from, box string) (ok bool, why string, first bool, refund func()) {
 	refund = func() {}
 	from = strings.ToLower(from)
-	if from == automation {
+	if from == automation || from == automation+"+follow-up" {
 		return true, "", false, refund
 	}
 	dir, err := storeDir()

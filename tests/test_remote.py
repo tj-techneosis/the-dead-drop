@@ -705,6 +705,15 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("<store>", p.stderr)
         self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
 
+    def test_the_gates_dir_is_written_plainly(self):
+        # Errors spell paths cleaned; a --dir written otherwise wouldn't
+        # match when the gate hides it.
+        for d in (str(self.far_store) + "/", str(self.far_store).replace("/", "//", 1),
+                  str(self.far_store.parent) + "/./" + self.far_store.name):
+            p = self.gate("deaddrop status --box alice --count", gate_args=("--dir", d))
+            self.assertEqual(p.returncode, 2, (d, p.stderr))
+            self.assertIn("written plainly", p.stderr)
+
     def test_a_typed_line_may_have_extra_spaces(self):
         # A person at a shell types two spaces now and then; a shell reads
         # them as one, and so does the gate.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,13 +32,53 @@ import (
 // one kept) and starts again, so nothing a key does can fill the disk with it.
 const gateLogMax = 1 << 20
 
+// gateIDs are message ids in a line: a repeat is the same line with other ids.
+var gateIDs = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d{6}-[a-z][a-z0-9_-]*-[0-9a-f]{4}`)
+
 // gateLog notes, for the store's owner, what went wrong that a key holder
 // isn't told: one line in gate.log at the store's top (the owner's folder).
+// A line like one already written this hour (the same words, ids aside) isn't
+// written again; when the hour turns, the next one says how many it stood
+// for. So a key repeating something can't wash out the owner's history, and
+// 1 MB with one old file bounds the disk. All under .gate.lock.
 func gateLog(format string, a ...any) {
 	dir, err := storeDir()
-	if err != nil || os.MkdirAll(dir, 0o700) != nil {
+	if err != nil {
+		// A config that can't be read is a thing to log: the usual place.
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "share", "deaddrop")
+	}
+	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
+	unlock, err := lockFile(filepath.Join(dir, ".gate.lock"))
+	if err != nil {
+		return
+	}
+	defer unlock()
+	line := fmt.Sprintf(format, a...)
+	kind := gateIDs.ReplaceAllString(line, "<id>")
+	t := now().UTC()
+	seenPath := filepath.Join(dir, "gate.seen.json")
+	seen := map[string]gateSeen{}
+	if b, err := os.ReadFile(seenPath); err == nil {
+		json.Unmarshal(b, &seen)
+	}
+	for k, v := range seen {
+		if k != kind && t.Sub(v.First) > time.Hour && v.More == 0 {
+			delete(seen, k)
+		}
+	}
+	if v, ok := seen[kind]; ok && t.Sub(v.First) <= time.Hour && !v.First.After(t) {
+		v.More++
+		seen[kind] = v
+		writeJSONFile(seenPath, seen)
+		return
+	} else if ok && v.More > 0 {
+		line += fmt.Sprintf(" (and %d more like it in the hour before)", v.More)
+	}
+	seen[kind] = gateSeen{First: t}
+	writeJSONFile(seenPath, seen)
 	path := filepath.Join(dir, "gate.log")
 	if st, err := os.Stat(path); err == nil && st.Size() >= gateLogMax {
 		os.Rename(path, path+".1")
@@ -47,7 +88,14 @@ func gateLog(format string, a ...any) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", now().UTC().Format(time.RFC3339), fmt.Sprintf(format, a...))
+	fmt.Fprintf(f, "%s %s\n", t.Format(time.RFC3339), line)
+}
+
+// gateSeen is one kind of gate.log line: when it was last written, and how
+// many like it have come since.
+type gateSeen struct {
+	First time.Time `json:"first"`
+	More  int       `json:"more,omitempty"`
 }
 
 // gateRead is the boxes a gated caller may read: nil when not gated.
@@ -106,8 +154,8 @@ func cmdGate(args []string) error {
 		}
 	}
 	for _, k := range []string{"dir", "config"} {
-		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k))) {
-			return badf(u, "--%s: one full path", k)
+		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k)) || filepath.Clean(f.get(k)) != f.get(k)) {
+			return badf(u, "--%s: one full path, written plainly (no //, /./, .. or trailing /)", k)
 		}
 	}
 	// Nothing from the environment sshd built (AcceptEnv, environment= in
@@ -188,8 +236,12 @@ func gateClean(err error) error {
 	}
 	msg := err.Error()
 	clean := msg
+	// As errors spell it: filepath.Join cleans, so the pattern is clean
+	// and absolute too (a relative one would match any word).
 	if dir, derr := storeDir(); derr == nil && dir != "" {
-		clean = strings.ReplaceAll(clean, dir, "<store>")
+		if abs, aerr := filepath.Abs(dir); aerr == nil && abs != "/" {
+			clean = strings.ReplaceAll(clean, abs, "<store>")
+		}
 	}
 	if home, herr := os.UserHomeDir(); herr == nil && len(home) > 1 {
 		clean = strings.ReplaceAll(clean, home, "~")

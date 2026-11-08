@@ -702,7 +702,7 @@ func deliver(dir string, d draft) error {
 		}
 		if m.Urgency == urgent && !rung[to] {
 			rung[to] = true
-			ring(to, m)
+			ring(to, m, false)
 		}
 	}
 	return nil

@@ -428,7 +428,10 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   usual place in the account's home. What goes wrong that the key holder
   isn't told (a broken config, notify's output, an error naming the store's
   folder, which the key sees as `<store>`) goes in `gate.log` at the store's
-  top, which rolls over to `gate.log.1` at 1 MB;
+  top: a line like one already written that hour (ids aside) isn't written
+  again, the next one after the hour saying how many it stood for, and the
+  log rolls over to `gate.log.1` at 1 MB. `--dir` and `--config` are full
+  paths written plainly (no `//`, `/./`, `..` or trailing `/`);
 - `file` hands an attachment over as stored (checked against the sum it was
   sent with), and the key holder's own deaddrop checks who signed it;
   `reply` checks the original's signature on the store, against the store's
@@ -694,7 +697,8 @@ told; a held ring from a raised follow-up shows only in that job's output.
 The first held ring to a box in an hour (and the first held by the in-all
 cap) is noted in the store's `gate.log`. A ring that failed doesn't count.
 Behind the gate a key past its cap is told only that the ring was held, not
-its count.
+its count. A raised follow-up's ring is the store's own job, so it counts in a
+bucket of its own, never against what the sender's next send may ring.
 The counts are kept in
 `rings.json` at the store's top.
 
