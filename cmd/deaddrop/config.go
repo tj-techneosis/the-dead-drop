@@ -206,10 +206,12 @@ func resolveBoxName(what, who string) (string, error) {
 			return b, nil
 		}
 	}
+	// "ME" is "me": a box name is lowercased, so a word that would become
+	// "me" is the caller, never a box called me.
+	who = strings.ToLower(who)
 	if who == "" || who == "me" {
 		return whoAmI()
 	}
-	who = strings.ToLower(who)
 	if err := checkBox(what, who); err != nil {
 		return "", err
 	}

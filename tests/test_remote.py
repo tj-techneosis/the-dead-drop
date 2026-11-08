@@ -657,6 +657,34 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner, *gate_args], input=input,
                               capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
 
+    def test_a_typed_line_may_have_extra_spaces(self):
+        # A person at a shell types two spaces now and then; a shell reads
+        # them as one, and so does the gate.
+        self.far_send("alice", "# Hi\n\nx\n")
+        for line in ("deaddrop  status --box alice --count", "deaddrop status  --box alice   --count  ",
+                     "deaddrop status --box alice --count "):
+            p = self.gate(line)
+            self.assertEqual(p.returncode, 0, (line, p.stderr))
+            self.assertEqual(p.stdout.split()[0], "1")
+        p = self.gate("deaddrop  ")
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("say which", p.stderr)
+
+    def test_remote_modes_own_line_is_held_to_one_space(self):
+        self.far_send("alice", "# Hi\n\nx\n")
+        line = "d='deaddrop'; DEADDROP_HOPS=1 DEADDROP_FROM='alice' exec \"$d\" 'status'  '--box' 'alice' '--count'"
+        p = self.gate(line)
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("characters a shell would read", p.stderr)
+        self.assertEqual(self.gate(line.replace("  ", " ")).returncode, 0)  # the control
+
+    def test_an_empty_command_word_is_said(self):
+        line = "d='deaddrop'; DEADDROP_HOPS=1 DEADDROP_FROM='alice' exec \"$d\" '' 'inbox'"
+        p = self.gate(line)
+        self.assertEqual(p.returncode, 5)
+        self.assertIn("'' isn't one", p.stderr)
+        self.assertNotIn("can't run :", p.stderr)
+
     def test_sent_shows_only_copies_in_readable_boxes(self):
         self.rdd("send", "--to", "alice-helper", "--to", "carol", input="# To two\\n\\nx\\n")
         rows = json.loads(self.rdd("sent", "--json").stdout)

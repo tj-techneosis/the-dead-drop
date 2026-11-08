@@ -161,11 +161,18 @@ func writeJSONFile(path string, v any) error {
 	return writeAtomic(path, append(b, '\n'), 0o600)
 }
 
-func lockState() (func(), error) {
-	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+func lockState() (func(), error) { return lockFile(filepath.Join(stateDir(), ".lock")) }
+
+// lockInbox holds one inbox file (one box, one pigeonhole) for a watch pass,
+// fetch included: a watch on a side box, waiting on a slow store, never holds
+// up the caller's own watch or another box's.
+func lockInbox() (func(), error) { return lockFile(inboxPath() + ".lock") }
+
+func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(stateDir(), ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +202,7 @@ func watchPass(hooks bool) (passResult, error) {
 			return r, err
 		}
 	}
-	unlock, err := lockState()
+	unlock, err := lockInbox()
 	if err != nil {
 		return r, err
 	}
@@ -604,6 +611,14 @@ func cmdOpen(args []string) error {
 		// What it shows and marks is in that box: the commands it runs read
 		// there by default (defaultBox).
 		os.Setenv("DEADDROP_BOX", watchBox)
+	} else if f.has("box") {
+		// --box naming the caller's own: its own box, even with a side box
+		// set in the environment (which the commands it runs would read).
+		me, err := whoAmI()
+		if err != nil {
+			return err
+		}
+		os.Setenv("DEADDROP_BOX", me)
 	}
 	var page []byte
 	var name, id string

@@ -393,6 +393,32 @@ class Ring(DeadDrop):
         p = self.dd("status", ok=False)
         self.assertIn("board_detail", p.stderr)
 
+    def test_rings_are_capped_per_sender_and_box(self):
+        # So no one sender (a gated key's above all) can page without end;
+        # the letter is still urgent and on the board, only the ring is held.
+        self.config.write_text("ring_urgent = true\n")
+        for i in range(4):
+            self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(i))
+        p = self.dd("send", "--to", "bob", "--urgent", input="x\n", DEADDROP_NOW=at(5))
+        self.assertIn("not rung: alice has rung bob 4 times in the last hour", p.stderr)
+        self.assertEqual(len(self.calls(self.cron_calls)), 4)
+        self.assertIn("urgent", self.dd("inbox", "bob", DEADDROP_NOW=at(5)).stdout)
+        self.assertIn("not rung", (self.dir / "gate.log").read_text())
+        # Another box, or another sender, still rings; so does alice, an hour on.
+        self.send("x\n", "--to", "carol", "--urgent", DEADDROP_NOW=at(6))
+        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(6), DEADDROP_FROM="dave")
+        self.send("x\n", "--to", "bob", "--urgent", DEADDROP_NOW=at(61))
+        self.assertEqual(len(self.calls(self.cron_calls)), 7)
+
+    def test_one_urgent_letter_to_a_whole_send_rings_everyone(self):
+        self.config.write_text("ring_urgent = true\n")
+        to = [w for i in range(32) for w in ("--to", f"box{i}")]
+        self.send("x\n", *to, "--urgent", DEADDROP_NOW=at(0))
+        self.assertEqual(len(self.calls(self.cron_calls)), 32)
+        p = self.dd("send", "--to", "late", "--urgent", input="x\n", DEADDROP_NOW=at(1))
+        self.assertIn("alice has rung 32 times in the last hour", p.stderr)
+        self.assertEqual(len(self.calls(self.cron_calls)), 32)
+
     def test_a_raised_follow_up_rings(self):
         self.config.write_text("ring_urgent = true\n")
         self.send("x\n", "--to", "bob", "--follow-up", "1m")

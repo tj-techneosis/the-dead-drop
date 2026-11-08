@@ -14,7 +14,7 @@ Claude Code setup.
 | `cmd/deaddrop/store.go` | the files: boxes, states, the box lock, atomic writes, moves |
 | `cmd/deaddrop/commands.go` | send, reply, inbox, pull, file, mark, status, gc |
 | `cmd/deaddrop/remote.go` | remote mode: every command over ssh, the caller's name across |
-| `cmd/deaddrop/followup.go` | follow-ups (Crontinental jobs), the ring |
+| `cmd/deaddrop/followup.go` | follow-ups (Crontinental jobs), the ring and its per-sender cap |
 | `cmd/deaddrop/firetower.go` | `deaddrop firetower`: one lookout per box |
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
 | `cmd/deaddrop/wait.go` | `deaddrop wait`: block until mail no wait has reported (`waited@<box>[@<helper>].json`, locked), a line per letter, `--alive`; retries only an unreachable store (255) or an unreadable answer, ends on everything else; never prunes from a fetch older than the state |

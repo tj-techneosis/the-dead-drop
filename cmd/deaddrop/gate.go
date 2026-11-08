@@ -150,11 +150,11 @@ func cmdGate(args []string) error {
 	if len(words) == 0 {
 		return refused("this key runs one deaddrop command: say which (send, inbox, pull, …)")
 	}
+	if words[0] == "" {
+		return refused("this key runs one deaddrop command, and '' isn't one: say which (send, inbox, pull, …)")
+	}
 	if !gateCommands[words[0]] {
-		what := "nothing"
-		if len(words) > 0 {
-			what = cleanLine(words[0], 40)
-		}
+		what := cleanLine(words[0], 40)
 		return refused("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
 	}
 	cmd, rest := words[0], words[1:]
@@ -212,7 +212,7 @@ func gateWords(line string) ([]string, int, error) {
 	if len(line) > 64*1024 {
 		return nil, 0, fmt.Errorf("a command line that long isn't one")
 	}
-	rest, hops := line, 0
+	rest, hops, typed := line, 0, false
 	if m := gatePrefix.FindStringSubmatch(rest); m != nil {
 		rest = rest[len(m[0]):]
 		n, err := strconv.Atoi(m[1])
@@ -220,10 +220,13 @@ func gateWords(line string) ([]string, int, error) {
 			return nil, 0, fmt.Errorf("a hop count that isn't one")
 		}
 		hops = n
-	} else if rest == "deaddrop" {
+	} else if strings.TrimRight(rest, " ") == "deaddrop" {
 		return nil, 0, nil
 	} else if strings.HasPrefix(rest, "deaddrop ") {
-		rest = strings.TrimPrefix(rest, "deaddrop ")
+		// A line a person typed: spaces between words are spaces, however
+		// many (a shell would read them so). Remote mode's own line is
+		// held to the one space it writes.
+		rest, typed = strings.Trim(strings.TrimPrefix(rest, "deaddrop "), " "), true
 	} else {
 		return nil, 0, fmt.Errorf("not a deaddrop command")
 	}
@@ -249,6 +252,9 @@ func gateWords(line string) ([]string, int, error) {
 			return nil, 0, fmt.Errorf("characters a shell would read")
 		}
 		rest = rest[1:]
+		if typed {
+			rest = strings.TrimLeft(rest, " ")
+		}
 	}
 	for _, w := range words {
 		if strings.ContainsRune(w, 0) {

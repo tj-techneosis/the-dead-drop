@@ -3,12 +3,14 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -197,6 +199,12 @@ func ring(box string, m *Message) {
 	if err != nil || !c.RingUrgent {
 		return
 	}
+	if ok, why := ringAllowed(m.From, box); !ok {
+		// The letter is still urgent and on the board: only the ring is held.
+		fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: %s\n", m.ID, why)
+		gateLog("not rung: %s to %s: %s", m.ID, box, why)
+		return
+	}
 	cron, err := crontinental()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "deaddrop: ring_urgent is on, but "+err.Error())
@@ -214,4 +222,75 @@ func ring(box string, m *Message) {
 	if out, err := exec.Command(cron, append(a, "--title", "Dead Drop", text)...).CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "deaddrop: could not ring: %s\n", strings.TrimSpace(string(out)))
 	}
+}
+
+// Rings are capped per sender, so no one sender (a gated key's above all)
+// can page whoever reads the store's notify hooks without end: so many an
+// hour to one box, and so many in all. The in-all cap is a send's most
+// copies, so one urgent letter to everyone still rings everyone.
+const (
+	ringsPerBox   = 4
+	ringsInAll    = maxCopies
+	ringsInterval = time.Hour
+)
+
+// ringAllowed counts a ring against the sender's caps and says whether it
+// may ring. Kept in rings.json at the store's top, under its own lock. A
+// count that can't be kept rings anyway: the cap is a guard, and urgent mail
+// failing to ring is worse than one ring too many.
+func ringAllowed(from, box string) (bool, string) {
+	dir, err := storeDir()
+	if err != nil {
+		return true, ""
+	}
+	lf, err := os.OpenFile(filepath.Join(dir, ".rings.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return true, ""
+	}
+	defer lf.Close()
+	if syscall.Flock(int(lf.Fd()), syscall.LOCK_EX) != nil {
+		return true, ""
+	}
+	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	path := filepath.Join(dir, "rings.json")
+	// sender -> "box at time" for each ring in the last interval
+	kept := map[string][]string{}
+	if b, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(b, &kept)
+	}
+	t := now()
+	since := t.Add(-ringsInterval)
+	from = strings.ToLower(from)
+	all, toBox := 0, 0
+	for who, rs := range kept {
+		var live []string
+		for _, r := range rs {
+			b, at, ok := strings.Cut(r, " ")
+			when, err := time.Parse(time.RFC3339, at)
+			if !ok || err != nil || !when.After(since) || when.After(t.Add(time.Minute)) {
+				continue
+			}
+			live = append(live, r)
+			if who == from {
+				all++
+				if b == box {
+					toBox++
+				}
+			}
+		}
+		if len(live) == 0 {
+			delete(kept, who)
+		} else {
+			kept[who] = live
+		}
+	}
+	if toBox >= ringsPerBox {
+		return false, fmt.Sprintf("%s has rung %s %d times in the last hour", from, box, toBox)
+	}
+	if all >= ringsInAll {
+		return false, fmt.Sprintf("%s has rung %d times in the last hour", from, all)
+	}
+	kept[from] = append(kept[from], box+" "+t.UTC().Format(time.RFC3339))
+	writeJSONFile(path, kept)
+	return true, ""
 }

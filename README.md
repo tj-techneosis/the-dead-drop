@@ -405,9 +405,10 @@ Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
 special. The gate reads the command line remote mode sends (sshd hands it over
 as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
 
-- it's exactly the shape remote mode writes (single-quoted words), or a plain
-  `deaddrop <command> <words>` a person types, with nothing a shell would
-  read, so a shell, `scp`, `sftp` or a pipe gets nothing;
+- it's exactly the shape remote mode writes (single-quoted words, one space
+  apart), or a plain `deaddrop <command> <words>` a person types (spaces
+  between words however many), with nothing a shell would read, so a shell,
+  `scp`, `sftp` or a pipe gets nothing;
 - reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
   mode always asks), so the store doesn't check signatures or keep a ledger
   on the key's behalf; files come only as remote mode sends them
@@ -677,6 +678,13 @@ store machine's config also runs `crontinental notify --urgent` for urgent
 mail, which rings whatever notify hooks are set up there. It's off by
 default, and like the board it names only the box, unless the box is in
 `board_detail`: then it says who the message is from and its subject too.
+
+Rings are capped per sender, so no one sender (a gated key's above all) can
+page whoever reads those hooks without end: 4 an hour to any one box, and 32
+an hour in all (a send's most copies, so one urgent letter to everyone still
+rings everyone). A letter past the cap is still urgent and still on the
+board; only its ring is held, said to the sender and noted in the store's
+`gate.log`. The counts are kept in `rings.json` at the store's top.
 
 ## Reports of your own
 
