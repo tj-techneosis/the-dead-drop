@@ -468,14 +468,22 @@ class Ring(DeadDrop):
     def test_every_ring_tag_is_one_crontinental_takes(self):
         # Crontinental refuses a tag name that isn't letters, digits and _
         # starting with a letter: a ring tagged otherwise never goes out.
-        import re
+        # Every kind of ring: urgent mail (own box and pigeonhole) and the
+        # firetower's (own box and pigeonhole).
         self.config.write_text("ring_urgent = true\n")
         self.send("x\n", "--to", "bob", "--for", "planner", "--urgent")
-        self.dd("firetower", "--ring", "--next", "none")
         self.send("y\n", "--to", "carol", "--urgent", DEADDROP_FROM="dave")
-        calls = self.calls(self.cron_calls)
-        self.assertTrue(calls)
-        for c in calls:
+        self.send("z\n", "--to", "erin")
+        self.send("w\n", "--to", "erin", "--for", "helper")
+        ages = ("--box", "erin", "--pigeonholes", "--smoke-after", "30m", "--fire-after", "3h", "--ring")
+        self.dd("firetower", *ages)  # the first --ring run notes, rings nothing
+        self.clock = at(200)
+        self.dd("firetower", *ages)
+        rings = [c for c in self.calls(self.cron_calls) if c and c[0] == "notify"]
+        fired = [c for c in rings if "drop=" not in " ".join(c)]
+        self.assertEqual(len(fired), 2, rings)  # erin's box and erin's helper
+        self.assertTrue(any("deaddrop_for=helper" in c for c in fired), fired)
+        for c in rings:
             for i, w in enumerate(c):
                 if w == "--tag":
                     self.assertRegex(c[i + 1].split("=")[0], r"^[A-Za-z][A-Za-z0-9_]*$", c)

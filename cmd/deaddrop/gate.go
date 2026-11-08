@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -26,6 +27,10 @@ import (
 // reading command picks checked against --read. A shell, scp, sftp, a port
 // forward or anything else is refused: there's nothing for them to run.
 
+// gateLogMax bounds gate.log: past it, the log becomes gate.log.1 (one old
+// one kept) and starts again, so nothing a key does can fill the disk with it.
+const gateLogMax = 1 << 20
+
 // gateLog notes, for the store's owner, what went wrong that a key holder
 // isn't told: one line in gate.log at the store's top (the owner's folder).
 func gateLog(format string, a ...any) {
@@ -33,7 +38,11 @@ func gateLog(format string, a ...any) {
 	if err != nil || os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "gate.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	path := filepath.Join(dir, "gate.log")
+	if st, err := os.Stat(path); err == nil && st.Size() >= gateLogMax {
+		os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -167,7 +176,37 @@ func cmdGate(args []string) error {
 	os.Setenv("DEADDROP_FROM", as)
 	os.Setenv("DEADDROP_HOPS", fmt.Sprint(max(hops, 1)))
 	gateAs, gateRead = as, read
-	return dispatch(cmd, rest)
+	return gateClean(dispatch(cmd, rest))
+}
+
+// gateClean keeps where the store lives from a key holder: an error naming
+// the store's folder or the account's home goes to gate.log whole, and to
+// the key with those parts as <store> and ~. Its exit code stays.
+func gateClean(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	clean := msg
+	if dir, derr := storeDir(); derr == nil && dir != "" {
+		clean = strings.ReplaceAll(clean, dir, "<store>")
+	}
+	if home, herr := os.UserHomeDir(); herr == nil && len(home) > 1 {
+		clean = strings.ReplaceAll(clean, home, "~")
+	}
+	if clean == msg {
+		return err
+	}
+	gateLog("%s", msg)
+	var ee exitError
+	if errors.As(err, &ee) {
+		return exitError{ee.code, clean}
+	}
+	var ue usageError
+	if errors.As(err, &ue) {
+		return err // usage text names no paths
+	}
+	return errors.New(clean)
 }
 
 // gateCheck is what a gated command line may not say, beyond the boxes

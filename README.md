@@ -426,9 +426,13 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   Where the store and its config are is the owner's to say in the line
   itself (`--dir /srv/drop --config /srv/drop/config.toml`), or else their
   usual place in the account's home. What goes wrong that the key holder
-  isn't told (a broken config) goes in `gate.log` at the store's top;
-- `file` and `reply` check signatures on the store, against the store's own
-  list (they record nothing outside the key's boxes).
+  isn't told (a broken config, notify's output, an error naming the store's
+  folder, which the key sees as `<store>`) goes in `gate.log` at the store's
+  top, which rolls over to `gate.log.1` at 1 MB;
+- `file` hands an attachment over as stored (checked against the sum it was
+  sent with), and the key holder's own deaddrop checks who signed it;
+  `reply` checks the original's signature on the store, against the store's
+  own list (it records nothing outside the key's boxes).
 
 Every send and reply has the same limits behind the gate as anywhere: a
 document of 8 MB, 16 attachments of 64 MB each and 256 MB in all, 32 copies
@@ -689,6 +693,8 @@ urgent and still on the board; only its ring is held. On a send the sender is
 told; a held ring from a raised follow-up shows only in that job's output.
 The first held ring to a box in an hour (and the first held by the in-all
 cap) is noted in the store's `gate.log`. A ring that failed doesn't count.
+Behind the gate a key past its cap is told only that the ring was held, not
+its count.
 The counts are kept in
 `rings.json` at the store's top.
 

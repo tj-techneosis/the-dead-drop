@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -200,7 +201,7 @@ func ring(box string, m *Message) {
 	}
 	cron, err := crontinental()
 	if err != nil {
-		ringTrouble("ring_urgent is on, but " + err.Error())
+		ringTrouble(m.ID, box, "ring_urgent is on, but "+err.Error())
 		return
 	}
 	// Counted only once there's something to ring with, and given back if
@@ -208,7 +209,14 @@ func ring(box string, m *Message) {
 	ok, why, first, refund := ringAllowed(m.From, box)
 	if !ok {
 		// The letter is still urgent and on the board: only the ring is held.
-		fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: %s\n", m.ID, why)
+		// A gated key isn't shown the count: its follow-ups are in it, and
+		// they ring only while the letter's unread, which would tell it a
+		// box's read state it can't see.
+		if gateRead != nil {
+			fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: past this sender's ring cap\n", m.ID)
+		} else {
+			fmt.Fprintf(os.Stderr, "deaddrop: %s is urgent and waiting, but not rung: %s\n", m.ID, why)
+		}
 		if first {
 			gateLog("rings held: %s to %s: %s (the first this hour; more aren't noted)", m.ID, box, why)
 		}
@@ -234,17 +242,17 @@ func ring(box string, m *Message) {
 		if detail == "" {
 			detail = err.Error()
 		}
-		ringTrouble("could not ring: " + detail)
+		ringTrouble(m.ID, box, "could not ring: "+detail)
 	}
 }
 
 // ringTrouble says why a ring didn't go: to whoever's there, unless that's a
 // gated key, which gets a word and no more (notify's output is the store
 // machine's own business), the detail going to gate.log for the owner.
-func ringTrouble(detail string) {
+func ringTrouble(id, box, detail string) {
 	if gateRead != nil {
-		gateLog("%s", detail)
-		fmt.Fprintln(os.Stderr, "deaddrop: the store couldn't ring for this letter (its owner can see why)")
+		gateLog("%s to %s: %s", id, box, detail)
+		fmt.Fprintf(os.Stderr, "deaddrop: %s to %s: the store couldn't ring (its owner can see why)\n", id, box)
 		return
 	}
 	fmt.Fprintln(os.Stderr, "deaddrop: "+detail)
@@ -330,7 +338,9 @@ func ringAllowed(from, box string) (ok bool, why string, first bool, refund func
 		}
 		if first {
 			book.Held[from] = append(book.Held[from], held+" "+t.UTC().Format(time.RFC3339))
-			writeJSONFile(path, &book)
+			// A note that can't be kept isn't noted: else every held ring
+			// would be "the first".
+			first = writeJSONFile(path, &book) == nil
 		}
 		return false, why, first, refund
 	}
@@ -370,7 +380,9 @@ func readRingBook(path string) ringBook {
 	if json.Unmarshal(b, &top) != nil {
 		return book
 	}
-	if _, ok := top["rung"]; ok {
+	// The new shape's "rung" is an object; the flat one's values are lists
+	// (a sender named rung included).
+	if r, ok := top["rung"]; ok && len(bytes.TrimSpace(r)) > 0 && bytes.TrimSpace(r)[0] == '{' {
 		json.Unmarshal(b, &book)
 	} else {
 		json.Unmarshal(b, &book.Rung)

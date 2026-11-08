@@ -692,6 +692,19 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         # notify's output behind the gate: a Go test (ring_test.go), since the
         # gate runs the account's own crontinental, never a stand-in.
 
+    def test_a_gated_error_never_names_the_stores_folder(self):
+        # A letter the store can't read, asked for by id: the key is told
+        # it's broken, never where the store keeps it.
+        id = self.far_send("alice", "# Fine\n\nx\n")
+        f = next(self.far_store.rglob(id + ".md"))
+        f.write_text("not a message at all")
+        p = self.gate(f"deaddrop show {id} --raw")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertNotIn(str(self.far_store), p.stderr)
+        self.assertNotIn(str(self.far), p.stderr)
+        self.assertIn("<store>", p.stderr)
+        self.assertIn(str(self.far_store), (self.far_store / "gate.log").read_text())
+
     def test_a_typed_line_may_have_extra_spaces(self):
         # A person at a shell types two spaces now and then; a shell reads
         # them as one, and so does the gate.
