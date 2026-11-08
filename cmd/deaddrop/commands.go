@@ -202,6 +202,9 @@ func draftOf(f flags) (draft, error) {
 		if d.signedBy != "" && strings.ToLower(d.signedBy) != gateAs {
 			return d, refused("this key signs only as %s", gateAs)
 		}
+		if gateSigned && d.signedBy == "" {
+			return d, refused("this key's letters are signed: set sign_key in your deaddrop's config (it signs as %s)", gateAs)
+		}
 		if len(d.attach) > 0 {
 			return d, refused("this key sends attachments the way remote mode does (--bundle), never --attach")
 		}
@@ -531,6 +534,7 @@ func readBody() (string, error) {
 // first, then the message, renamed into new/ last, so nobody sees a message
 // whose files aren't there yet.
 func deliver(dir string, d draft) error {
+	delivered := false // a copy is in a box: a --signed seal is spent
 	if err := d.settle(); err != nil {
 		return err
 	}
@@ -581,6 +585,19 @@ func deliver(dir string, d draft) error {
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
+		if gateSigned {
+			release, err := gateSignatureIs(gateAs, d.sig, d.signedAt, payload)
+			if err != nil {
+				return err
+			}
+			// Given back if no copy was delivered after all (a refusal
+			// below, a store error), so the honest retry goes through.
+			defer func() {
+				if !delivered {
+					release()
+				}
+			}()
+		}
 	}
 	if !d.followUp.IsZero() {
 		if _, err := crontinental(); err != nil {
@@ -588,6 +605,7 @@ func deliver(dir string, d draft) error {
 		}
 	}
 	sent := now()
+	followUpsBooked := 0
 	type copyAt struct{ box, helper string }
 	var copies []copyAt
 	for _, to := range d.to {
@@ -606,6 +624,17 @@ func deliver(dir string, d draft) error {
 	if n := attachBytes(d.attach) * int64(len(copies)); n > maxWritten {
 		// Rounded up, so a send just over never reads as "1024 MB of 1024".
 		return fmt.Errorf("the attachments, once per copy, come to %d MB; at most %d MB a send (fewer copies, or send the file once and say where it is)", (n+(1<<20)-1)>>20, maxWritten>>20)
+	}
+	// Behind the gate, the follow-ups a key books (Crontinental jobs, run as
+	// the store's login) are capped across sends too: so many an hour.
+	if gateRead != nil && !d.followUp.IsZero() {
+		giveBack, err := gateBookFollowUps(gateAs, len(copies))
+		if err != nil {
+			return err
+		}
+		// Counted up front, so two sends can't both pass; what isn't booked
+		// in the end is given back.
+		defer func() { giveBack(len(copies) - followUpsBooked) }()
 	}
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
@@ -688,9 +717,12 @@ func deliver(dir string, d draft) error {
 		if at.helper != "" {
 			where = to + " (for " + at.helper + ")"
 		}
+		delivered = true
 		fmt.Printf("sent %s to %s: %q\n", m.ID, where, m.Subject)
 		if !d.followUp.IsZero() {
-			if err := bookFollowUp(dir, m); err != nil {
+			if err := bookFollowUp(dir, m); err == nil {
+				followUpsBooked++
+			} else {
 				// The mail is in the box; sending again would only make two.
 				if gateRead != nil {
 					gateLog("%s: follow-up not booked: %v", m.ID, err)
@@ -1569,6 +1601,9 @@ func cmdStatus(args []string) error {
 		list = nil
 		for _, raw := range f.all("box") {
 			for _, w := range strings.Split(raw, ",") {
+				if strings.TrimSpace(w) == "" {
+					return badf(u, "--box %q: an empty name (a stray comma?)", raw)
+				}
 				b, err := resolveBox("--box", strings.TrimSpace(w))
 				if err != nil {
 					return bad(u, err)

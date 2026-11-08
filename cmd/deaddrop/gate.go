@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -19,6 +24,9 @@ import (
 // command, one line per key in that login's authorized_keys:
 //
 //	restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper" ssh-ed25519 AAAA…
+//
+// With --signed after --read, every letter from the key must be signed by
+// that name's key in the store's list of signers.
 //
 // Whoever holds the key runs ordinary remote mode (host = the store) and
 // nothing else: sshd hands the gate the command line remote mode sent
@@ -218,6 +226,133 @@ var gateRead map[string]bool
 // gateAs is the gated caller's name.
 var gateAs string
 
+// gateSigned: the line says --signed, so every letter from the key is signed
+// by its --as, with its --as's key in the store's own list of signers. An
+// unsigned send, one signed by any other key, or a plain reply (a signing
+// client always turns a reply into a signed send first), is refused.
+var gateSigned bool
+
+// gateSignedFresh is how old a --signed key's signature may be when it
+// arrives: a signing deaddrop signs the moment before it sends, so a letter
+// older than this is being sent again, not sent. gateSignedAhead is how far
+// ahead of the store's clock it may be (clocks differ a little).
+const (
+	gateSignedFresh = 10 * time.Minute
+	gateSignedAhead = 2 * time.Minute
+)
+
+// gateSignatureIs checks, on the store, that sig is who's: by the store's
+// list of signers (the machine's pinned one where there is one), signed
+// just now, and not a seal this gate has carried. It reserves the seal and
+// hands back release, for the caller to give it back if nothing was
+// delivered after all. Readers still check for themselves, against their
+// own lists; this only keeps a --signed key from sending a letter its
+// seat's key didn't sign for this send.
+func gateSignatureIs(who, sig, signedAtText string, payload []byte) (release func(), err error) {
+	release = func() {}
+	signers := signersPath()
+	if !listsPrincipal(signers, who) {
+		gateLog("--signed, but %s has no key for %s", signers, who)
+		return release, refused("this key's letters are signed, and the store has no key for %s to check them by (its owner can see why)", who)
+	}
+	signedAt, err := time.Parse(time.RFC3339, signedAtText)
+	if err != nil {
+		return release, refused("this key's letters are signed as they're sent, and this one has no time of signing")
+	}
+	if d := now().Sub(signedAt); d > gateSignedFresh || d < -gateSignedAhead {
+		if signedAt.After(now()) {
+			return release, refused("this letter was signed %s, ahead of the store's clock: the signing machine's clock is fast (set it right, then send again)", signedAt.UTC().Format(time.RFC3339))
+		}
+		return release, refused("this key's letters are signed as they're sent, and this one was signed %s: sign it again", signedAt.UTC().Format(time.RFC3339))
+	}
+	path, done, err := sigFile(sig)
+	if err != nil {
+		gateLog("--signed: the signature couldn't be checked: %v", err)
+		return release, refused("this key's letter couldn't be checked just now (its owner can see why)")
+	}
+	defer done()
+	c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", who, "-n", signNamespace, "-s", path)
+	c.Stdin = bytes.NewReader(payload)
+	if out, err := c.CombinedOutput(); err != nil {
+		gateLog("--signed: %s's signature isn't accepted by %s: %s", who, signers, strings.TrimSpace(string(out)))
+		return release, refused("this key's letters are signed by %s's own key as the store lists it, and this one isn't accepted (its owner can see why)", who)
+	}
+	return gateSealReserve(sig)
+}
+
+// gateSealReserve notes a seal the gate is about to carry, or refuses one
+// it already holds. A seal is the signature itself (its bytes inside the
+// SSHSIG, however the text was wrapped or padded), kept 2 × gateSignedFresh
+// from when it was noted, longer if the clock steps back, in
+// gate.seals.json. A record that can't be read refuses --signed letters
+// until its owner looks: a replay check that starts empty checks nothing.
+func gateSealReserve(sig string) (release func(), err error) {
+	release = func() {}
+	pub, raw, ok := sshsig(sig)
+	if !ok {
+		return release, refused("this key's letter has a signature the store can't read")
+	}
+	// Only ed25519, whose signatures have one form: an ECDSA one verifies in
+	// two (s and n-s), so its seal could be carried twice under two hashes.
+	if t, ok := sshString(pub); !ok || t != "ssh-ed25519" {
+		return release, refused("this key's letters are signed with an ed25519 key; this one is signed with %s", cleanLine(t, 40))
+	}
+	h := sha256.Sum256(raw)
+	key := hex.EncodeToString(h[:])
+	dir, err := storeDir()
+	if err != nil {
+		return release, err
+	}
+	lock := filepath.Join(dir, ".gate.seals.lock")
+	path := filepath.Join(dir, "gate.seals.json")
+	read := func() (map[string]time.Time, error) {
+		seen := map[string]time.Time{}
+		b, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return seen, nil
+		}
+		if err == nil {
+			err = json.Unmarshal(b, &seen)
+		}
+		return seen, err
+	}
+	unlock, err := lockFile(lock)
+	if err != nil {
+		return release, refused("this key's letter couldn't be checked just now")
+	}
+	defer unlock()
+	seen, err := read()
+	if err != nil {
+		gateLog("--signed refused: %s can't be read (%v); --signed letters are refused while it stays; leave it 20 minutes (so any seal it held has expired), then move it aside", path, err)
+		return release, refused("this key's letter couldn't be checked just now (its owner can see why)")
+	}
+	t := now()
+	for k, at := range seen {
+		if t.Sub(at) > 2*gateSignedFresh {
+			delete(seen, k) // one noted "ahead" (a clock stepped back) stays until it's old
+		}
+	}
+	if _, ok := seen[key]; ok {
+		return release, refused("this letter's seal has been carried already, or is being carried now (a dropped connection?): check whether it arrived, and sign it again to send it again")
+	}
+	seen[key] = t
+	if writeJSONFile(path, seen) != nil {
+		return release, refused("this key's letter couldn't be checked just now")
+	}
+	release = func() {
+		u, err := lockFile(lock)
+		if err != nil {
+			return
+		}
+		defer u()
+		if seen, err := read(); err == nil {
+			delete(seen, key)
+			writeJSONFile(path, seen)
+		}
+	}
+	return release, nil
+}
+
 // gateCommands are what a gated key may run: the store's own commands, as
 // remote mode sends them. Not gc, firetower or follow-up (the store's jobs),
 // and not the commands that run on a caller's machine.
@@ -245,30 +380,33 @@ func gateRefusal(box string) error {
 }
 
 func cmdGate(args []string) error {
-	const u = "gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   (an ssh forced command on the store's machine)"
-	f, err := parseFlags(args, map[string]bool{"as": true, "read": true, "dir": true, "config": true})
+	const u = "gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config FILE]   (an ssh forced command on the store's machine; in that order)"
+	// The line is taken only in one form: --as NAME --read BOXES, then
+	// --signed, --dir and --config if given, in that order, each once, each
+	// value its own word (no --x=v). The name and boxes in lowercase, the
+	// boxes comma-separated with no spaces and none twice. So what a person
+	// or an installer reads in authorized_keys is what the gate does: there's
+	// no second spelling for a text check to read differently.
+	g, err := gateLine(args)
 	if err != nil {
-		return bad(u, err)
+		return badf(u, "%v", err)
 	}
-	if len(f.pos) > 0 || len(f.all("as")) != 1 || !f.has("read") {
-		return badf(u, "one --as and at least one --read, nothing else")
-	}
-	as := strings.ToLower(f.get("as"))
+	as, read := g.as, map[string]bool{}
 	if err := checkBox("--as", as); err != nil || as == automation || as == "me" {
-		return badf(u, "--as %s: a name, like bob", f.get("as"))
+		return badf(u, "--as %s: a name in lowercase, like bob", as)
 	}
-	read := map[string]bool{}
-	for _, raw := range f.all("read") {
-		for _, w := range strings.Split(raw, ",") {
-			b := strings.ToLower(strings.TrimSpace(w))
-			if err := checkBox("--read", b); err != nil || b == automation || b == "me" {
-				return badf(u, "--read %s: a box, like bob", w)
-			}
-			read[b] = true
+	for _, b := range strings.Split(g.read, ",") {
+		if err := checkBox("--read", b); err != nil || b == automation || b == "me" {
+			return badf(u, "--read %q: boxes in lowercase, comma-separated with no spaces, like bob,bob-helper", g.read)
 		}
+		if read[b] {
+			return badf(u, "--read names %s twice", b)
+		}
+		read[b] = true
 	}
-	for _, k := range []string{"dir", "config"} {
-		if f.has(k) && (len(f.all(k)) != 1 || !filepath.IsAbs(f.get(k)) || filepath.Clean(f.get(k)) != f.get(k)) {
+	gateSigned = g.signed
+	for k, v := range map[string]string{"dir": g.dir, "config": g.config} {
+		if v != "" && (!filepath.IsAbs(v) || filepath.Clean(v) != v) {
 			return badf(u, "--%s: one full path, written plainly (no //, /./, .. or trailing /)", k)
 		}
 	}
@@ -288,11 +426,11 @@ func cmdGate(args []string) error {
 	}
 	home, _ := os.UserHomeDir()
 	os.Setenv("PATH", filepath.Join(home, ".local", "bin")+":/usr/local/bin:/usr/bin:/bin")
-	if f.has("dir") {
-		os.Setenv("DEADDROP_DIR", f.get("dir"))
+	if g.dir != "" {
+		os.Setenv("DEADDROP_DIR", g.dir)
 	}
-	if f.has("config") {
-		os.Setenv("DEADDROP_CONFIG", f.get("config"))
+	if g.config != "" {
+		os.Setenv("DEADDROP_CONFIG", g.config)
 	}
 	cachedConfig = nil
 	// Started by its full path, as authorized_keys names it: never found
@@ -391,6 +529,10 @@ func gateCheck(cmd string, args []string, as string) error {
 	// flag's value can't read differently here and there. Here: status names
 	// its boxes, and reads come as stored.
 	switch cmd {
+	case "reply":
+		if gateSigned {
+			return refused("this key's letters are signed: reply from a deaddrop with sign_key set (it sends a signed letter)")
+		}
 	case "status":
 		if !hasFlag(args, "box") {
 			return refused("this key's status names its boxes: status --box %s", as)
@@ -475,4 +617,142 @@ func gateWords(line string) ([]string, int, error) {
 		}
 	}
 	return words, hops, nil
+}
+
+// gateArgs is the gate's own line, read strictly.
+type gateArgs struct {
+	as, read, dir, config string
+	signed                bool
+}
+
+// gateLine reads the gate's words in their one order: --as NAME --read BOXES
+// [--signed] [--dir STORE] [--config FILE]. Anything else (another order, a
+// repeat, --x=v, a stray word) is refused.
+func gateLine(args []string) (gateArgs, error) {
+	var g gateArgs
+	need := func(i int, flag string) (string, error) {
+		if i >= len(args) || args[i] != flag {
+			return "", fmt.Errorf("the line is --as NAME --read BOXES [--signed] [--dir STORE] [--config FILE], in that order")
+		}
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || args[i+1] == "" {
+			return "", fmt.Errorf("%s needs a value of its own", flag)
+		}
+		return args[i+1], nil
+	}
+	var err error
+	if g.as, err = need(0, "--as"); err != nil {
+		return g, err
+	}
+	if g.read, err = need(2, "--read"); err != nil {
+		return g, err
+	}
+	i := 4
+	if i < len(args) && args[i] == "--signed" {
+		g.signed, i = true, i+1
+	}
+	if i < len(args) && args[i] == "--dir" {
+		if g.dir, err = need(i, "--dir"); err != nil {
+			return g, err
+		}
+		i += 2
+	}
+	if i < len(args) && args[i] == "--config" {
+		if g.config, err = need(i, "--config"); err != nil {
+			return g, err
+		}
+		i += 2
+	}
+	if i != len(args) {
+		return g, fmt.Errorf("%q isn't part of the line: --as NAME --read BOXES [--signed] [--dir STORE] [--config FILE], in that order, each once", args[i])
+	}
+	return g, nil
+}
+
+// gateFollowUpsPerHour is how many follow-up jobs one gated key may book an
+// hour: a send's most copies, so one full send's worth.
+const gateFollowUpsPerHour = maxCopies
+
+// gateBookFollowUps counts n follow-ups against the key's hour, or refuses
+// the send (before anything is written) if they'd pass it. It hands back a
+// giveBack for those that in the end weren't booked. Kept in
+// followups.json at the store's top, under its own lock. A count that can't
+// be kept refuses: a follow-up is never urgent the way a ring is.
+func gateBookFollowUps(who string, n int) (giveBack func(int), err error) {
+	giveBack = func(int) {}
+	dir, err := storeDir()
+	if err != nil {
+		return giveBack, err
+	}
+	lock := filepath.Join(dir, ".followups.lock")
+	path := filepath.Join(dir, "followups.json")
+	read := func() map[string][]time.Time {
+		book := map[string][]time.Time{}
+		if b, err := os.ReadFile(path); err == nil {
+			json.Unmarshal(b, &book)
+		}
+		return book
+	}
+	unlock, err := lockFile(lock)
+	if err != nil {
+		return giveBack, refused("the store can't count this key's follow-ups just now")
+	}
+	defer unlock()
+	book := read()
+	t := now()
+	for k, ts := range book {
+		var live []time.Time
+		for _, at := range ts {
+			if at.After(t.Add(-time.Hour)) && !at.After(t.Add(time.Minute)) {
+				live = append(live, at)
+			}
+		}
+		if len(live) == 0 {
+			delete(book, k)
+		} else {
+			book[k] = live
+		}
+	}
+	if len(book[who])+n > gateFollowUpsPerHour {
+		return giveBack, refused("this key has %d follow-ups booked in the last hour; at most %d an hour (send without --follow-up, or later)", len(book[who]), gateFollowUpsPerHour)
+	}
+	for i := 0; i < n; i++ {
+		book[who] = append(book[who], t)
+	}
+	if writeJSONFile(path, book) != nil {
+		return giveBack, refused("the store can't count this key's follow-ups just now")
+	}
+	giveBack = func(k int) {
+		if k <= 0 {
+			return
+		}
+		u, err := lockFile(lock)
+		if err != nil {
+			return
+		}
+		defer u()
+		b := read()
+		ts := b[who]
+		for i := len(ts) - 1; i >= 0 && k > 0; i-- {
+			if ts[i].Equal(t) {
+				ts = append(ts[:i], ts[i+1:]...)
+				k--
+			}
+		}
+		b[who] = ts
+		writeJSONFile(path, b)
+	}
+	return giveBack, nil
+}
+
+// sshString reads the first ssh string (length-prefixed) of b: a public
+// key's type.
+func sshString(b []byte) (string, bool) {
+	if len(b) < 4 {
+		return "", false
+	}
+	n := int(binary.BigEndian.Uint32(b[:4]))
+	if n < 0 || 4+n > len(b) {
+		return "", false
+	}
+	return string(b[4 : 4+n]), true
 }

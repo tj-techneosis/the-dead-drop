@@ -56,6 +56,11 @@ type Message struct {
 	// or bad, and why.
 	Signature     string `json:"signature,omitempty"`
 	SignatureNote string `json:"signature_note,omitempty"`
+	// SignedKey is the fingerprint of the key that made the signature
+	// (SHA256:…, as ssh-keygen -l shows it), read from the signature
+	// itself: so a reader can pin one key, not only a principal in a list.
+	// Set only with signature verified.
+	SignedKey string `json:"signed_key,omitempty"`
 	// The letter every copy of this message is, and the letter it answers,
 	// as short fingerprints of their seals: worked out by the store, which
 	// sees every box, so a reader can join a thread across copies whose ids

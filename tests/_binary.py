@@ -27,8 +27,13 @@ def _build() -> str:
     out = tempfile.mkdtemp(prefix="deaddrop-test-")
     atexit.register(shutil.rmtree, out, ignore_errors=True)
     path = os.path.join(out, "deaddrop")
-    subprocess.run(["go", "build", "-o", path, "./cmd/deaddrop"], cwd=ROOT, check=True,
-                   env={**os.environ, "CGO_ENABLED": "0"})
+    # The machine's pinned list of signers (root's, /etc/deaddrop) would be
+    # the only list a build checks, so on a machine that has one every test
+    # signature would read "unknown". The tests' own build points it at a
+    # path that's never there; a release build keeps the real one.
+    pin = os.path.join(out, "no-pinned-signers")
+    subprocess.run(["go", "build", "-ldflags", f"-X main.systemSigners={pin}", "-o", path, "./cmd/deaddrop"],
+                   cwd=ROOT, check=True, env={**os.environ, "CGO_ENABLED": "0"})
     return path
 
 

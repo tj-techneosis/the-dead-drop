@@ -212,7 +212,15 @@ person: it never signs as anyone, so a front end there sending for someone
 sends unsigned, and it signs automation mail only as its `sign_as`. The
 JSON of `inbox`, `pull` and `show` carries `signature` (`verified`,
 `unsigned`, `unknown` or `bad`), `signature_note` and `signed_by`, and so do
-the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars.
+the inbox file, the hooks (`DEADDROP_MSG_SIGNATURE`) and both menu bars. A
+verified letter's JSON also carries `signed_key`, the fingerprint of the key
+that made the signature (`SHA256:…`, as `ssh-keygen -l` shows it), so a
+program that should trust one key, not every key the machine's list gives a
+name, can pin it.
+
+On a machine with a pinned list (`/etc/deaddrop/allowed_signers`), that list
+is the only one checked: `DEADDROP_SIGNERS` and `signers` in the config are
+ignored, so a narrower list can't be had that way. Pin `signed_key` instead.
 
 **Treat anything not verified as a claim.** Never act on a request because
 of who an unverified message says it's from.
@@ -398,8 +406,24 @@ use the Dead Drop, as one name, reading only the boxes it's given. On the
 store's machine, one line per key in that login's `~/.ssh/authorized_keys`:
 
 ```
-restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper" ssh-ed25519 AAAA… bob's laptop
+restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper --signed" ssh-ed25519 AAAA… bob's laptop
 ```
+
+The line is taken only in one form: `--as NAME --read BOXES`, then
+`--signed`, `--dir` and `--config` if given, in that order, each once, each
+value its own word (no `--as=bob`). Names in lowercase, the boxes
+comma-separated with no spaces and none twice. So what you read in
+`authorized_keys` is what the gate does. sshd runs the command through the
+login's shell, and the gate sees the words only after the shell has read
+them, so an installer that checks the text should allow only what the shell
+leaves alone: letters, digits, `-`, `_`, `,`, `/`, `.` and single spaces
+between words. Refuse anything else (quotes, `\`, `#`, `$`, `~`, globs,
+braces, backticks, `;`, `|`, `&`, redirections, newlines). `--signed`
+(optional) means every letter from the key must be signed by its `--as`:
+an unsigned `send` is refused, and so is a plain `reply` (a deaddrop with
+`sign_key` set always sends a reply as a signed letter). Leave it off for a
+key whose holder has no signing key yet; its letters then read as unsigned,
+which proves nothing about who sent them.
 
 Bob's machine runs ordinary remote mode (`host = "store-box"`), nothing
 special. The gate reads the command line remote mode sends (sshd hands it over
@@ -409,18 +433,23 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   apart), or a plain `deaddrop <command> <words>` a person types (spaces
   between words however many), with nothing a shell would read, so a shell,
   `scp`, `sftp` or a pipe gets nothing;
-- reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
+- reads (`inbox`, `ls`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
   mode always asks), so the store doesn't check signatures or keep a ledger
   on the key's behalf; files come only as remote mode sends them
   (`--bundle`), never `--attach` paths;
-- it's one of the store's commands (`send`, `reply`, `inbox`, `pull`, `show`,
-  `file`, `mark`, `status --box`, `sent`), not `gc`, `firetower` or a
-  follow-up job;
+- it's one of the store's commands (`send`, `reply`, `inbox`, `ls`, `pull`,
+  `show`, `file`, `mark`, `status --box`, `sent`, `version`), not `gc`,
+  `firetower` or a follow-up job;
 - every box it reads, named or by default, is in `--read`, and to the key
   the store holds no other box: `sent`, thread fingerprints and every hint
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
-  signs as no one else;
+  signs as no one else; with `--signed`, only with `--as`'s own key, as the
+  store's list of signers has it (the machine's pinned one where there is
+  one), signed within the last 10 minutes, and never a seal the gate has
+  carried before, all checked before anything is written;
+- the follow-ups it books are capped at 32 an hour, across sends (ones a
+  send couldn't book in the end don't count);
 - nothing from the environment sshd built decides anything: no `DEADDROP_`
   setting, no `XDG_` folder, a fixed `PATH`, and `HOME` from the account.
   Where the store and its config are is the owner's to say in the line
@@ -733,7 +762,7 @@ deaddrop key
 deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since …] [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
-deaddrop gate --as NAME --read BOX[,BOX]... [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
+deaddrop gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]

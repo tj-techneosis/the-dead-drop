@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"io"
 	"os"
 	"os/exec"
@@ -233,5 +234,147 @@ func TestGateLogKeepsOneLine(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
 	if strings.Count(string(b), "\n") != 1 || strings.ContainsAny(string(b), "\r\x1b") {
 		t.Errorf("%q", b)
+	}
+}
+
+// A gated key's follow-ups are capped an hour, and the hour turns; ones a
+// send couldn't book are given back.
+func TestGateFollowUpCapTurnsWithTheHour(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	book := func(who string, n int) (func(int), error) { return gateBookFollowUps(who, n) }
+	giveBack, err := book("bob", gateFollowUpsPerHour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := book("bob", 1); err == nil {
+		t.Fatal("past the cap")
+	}
+	giveBack(2) // two of them weren't booked in the end
+	if _, err := book("bob", 2); err != nil {
+		t.Fatalf("after giving back two: %v", err)
+	}
+	if _, err := book("carol", 1); err != nil {
+		t.Fatalf("another key: %v", err)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	if _, err := book("bob", 1); err != nil {
+		t.Fatalf("an hour on: %v", err)
+	}
+}
+
+// testSig signs payload with a throwaway key, as deaddrop does (the
+// armored SSHSIG, base64'd once more).
+func testSig(t *testing.T, payload []byte) string {
+	t.Helper()
+	k := filepath.Join(t.TempDir(), "k")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", k).CombinedOutput(); err != nil {
+		t.Skipf("no ssh-keygen: %s", out)
+	}
+	sig, err := sign(k, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+// A seal the gate holds isn't carried again, however its text is wrapped
+// or padded; one given back (nothing delivered) can be; a record that can't
+// be read refuses.
+func TestGateCarriesASealOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	sig := testSig(t, []byte("a letter"))
+	release, err := gateSealReserve(sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same signature, re-encoded: the armour re-wrapped at 40 columns.
+	armored, _ := base64.StdEncoding.DecodeString(sig)
+	var rewrapped strings.Builder
+	for _, line := range strings.Split(string(armored), "\n") {
+		if strings.HasPrefix(line, "-----") || line == "" {
+			rewrapped.WriteString(line + "\n")
+			continue
+		}
+		for len(line) > 40 {
+			rewrapped.WriteString(line[:40] + "\n")
+			line = line[40:]
+		}
+		rewrapped.WriteString(line + "\n")
+	}
+	again := base64.StdEncoding.EncodeToString([]byte(rewrapped.String()))
+	if again == sig {
+		t.Fatal("the re-encoding is the same text")
+	}
+	if _, err := gateSealReserve(again); err == nil || !strings.Contains(err.Error(), "carried already") {
+		t.Fatalf("a re-encoded replay: %v", err)
+	}
+	release() // nothing was delivered: the honest retry goes through
+	if _, err := gateSealReserve(sig); err != nil {
+		t.Fatalf("after giving it back: %v", err)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:20:00Z") // the clock steps back
+	if _, err := gateSealReserve(sig); err == nil {
+		t.Fatal("a clock stepped back forgot the seal")
+	}
+	os.WriteFile(filepath.Join(dir, "gate.seals.json"), []byte("{not json"), 0o600)
+	if _, err := gateSealReserve(testSig(t, []byte("another"))); err == nil {
+		t.Fatal("an unreadable record let a seal through")
+	}
+}
+
+// A store's signed_key is never taken: the reader works it out, and only
+// for a letter that verifies.
+func TestSignedKeyIsTheReadersOwn(t *testing.T) {
+	m := &Message{SignedKey: "SHA256:forged", From: "bob"}
+	verify(m)
+	if m.SignedKey != "" {
+		t.Errorf("an unsigned letter kept %q", m.SignedKey)
+	}
+}
+
+// A signature from outside the window is refused before it's checked.
+func TestGateRefusesAStaleSignature(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	signers := filepath.Join(dir, "allowed_signers")
+	os.WriteFile(signers, []byte("bob ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"), 0o600)
+	t.Setenv("DEADDROP_SIGNERS", signers)
+	_, err := gateSignatureIs("bob", "eA==", "2026-11-02T15:00:00Z", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "sign it again") {
+		t.Errorf("ten minutes and more behind: %v", err)
+	}
+	_, err = gateSignatureIs("bob", "eA==", "2026-11-02T15:35:00Z", []byte("x")) // five minutes ahead
+	if err == nil || !strings.Contains(err.Error(), "clock is fast") {
+		t.Errorf("five minutes ahead: %v", err)
+	}
+	_, err = gateSignatureIs("bob", "eA==", "2026-11-02T15:19:59Z", []byte("x")) // just past ten minutes behind
+	if err == nil || !strings.Contains(err.Error(), "sign it again") {
+		t.Errorf("%v", err)
+	}
+}
+
+// Under --signed only ed25519 is carried: an ECDSA signature verifies in two
+// forms, so its seal could be carried twice.
+func TestGateRefusesAnECDSASeal(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	k := filepath.Join(t.TempDir(), "k")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ecdsa", "-N", "", "-f", k).CombinedOutput(); err != nil {
+		t.Skipf("no ecdsa: %s", out)
+	}
+	sig, err := sign(k, []byte("a letter"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateSealReserve(sig); err == nil || !strings.Contains(err.Error(), "ed25519") {
+		t.Fatalf("an ECDSA seal: %v", err)
+	}
+	if _, err := gateSealReserve(testSig(t, []byte("a letter"))); err != nil {
+		t.Fatalf("the control, ed25519: %v", err)
 	}
 }
