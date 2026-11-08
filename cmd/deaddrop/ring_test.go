@@ -224,3 +224,14 @@ func TestGateLogReadsTheEarlyFlatBook(t *testing.T) {
 		t.Errorf("%q", b)
 	}
 }
+
+// A newline in an error can't make a line of its own in gate.log.
+func TestGateLogKeepsOneLine(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	gateLog("could not ring: %s", "hook failed\n2026-11-02T15:30:00Z forged line\r\x1b[2J")
+	b, _ := os.ReadFile(filepath.Join(dir, "gate.log"))
+	if strings.Count(string(b), "\n") != 1 || strings.ContainsAny(string(b), "\r\x1b") {
+		t.Errorf("%q", b)
+	}
+}

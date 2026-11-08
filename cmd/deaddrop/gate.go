@@ -77,7 +77,14 @@ func gateLog(format string, a ...any) {
 	if who == "" {
 		who = "-"
 	}
-	line := fmt.Sprintf(format, a...)
+	// One line each: a newline or control character in an error (a path,
+	// notify's output) can't start a line of its own.
+	line := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return ' '
+		}
+		return r
+	}, fmt.Sprintf(format, a...))
 	if len(line) > gateLogLine {
 		line = strings.ToValidUTF8(line[:gateLogLine], "") + "…(cut)"
 	}
