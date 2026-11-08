@@ -235,3 +235,23 @@ func TestGateLogKeepsOneLine(t *testing.T) {
 		t.Errorf("%q", b)
 	}
 }
+
+// A gated key's follow-ups are capped an hour, and the hour turns.
+func TestGateFollowUpCapTurnsWithTheHour(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DEADDROP_DIR", dir)
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
+	if err := gateBookFollowUps("bob", gateFollowUpsPerHour); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateBookFollowUps("bob", 1); err == nil {
+		t.Fatal("past the cap")
+	}
+	if err := gateBookFollowUps("carol", 1); err != nil {
+		t.Fatalf("another key: %v", err)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T16:31:00Z")
+	if err := gateBookFollowUps("bob", 1); err != nil {
+		t.Fatalf("an hour on: %v", err)
+	}
+}

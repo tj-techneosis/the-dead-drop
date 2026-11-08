@@ -584,6 +584,11 @@ func deliver(dir string, d draft) error {
 		if err := signatureHolds(d.sig, payload); err != nil {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
+		if gateSigned {
+			if err := gateSignatureIs(gateAs, d.sig, payload); err != nil {
+				return err
+			}
+		}
 	}
 	if !d.followUp.IsZero() {
 		if _, err := crontinental(); err != nil {
@@ -609,6 +614,13 @@ func deliver(dir string, d draft) error {
 	if n := attachBytes(d.attach) * int64(len(copies)); n > maxWritten {
 		// Rounded up, so a send just over never reads as "1024 MB of 1024".
 		return fmt.Errorf("the attachments, once per copy, come to %d MB; at most %d MB a send (fewer copies, or send the file once and say where it is)", (n+(1<<20)-1)>>20, maxWritten>>20)
+	}
+	// Behind the gate, the follow-ups a key books (Crontinental jobs, run as
+	// the store's login) are capped across sends too: so many an hour.
+	if gateRead != nil && !d.followUp.IsZero() {
+		if err := gateBookFollowUps(gateAs, len(copies)); err != nil {
+			return err
+		}
 	}
 	rung := map[string]bool{}
 	// Behind the gate, nothing is said about boxes the key can't read,
@@ -1572,6 +1584,9 @@ func cmdStatus(args []string) error {
 		list = nil
 		for _, raw := range f.all("box") {
 			for _, w := range strings.Split(raw, ",") {
+				if strings.TrimSpace(w) == "" {
+					return badf(u, "--box %q: an empty name (a stray comma?)", raw)
+				}
 				b, err := resolveBox("--box", strings.TrimSpace(w))
 				if err != nil {
 					return bad(u, err)

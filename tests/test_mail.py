@@ -383,6 +383,13 @@ def subprocess_bytes(case, *args):
 
 
 class StatusFor(DeadDrop):
+    def test_status_refuses_a_stray_comma(self):
+        # As send's --to does: an empty part isn't quietly "me".
+        for box in ("bob,", ",", "bob,,carol"):
+            p = self.dd("status", "--box", box, ok=False)
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn("stray comma", p.stderr)
+
     def test_status_for_named_boxes_only(self):
         self.send("x\n", "--to", "bob")
         self.send("x\n", "--to", "carol", "--for", "planner", "--urgent")

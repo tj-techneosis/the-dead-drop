@@ -651,10 +651,12 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
             env["SSH_ORIGINAL_COMMAND"] = line
         env.update(extra_env or {})
         exe = argv0 or str(self.far / ".local" / "bin" / "deaddrop")
-        owner = ("--config", str(self.far / ".config" / "deaddrop" / "config.toml"))
-        if "--dir" not in gate_args:
-            owner += ("--dir", str(self.far_store))
-        return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner, *gate_args], input=input,
+        # The line's one order: --signed, then --dir, then --config.
+        extra = list(gate_args)
+        signed = ["--signed"] if "--signed" in extra else []
+        d = extra[extra.index("--dir") + 1] if "--dir" in extra else str(self.far_store)
+        owner = (*signed, "--dir", d, "--config", str(self.far / ".config" / "deaddrop" / "config.toml"))
+        return subprocess.run([exe, "gate", "--as", "alice", "--read", "alice,alice-helper", *owner], input=input,
                               capture_output=True, text=True, env=env, cwd=str(self.far / ".local" / "bin"))
 
     def test_file_behind_the_gate_hands_over_as_stored(self):
@@ -725,11 +727,24 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         # does: nothing it would tidy is accepted.
         exe = str(self.far / ".local" / "bin" / "deaddrop")
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "SSH_ORIGINAL_COMMAND": "deaddrop version"}
-        for line in (["--as", "Alice", "--read", "alice"], ["--as", "alice", "--read", "Alice"],
-                     ["--as", "alice", "--read", "alice, bob"], ["--as", "alice", "--read", "alice", "--read", "tj"],
-                     ["--as", "alice", "--read", "alice,alice"], ["--as", "alice", "--read", "alice,"]):
-            p = subprocess.run([exe, "gate", *line, "--dir", str(self.far_store)], capture_output=True, text=True, env=env)
+        d = str(self.far_store)
+        for line, why in (
+                (["--as", "Alice", "--read", "alice", "--dir", d], "a name in lowercase"),
+                (["--as", "alice", "--read", "Alice", "--dir", d], "boxes in lowercase"),
+                (["--as", "alice", "--read", "alice, bob", "--dir", d], "boxes in lowercase"),
+                (["--as", "alice", "--read", "alice,alice", "--dir", d], "names alice twice"),
+                (["--as", "alice", "--read", "alice,", "--dir", d], "boxes in lowercase"),
+                (["--as", "alice", "--read", "alice", "--read", "tj", "--dir", d], "isn't part of the line"),
+                (["--as=alice", "--read", "alice", "--dir", d], "in that order"),
+                (["--as", "alice", "--read=alice", "--dir", d], "in that order"),
+                (["--read", "alice", "--as", "alice", "--dir", d], "in that order"),
+                (["--as", "alice", "--read", "alice", "--signed", "--signed", "--dir", d], "isn't part of the line"),
+                (["--as", "alice", "--read", "alice", "--dir", d, "--signed"], "isn't part of the line"),
+                (["--as", "alice", "--read", "alice", "--signed=1", "--dir", d], "isn't part of the line"),
+                (["--as", "alice", "--read", "--signed"], "needs a value of its own")):
+            p = subprocess.run([exe, "gate", *line], capture_output=True, text=True, env=env)
             self.assertEqual(p.returncode, 2, (line, p.stderr))
+            self.assertIn(why, p.stderr, line)
         p = self.gate("deaddrop version")
         self.assertEqual(p.returncode, 0, p.stderr)  # the control: alice,alice-helper as written
 
@@ -744,6 +759,9 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
 
     def test_signed_gate_refuses_an_unsigned_letter(self):
         self.signed_gate()
+        cfg = self.far / ".config" / "deaddrop"
+        cfg.mkdir(parents=True, exist_ok=True)
+        __import__("_binary").signers(cfg / "allowed_signers", "alice", "bob")  # the store's list
         p = self.rdd("send", "--to", "bob", input="# Unsigned\n\nx\n", ok=False)
         self.assertEqual(p.returncode, 5, p.stderr)
         self.assertIn("this key's letters are signed", p.stderr)
@@ -755,6 +773,27 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.rdd("reply", id, input="a signed answer\n", env=Remote.signed_env(self, "alice"))
         ms = json.loads(self.dd("pull", "carol", "--json", DEADDROP_DIR=str(self.far_store)).stdout)
         self.assertEqual([m.get("signed_by") for m in ms], ["alice"])
+        # Signed "alice" with bob's key: a good signature, the wrong key.
+        forged = Remote.signed_env(self, "alice", DEADDROP_SIGN_KEY=__import__("_binary").key("bob")[0])
+        p = self.rdd("send", "--to", "carol", input="# Forged\n\nx\n", env=forged, ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("alice's own key, and this one isn't", p.stderr)
+        self.assertNotIn("Forged", self.dd("pull", "carol", DEADDROP_DIR=str(self.far_store)).stdout)
+
+    def test_signed_gate_needs_the_stores_list(self):
+        self.signed_gate()
+        p = self.rdd("send", "--to", "bob", input="# Signed\n\nx\n", env=Remote.signed_env(self, "alice"), ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("has no key for alice", p.stderr)
+
+    def test_follow_ups_a_key_books_are_capped_an_hour(self):
+        to = [w for i in range(20) for w in ("--to", f"box{i}")]
+        self.rdd("send", *to, "--follow-up", "1d", input="x\n")
+        p = self.rdd("send", *to, "--follow-up", "1d", input="x\n", ok=False)
+        self.assertEqual(p.returncode, 5, p.stderr)
+        self.assertIn("booked 20 follow-ups in the last hour", p.stderr)
+        self.rdd("send", *to, input="x\n")  # without --follow-up: fine
+        # The hour turning: a Go test (the gate keeps no DEADDROP_NOW).
 
     def test_the_gates_dir_is_written_plainly(self):
         # Errors spell paths cleaned; a --dir written otherwise wouldn't

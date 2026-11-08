@@ -401,9 +401,14 @@ store's machine, one line per key in that login's `~/.ssh/authorized_keys`:
 restrict,command="/home/store/.local/bin/deaddrop gate --as bob --read bob,bob-helper --signed" ssh-ed25519 AAAA… bob's laptop
 ```
 
-The line is taken only as written plainly: one `--as` and one `--read`, in
-lowercase, the boxes comma-separated with no spaces and none twice. So what
-you read in `authorized_keys` is exactly what the gate does. `--signed`
+The line is taken only in one form: `--as NAME --read BOXES`, then
+`--signed`, `--dir` and `--config` if given, in that order, each once, each
+value its own word (no `--as=bob`). Names in lowercase, the boxes
+comma-separated with no spaces and none twice. So what you read in
+`authorized_keys` is what the gate does. sshd runs the command through the
+login's shell, so the line should hold no quotes, backslashes or `#`: the
+gate sees the words after the shell has read them, and an installer that
+checks the text should refuse those. `--signed`
 (optional) means every letter from the key must be signed by its `--as`:
 an unsigned `send` is refused, and so is a plain `reply` (a deaddrop with
 `sign_key` set always sends a reply as a signed letter). Leave it off for a
@@ -418,18 +423,21 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   apart), or a plain `deaddrop <command> <words>` a person types (spaces
   between words however many), with nothing a shell would read, so a shell,
   `scp`, `sftp` or a pipe gets nothing;
-- reads (`inbox`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
+- reads (`inbox`, `ls`, `pull`, `show`, `sent`) are as stored (`--raw`, as remote
   mode always asks), so the store doesn't check signatures or keep a ledger
   on the key's behalf; files come only as remote mode sends them
   (`--bundle`), never `--attach` paths;
-- it's one of the store's commands (`send`, `reply`, `inbox`, `pull`, `show`,
-  `file`, `mark`, `status --box`, `sent`), not `gc`, `firetower` or a
-  follow-up job;
+- it's one of the store's commands (`send`, `reply`, `inbox`, `ls`, `pull`,
+  `show`, `file`, `mark`, `status --box`, `sent`, `version`), not `gc`,
+  `firetower` or a follow-up job;
 - every box it reads, named or by default, is in `--read`, and to the key
   the store holds no other box: `sent`, thread fingerprints and every hint
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
-  signs as no one else;
+  signs as no one else; with `--signed`, only with `--as`'s own key, as the
+  store's list of signers has it (the machine's pinned one where there is
+  one), checked before anything is written;
+- the follow-ups it books are capped at 32 an hour, across sends;
 - nothing from the environment sshd built decides anything: no `DEADDROP_`
   setting, no `XDG_` folder, a fixed `PATH`, and `HOME` from the account.
   Where the store and its config are is the owner's to say in the line

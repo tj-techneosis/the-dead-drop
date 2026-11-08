@@ -292,9 +292,13 @@ itself, allows only the store's commands, and checks every box a reading
 command resolves (in `resolveBox`, where a named box and the default both
 pass) against its `--read`. Signing stays on the caller's machine; the gate
 only carries the letter, holding its `from` and its signer to `--as`, and
-with `--signed` refusing one that isn't signed. Its own line is taken only
-in canonical form (lowercase, one `--read`, no spaces, no box twice), so a
-text check of `authorized_keys` and the gate can never read it differently.
+with `--signed` refusing one that isn't signed by `--as`'s own key in the
+store's list of signers (readers still check for themselves). Its own line
+is taken only in one form (`--as`, `--read`, then `--signed`, `--dir`,
+`--config`, in order, once each, lowercase, no `=`), so a text check of
+`authorized_keys` reads it as the gate does; quoting the login's shell would
+undo is the installer's to refuse. The follow-ups a key books are capped
+per hour, as its rings are.
 
 ## Your own machine: the inbox file and hooks
 
