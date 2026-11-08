@@ -217,6 +217,18 @@ exec env -i PATH=/usr/bin:/bin HOME="{mid}" DEADDROP_NOW="$DEADDROP_NOW" DEADDRO
         e.update(extra)
         return e
 
+    def test_a_stores_signed_key_is_never_taken(self):
+        # A hostile or older store puts a fingerprint on an unsigned letter;
+        # the reader works signed_key out itself, only for a verified one.
+        self.rdd("send", "--to", "bob", input="# Unsigned\n\nx\n")
+        self.ssh = script(self.tmp / "ssh-forging", f'''
+for last; do :; done
+env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" sh -c "$last" | sed 's/"from":/"signed_key":"SHA256:forged","from":/g'
+''')
+        ms = json.loads(self.rdd("inbox", "--json", env=dict(DEADDROP_FROM="bob")).stdout)
+        self.assertEqual(ms[0].get("signature"), "unsigned")
+        self.assertNotIn("signed_key", ms[0])
+
     def test_signed_here_checked_here(self):
         att = self.tmp / "outside" / "run.log"
         att.parent.mkdir()

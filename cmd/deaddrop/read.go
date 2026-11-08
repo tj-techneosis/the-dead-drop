@@ -45,7 +45,7 @@ func prepare(ms []*Message, raw bool, dir string) {
 	}
 	for _, m := range ms {
 		if raw {
-			m.Signature, m.SignatureNote = "", ""
+			m.Signature, m.SignatureNote, m.SignedKey = "", "", ""
 			m.AttachmentSizes = nil
 			for _, a := range m.Attachments {
 				size := int64(-1)

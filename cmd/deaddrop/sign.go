@@ -234,6 +234,8 @@ func sumsOf(m *Message) []attachSum {
 // verify works out a message's signature state, on this machine, with this
 // machine's list of signers. It needs the body.
 func verify(m *Message) {
+	// Worked out here, never taken from wherever the letter came from.
+	m.SignedKey = ""
 	m.Signature, m.SignatureNote = verifyState(m)
 	if m.Signature == sigVerified {
 		m.SignedKey = sigKeyFingerprint(m.Sig)
@@ -241,14 +243,15 @@ func verify(m *Message) {
 	}
 }
 
-// sigKeyFingerprint is the SHA256 fingerprint of the public key inside a
-// signature (as ssh-keygen -l prints it), or "" if it can't be read. The
-// signature is ssh-keygen's armored SSHSIG, base64'd once more: inside,
-// "SSHSIG", a version, then the public key as an ssh string.
-func sigKeyFingerprint(sig string) string {
+// sshsig reads the parts of a signature: ssh-keygen's armored SSHSIG,
+// base64'd once more. Inside: "SSHSIG", a version, then ssh strings for the
+// public key, the namespace, a reserved field, the hash algorithm and the
+// signature. However the text was wrapped or padded, the same signature
+// gives the same parts.
+func sshsig(sig string) (pubkey, signature []byte, ok bool) {
 	armored, err := base64.StdEncoding.DecodeString(sig)
 	if err != nil {
-		return ""
+		return nil, nil, false
 	}
 	var b64 strings.Builder
 	for _, line := range strings.Split(string(armored), "\n") {
@@ -258,15 +261,35 @@ func sigKeyFingerprint(sig string) string {
 		}
 	}
 	blob, err := base64.StdEncoding.DecodeString(b64.String())
-	if err != nil || len(blob) < 14 || string(blob[:6]) != "SSHSIG" {
+	if err != nil || len(blob) < 10 || string(blob[:6]) != "SSHSIG" {
+		return nil, nil, false
+	}
+	rest := blob[10:]
+	var parts [][]byte
+	for i := 0; i < 5; i++ {
+		if len(rest) < 4 {
+			return nil, nil, false
+		}
+		n := int(binary.BigEndian.Uint32(rest[:4]))
+		if n < 0 || 4+n > len(rest) {
+			return nil, nil, false
+		}
+		parts, rest = append(parts, rest[4:4+n]), rest[4+n:]
+	}
+	if len(parts[0]) == 0 || len(parts[4]) == 0 {
+		return nil, nil, false
+	}
+	return parts[0], parts[4], true
+}
+
+// sigKeyFingerprint is the SHA256 fingerprint of the public key inside a
+// signature (as ssh-keygen -l prints it), or "" if it can't be read.
+func sigKeyFingerprint(sig string) string {
+	pub, _, ok := sshsig(sig)
+	if !ok {
 		return ""
 	}
-	rest := blob[10:] // past the magic and the version
-	n := int(binary.BigEndian.Uint32(rest[:4]))
-	if n <= 0 || 4+n > len(rest) {
-		return ""
-	}
-	sum := sha256.Sum256(rest[4 : 4+n])
+	sum := sha256.Sum256(pub)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 

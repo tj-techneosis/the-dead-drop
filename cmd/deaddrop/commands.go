@@ -534,6 +534,7 @@ func readBody() (string, error) {
 // first, then the message, renamed into new/ last, so nobody sees a message
 // whose files aren't there yet.
 func deliver(dir string, d draft) error {
+	delivered := false // a copy is in a box: a --signed seal is spent
 	if err := d.settle(); err != nil {
 		return err
 	}
@@ -585,9 +586,17 @@ func deliver(dir string, d draft) error {
 			return fmt.Errorf("the signature isn't of this message (%v): are both ends the same deaddrop?", err)
 		}
 		if gateSigned {
-			if err := gateSignatureIs(gateAs, d.sig, d.signedAt, payload); err != nil {
+			release, err := gateSignatureIs(gateAs, d.sig, d.signedAt, payload)
+			if err != nil {
 				return err
 			}
+			// Given back if no copy was delivered after all (a refusal
+			// below, a store error), so the honest retry goes through.
+			defer func() {
+				if !delivered {
+					release()
+				}
+			}()
 		}
 	}
 	if !d.followUp.IsZero() {
@@ -708,6 +717,7 @@ func deliver(dir string, d draft) error {
 		if at.helper != "" {
 			where = to + " (for " + at.helper + ")"
 		}
+		delivered = true
 		fmt.Printf("sent %s to %s: %q\n", m.ID, where, m.Subject)
 		if !d.followUp.IsZero() {
 			if err := bookFollowUp(dir, m); err == nil {

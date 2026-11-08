@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"io"
 	"os"
 	"os/exec"
@@ -263,24 +264,75 @@ func TestGateFollowUpCapTurnsWithTheHour(t *testing.T) {
 	}
 }
 
-// A seal the gate has carried isn't carried again, while it could still
-// pass the freshness check.
+// testSig signs payload with a throwaway key, as deaddrop does (the
+// armored SSHSIG, base64'd once more).
+func testSig(t *testing.T, payload []byte) string {
+	t.Helper()
+	k := filepath.Join(t.TempDir(), "k")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", k).CombinedOutput(); err != nil {
+		t.Skipf("no ssh-keygen: %s", out)
+	}
+	sig, err := sign(k, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+// A seal the gate holds isn't carried again, however its text is wrapped
+// or padded; one given back (nothing delivered) can be; a record that can't
+// be read refuses.
 func TestGateCarriesASealOnce(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DEADDROP_DIR", dir)
 	t.Setenv("DEADDROP_NOW", "2026-11-02T15:30:00Z")
-	if err := gateSealOnce("c2lnbmF0dXJl"); err != nil {
+	sig := testSig(t, []byte("a letter"))
+	release, err := gateSealReserve(sig)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gateSealOnce("c2lnbmF0dXJl"); err == nil || !strings.Contains(err.Error(), "delivered already") {
-		t.Fatalf("a replay: %v", err)
+	// The same signature, re-encoded: the armour re-wrapped at 40 columns.
+	armored, _ := base64.StdEncoding.DecodeString(sig)
+	var rewrapped strings.Builder
+	for _, line := range strings.Split(string(armored), "\n") {
+		if strings.HasPrefix(line, "-----") || line == "" {
+			rewrapped.WriteString(line + "\n")
+			continue
+		}
+		for len(line) > 40 {
+			rewrapped.WriteString(line[:40] + "\n")
+			line = line[40:]
+		}
+		rewrapped.WriteString(line + "\n")
 	}
-	if err := gateSealOnce("b3RoZXI="); err != nil {
-		t.Fatalf("another seal: %v", err)
+	again := base64.StdEncoding.EncodeToString([]byte(rewrapped.String()))
+	if again == sig {
+		t.Fatal("the re-encoding is the same text")
 	}
-	t.Setenv("DEADDROP_NOW", "2026-11-02T15:51:00Z") // past 2 × gateSignedFresh
-	if err := gateSealOnce("c2lnbmF0dXJl"); err != nil {
-		t.Fatalf("forgotten after the window (freshness refuses it anyway): %v", err)
+	if _, err := gateSealReserve(again); err == nil || !strings.Contains(err.Error(), "carried already") {
+		t.Fatalf("a re-encoded replay: %v", err)
+	}
+	release() // nothing was delivered: the honest retry goes through
+	if _, err := gateSealReserve(sig); err != nil {
+		t.Fatalf("after giving it back: %v", err)
+	}
+	t.Setenv("DEADDROP_NOW", "2026-11-02T15:20:00Z") // the clock steps back
+	if _, err := gateSealReserve(sig); err == nil {
+		t.Fatal("a clock stepped back forgot the seal")
+	}
+	os.WriteFile(filepath.Join(dir, "gate.seals.json"), []byte("{not json"), 0o600)
+	if _, err := gateSealReserve(testSig(t, []byte("another"))); err == nil {
+		t.Fatal("an unreadable record let a seal through")
+	}
+}
+
+// A store's signed_key is never taken: the reader works it out, and only
+// for a letter that verifies.
+func TestSignedKeyIsTheReadersOwn(t *testing.T) {
+	m := &Message{SignedKey: "SHA256:forged", From: "bob"}
+	verify(m)
+	if m.SignedKey != "" {
+		t.Errorf("an unsigned letter kept %q", m.SignedKey)
 	}
 }
 
@@ -292,7 +344,11 @@ func TestGateRefusesAStaleSignature(t *testing.T) {
 	signers := filepath.Join(dir, "allowed_signers")
 	os.WriteFile(signers, []byte("bob ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"), 0o600)
 	t.Setenv("DEADDROP_SIGNERS", signers)
-	err := gateSignatureIs("bob", "eA==", "2026-11-02T15:00:00Z", []byte("x"))
+	_, err := gateSignatureIs("bob", "eA==", "2026-11-02T15:00:00Z", []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "sign it again") {
+		t.Errorf("ten minutes and more behind: %v", err)
+	}
+	_, err = gateSignatureIs("bob", "eA==", "2026-11-02T15:35:00Z", []byte("x")) // five minutes ahead
 	if err == nil || !strings.Contains(err.Error(), "sign it again") {
 		t.Errorf("%v", err)
 	}

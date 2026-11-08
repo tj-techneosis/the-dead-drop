@@ -233,77 +233,115 @@ var gateSigned bool
 
 // gateSignedFresh is how old a --signed key's signature may be when it
 // arrives: a signing deaddrop signs the moment before it sends, so a letter
-// older than this is being sent again, not sent.
-const gateSignedFresh = 10 * time.Minute
+// older than this is being sent again, not sent. gateSignedAhead is how far
+// ahead of the store's clock it may be (clocks differ a little).
+const (
+	gateSignedFresh = 10 * time.Minute
+	gateSignedAhead = 2 * time.Minute
+)
 
 // gateSignatureIs checks, on the store, that sig is who's: by the store's
 // list of signers (the machine's pinned one where there is one), signed
-// just now, and not a seal this gate has carried before. Readers still
-// check for themselves, against their own lists; this only keeps a --signed
-// key from sending a letter its seat's key didn't sign for this send.
-func gateSignatureIs(who, sig, signedAtText string, payload []byte) error {
+// just now, and not a seal this gate has carried. It reserves the seal and
+// hands back release, for the caller to give it back if nothing was
+// delivered after all. Readers still check for themselves, against their
+// own lists; this only keeps a --signed key from sending a letter its
+// seat's key didn't sign for this send.
+func gateSignatureIs(who, sig, signedAtText string, payload []byte) (release func(), err error) {
+	release = func() {}
 	signers := signersPath()
 	if !listsPrincipal(signers, who) {
 		gateLog("--signed, but %s has no key for %s", signers, who)
-		return refused("this key's letters are signed, and the store has no key for %s to check them by (its owner can see why)", who)
+		return release, refused("this key's letters are signed, and the store has no key for %s to check them by (its owner can see why)", who)
 	}
 	signedAt, err := time.Parse(time.RFC3339, signedAtText)
 	if err != nil {
-		return refused("this key's letters are signed as they're sent, and this one has no time of signing")
+		return release, refused("this key's letters are signed as they're sent, and this one has no time of signing")
 	}
-	if d := now().Sub(signedAt); d > gateSignedFresh || d < -gateSignedFresh {
-		return refused("this key's letters are signed as they're sent, and this one was signed %s: sign it again", signedAt.UTC().Format(time.RFC3339))
+	if d := now().Sub(signedAt); d > gateSignedFresh || d < -gateSignedAhead {
+		return release, refused("this key's letters are signed as they're sent, and this one was signed %s: sign it again", signedAt.UTC().Format(time.RFC3339))
 	}
 	path, done, err := sigFile(sig)
 	if err != nil {
 		gateLog("--signed: the signature couldn't be checked: %v", err)
-		return refused("this key's letter couldn't be checked just now (its owner can see why)")
+		return release, refused("this key's letter couldn't be checked just now (its owner can see why)")
 	}
 	defer done()
 	c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", who, "-n", signNamespace, "-s", path)
 	c.Stdin = bytes.NewReader(payload)
 	if out, err := c.CombinedOutput(); err != nil {
 		gateLog("--signed: %s's signature isn't accepted by %s: %s", who, signers, strings.TrimSpace(string(out)))
-		return refused("this key's letters are signed by %s's own key as the store lists it, and this one isn't accepted (its owner can see why)", who)
+		return release, refused("this key's letters are signed by %s's own key as the store lists it, and this one isn't accepted (its owner can see why)", who)
 	}
-	// A seal carried once isn't carried again: kept as long as one could
-	// still pass the freshness check, in gate.seals.json.
-	return gateSealOnce(sig)
+	return gateSealReserve(sig)
 }
 
-// gateSealOnce notes a seal the gate is about to carry, or refuses one it
-// has carried in the last 2 × gateSignedFresh.
-func gateSealOnce(sig string) error {
+// gateSealReserve notes a seal the gate is about to carry, or refuses one
+// it already holds. A seal is the signature itself (its bytes inside the
+// SSHSIG, however the text was wrapped or padded), kept 2 × gateSignedFresh
+// from when it was noted, longer if the clock steps back, in
+// gate.seals.json. A record that can't be read refuses --signed letters
+// until its owner looks: a replay check that starts empty checks nothing.
+func gateSealReserve(sig string) (release func(), err error) {
+	release = func() {}
+	_, raw, ok := sshsig(sig)
+	if !ok {
+		return release, refused("this key's letter has a signature the store can't read")
+	}
+	h := sha256.Sum256(raw)
+	key := hex.EncodeToString(h[:])
 	dir, err := storeDir()
 	if err != nil {
-		return err
+		return release, err
 	}
-	unlock, err := lockFile(filepath.Join(dir, ".gate.seals.lock"))
+	lock := filepath.Join(dir, ".gate.seals.lock")
+	path := filepath.Join(dir, "gate.seals.json")
+	read := func() (map[string]time.Time, error) {
+		seen := map[string]time.Time{}
+		b, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return seen, nil
+		}
+		if err == nil {
+			err = json.Unmarshal(b, &seen)
+		}
+		return seen, err
+	}
+	unlock, err := lockFile(lock)
 	if err != nil {
-		return refused("this key's letter couldn't be checked just now")
+		return release, refused("this key's letter couldn't be checked just now")
 	}
 	defer unlock()
-	path := filepath.Join(dir, "gate.seals.json")
-	seen := map[string]time.Time{}
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &seen)
+	seen, err := read()
+	if err != nil {
+		gateLog("--signed refused: %s can't be read (%v); move it aside to start again", path, err)
+		return release, refused("this key's letter couldn't be checked just now (its owner can see why)")
 	}
 	t := now()
 	for k, at := range seen {
-		if t.Sub(at) > 2*gateSignedFresh || at.After(t.Add(time.Minute)) {
-			delete(seen, k)
+		if t.Sub(at) > 2*gateSignedFresh {
+			delete(seen, k) // one noted "ahead" (a clock stepped back) stays until it's old
 		}
 	}
-	h := sha256.Sum256([]byte(sig))
-	key := hex.EncodeToString(h[:])
 	if _, ok := seen[key]; ok {
-		return refused("this letter's seal has been delivered already: sign it again to send it again")
+		return release, refused("this letter's seal has been carried already: sign it again to send it again")
 	}
 	seen[key] = t
 	if writeJSONFile(path, seen) != nil {
-		return refused("this key's letter couldn't be checked just now")
+		return release, refused("this key's letter couldn't be checked just now")
 	}
-	return nil
+	release = func() {
+		u, err := lockFile(lock)
+		if err != nil {
+			return
+		}
+		defer u()
+		if seen, err := read(); err == nil {
+			delete(seen, key)
+			writeJSONFile(path, seen)
+		}
+	}
+	return release, nil
 }
 
 // gateCommands are what a gated key may run: the store's own commands, as
