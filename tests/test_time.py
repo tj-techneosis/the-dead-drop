@@ -41,6 +41,9 @@ class Firetower(DeadDrop):
         self.assertEqual(c3[c3.index("--value") + 1], c2[c2.index("--value") + 1])  # nothing new: still
         self.assertEqual(r["mail/empty/inbox"][r["mail/empty/inbox"].index("--value") + 1], "none")
         self.assertNotIn("--next", c)
+        # Every lookout names its owner: the box.
+        tags = [c[i + 1] for i, w in enumerate(c) if w == "--tag"]
+        self.assertEqual(tags, ["mail", "owner-carol"])
 
     def test_ages_turn_unread_to_smoke_and_fire(self):
         self.send("a\n", "--to", "bob")
@@ -173,6 +176,8 @@ class Firetower(DeadDrop):
         last = {c[1]: c for c in r}
         self.assertEqual(last["mail/bob/inbox"][2], "green")       # bob's own: nothing waiting
         self.assertEqual(last["mail/bob/for/planner"][2], "red")   # the planner's: waited 3h unheard
+        p = last["mail/bob/for/planner"]
+        self.assertEqual([p[i + 1] for i, w in enumerate(p) if w == "--tag"], ["mail", "owner-bob"])  # the box's owner answers
         rings = self.rings()
         self.assertEqual(len(rings), 1)
         self.assertIn("deaddrop_for=planner", rings[0])

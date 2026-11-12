@@ -20,6 +20,7 @@ import (
 // the message is only a count: boards can be on screens anyone sees, so no
 // subject and no sender (and so the value is a hash of the id, which names its
 // sender). A box named in board_detail also gets what's waiting (whatsWaiting).
+// Every lookout is tagged mail and owner-<box>: the box's owner is who acts.
 func cmdFiretower(args []string) error {
 	const u = "firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]"
 	f, err := parseFlags(args, map[string]bool{"next": true, "box": true, "smoke-after": true, "fire-after": true, "ring": false, "pigeonholes": false})
@@ -164,7 +165,7 @@ func cmdFiretower(args []string) error {
 				msg = whatsWaiting(msg, dir, box, s)
 			}
 		}
-		a := []string{"set", name, status, msg, "--value", value, "--label", label, "--tag", "mail"}
+		a := []string{"set", name, status, msg, "--value", value, "--label", label, "--tag", "mail", "--tag", "owner-" + box}
 		if next != "" {
 			a = append(a, "--next", next)
 		}

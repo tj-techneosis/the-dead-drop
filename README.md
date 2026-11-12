@@ -660,7 +660,11 @@ fire on its own. Urgent mail is fire either way. `inbox`, `watch` and
 `watch --mirror`'s copies don't count as reading. Either flag alone works:
 `--smoke-after` alone keeps fresh unheard mail clear and never goes to fire
 for age; `--fire-after` alone is smoke as soon as anything's unheard, fire
-once it's waited that long. Every lookout is tagged `mail`.
+once it's waited that long. Every lookout is tagged `mail` and
+`owner-<box>` (a helper's pigeonhole too: the box's owner answers for it), so
+a board or bar can show just one person's mail. For a board where unread
+mail is fine and only urgent mail needs someone, `--smoke-after 3650d`
+keeps plain unread clear.
 
 With `--ring`, a box that's just gone to fire also runs `crontinental notify
 --urgent` on the store's machine, once per fire (not every run), tagged
