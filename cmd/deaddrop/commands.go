@@ -37,6 +37,7 @@ type draft struct {
 	helpers                        []string // --for: pigeonholes in each recipient's box
 	replyBox                       string   // --reply-box: where answers go
 	newBox                         bool     // --new-box: a box that never existed may be started
+	retiredOK                      string   // the one retired box this letter may go to (retire's own letter)
 	to, tags                       []string
 	body                           string
 	attach                         []string // paths on this machine

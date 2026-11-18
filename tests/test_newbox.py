@@ -57,7 +57,7 @@ class NewBox(DeadDrop):
         p = self.strict("reply", orig, input="Again.\n")
         self.assertIn("erin is retired (send to carol)", p.stderr)
         self.assertEqual(p.returncode, 5)
-        self.assertEqual(len(self.files("erin", "new")), 1)
+        self.assertEqual(len(self.files("erin", "new")), 2)  # the reply, and the letter saying it was retired
 
     def test_a_signed_reply_needs_no_new_box_either(self):
         # Signed, a reply goes to the store as the send it makes.
@@ -69,7 +69,7 @@ class NewBox(DeadDrop):
         self.dd("retire", "frank")
         p = self.strict("reply", orig, input="Again.\n", **signing("bob"))
         self.assertIn("frank is retired", p.stderr)
-        self.assertEqual(len(self.files("frank", "new")), 1)
+        self.assertEqual(len(self.files("frank", "new")), 2)  # the reply, and the letter saying it was retired
 
     def test_retired_boxes_say_retired_and_are_never_a_hint(self):
         self.dd("retire", "team-keeper", "--moved-to", "keeper-desk")

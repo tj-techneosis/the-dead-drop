@@ -29,6 +29,10 @@ type Config struct {
 	// Relay: commands that reach this machine over ssh go on to its host,
 	// for people who can only reach the store through it.
 	Relay bool `toml:"relay"`
+	// Owners: on the store's machine, the boxes that are people's own main
+	// boxes. Retiring one (or one whose name the store's allowed_signers
+	// lists, or me) needs --force: its mail would stop.
+	Owners []string `toml:"owners"`
 	// BoxNamesPublic: on the store's machine, box names aren't private, so
 	// behind the gate a send to a box that has never existed is refused, with
 	// the boxes it likely meant, like anyone's. Off: the gate says nothing
@@ -89,6 +93,11 @@ func loadConfig() (*Config, error) {
 	}
 	if c.Me != "" {
 		if err := checkBox("me", c.Me); err != nil {
+			return nil, fmt.Errorf("%s: %v", c.path, err)
+		}
+	}
+	for _, b := range c.Owners {
+		if err := checkBox("owners", b); err != nil {
 			return nil, fmt.Errorf("%s: %v", c.path, err)
 		}
 	}

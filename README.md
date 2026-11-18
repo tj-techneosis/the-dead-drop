@@ -814,6 +814,16 @@ everyone, over ssh too; a gated key can't run `retire` or `unretire`. A
 list that won't read refuses every send until it's fixed, rather than let
 mail through to a retired box.
 
+Retiring and unretiring are said out loud: a letter from `automation`
+(tagged `retired`) goes to the retired box (if it was ever used), to the
+box it moved to, and to the store's own `me`, reading `old-desk was retired
+by carol at 2026-11-02T15:30:00Z, moved to new-desk: the desk answers in
+new-desk now` (or `old-desk was unretired by carol at …`). A retired box
+gets no other mail. Someone's own main box isn't retired by accident: a box
+named in the store's `owners` setting, the store's `me`, or a name in the
+store's `allowed_signers` needs `--force`, and the letter then says it was
+forced.
+
 ## Reports of your own
 
 The Dead Drop has no report feature. A report is any job that ends in
@@ -845,7 +855,7 @@ deaddrop gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config F
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop changes [WHO] [--for H] [--every 1m]   # the store's machine: a line each time a pigeonhole changes (what wait listens to)
 deaddrop gc [--days 30]
-deaddrop retire BOX [--moved-to NEW] [--note "…"]   |   deaddrop unretire BOX   # the store's: mail to BOX is refused
+deaddrop retire BOX [--moved-to NEW] [--note "…"] [--force]   |   deaddrop unretire BOX   # the store's: mail to BOX is refused
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--box WHO] [--for H]

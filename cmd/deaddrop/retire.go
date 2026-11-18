@@ -20,7 +20,7 @@ import (
 // administered by whoever runs commands on the store's machine: a gated key
 // can't (they aren't in gateCommands).
 
-const retireUsage = `retire BOX [--moved-to NEW] [--note "…"] | unretire BOX`
+const retireUsage = `retire BOX [--moved-to NEW] [--note "…"] [--force] | unretire BOX`
 
 // retiredBox is one entry: where its mail goes now (if anywhere), a line
 // about it, and who retired it when.
@@ -95,7 +95,7 @@ func checkNotRetired(dir string, d draft) error {
 		return err
 	}
 	for _, to := range d.to {
-		if _, ok := list[to]; ok {
+		if _, ok := list[to]; ok && to != d.retiredOK {
 			return retiredRefusal(list, to, "")
 		}
 	}
@@ -108,7 +108,7 @@ func checkNotRetired(dir string, d draft) error {
 
 func cmdRetire(args []string) error {
 	const u = retireUsage
-	f, err := parseFlags(args, map[string]bool{"moved-to": true, "note": true})
+	f, err := parseFlags(args, map[string]bool{"moved-to": true, "note": true, "force": false})
 	if err != nil {
 		return bad(u, err)
 	}
@@ -162,7 +162,14 @@ func cmdRetire(args []string) error {
 			return fmt.Errorf("%s is retired too: its mail goes to %s, so say --moved-to %s", r.MovedTo, to, to)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, box)); os.IsNotExist(err) {
+	forced := false
+	if why := ownersMainBox(box); why != "" {
+		if !f.has("force") {
+			return fmt.Errorf("%s is an owner's main box (%s): retiring it stops their mail; say --force if that's meant", box, why)
+		}
+		forced = true
+	}
+	if !boxExists(dir, box) {
 		fmt.Fprintf(os.Stderr, "deaddrop: there's no box %s yet; it's retired anyway, so nothing can start one\n", box)
 	}
 	_, was := list[box]
@@ -180,7 +187,76 @@ func cmdRetire(args []string) error {
 	default:
 		fmt.Printf("%s %s: mail to it is refused\n", verb, box)
 	}
+	line := box + " was retired by " + byWhom(r.By) + " at " + r.Retired
+	if forced {
+		line += " with --force, though it's an owner's main box"
+	}
+	if r.MovedTo != "" {
+		line += ", moved to " + r.MovedTo
+	}
+	if r.Note != "" {
+		line += ": " + r.Note
+	}
+	return retireLetter(dir, list, box, r.MovedTo, line)
+}
+
+// byWhom is who changed the list, as a letter says it.
+func byWhom(who string) string {
+	if who == "" {
+		return "the store's login"
+	}
+	return who
+}
+
+// retireLetter tells the boxes concerned that box was retired or unretired:
+// the box itself (if it was ever used: its history says why mail stopped),
+// the box its mail goes to, and the store's own me. From automation, a box
+// started if need be. The list has already changed, so a letter that can't
+// go says so, and the change stands.
+func retireLetter(dir string, list map[string]retiredBox, box, movedTo, line string) error {
+	var to []string
+	add := func(b string) {
+		if b == "" || contains(to, b) {
+			return
+		}
+		if _, gone := list[b]; gone && b != box {
+			return // a retired box takes no mail, not even this
+		}
+		to = append(to, b)
+	}
+	if boxExists(dir, box) {
+		add(box)
+	}
+	add(movedTo)
+	if c, err := loadConfig(); err == nil {
+		add(c.Me)
+	}
+	if len(to) == 0 {
+		return nil
+	}
+	d := draft{from: automation, to: to, subject: line, tags: []string{"retired"}, urgency: normal,
+		body: "# " + line + "\n\n" + line + ".\n", newBox: true, retiredOK: box}
+	if err := deliver(dir, d); err != nil {
+		return fmt.Errorf("the list is changed, but the letter about it wasn't sent: %v", err)
+	}
 	return nil
+}
+
+// ownersMainBox says why box is someone's own main box, or "": named in
+// the store's owners or as its me, or a name its allowed_signers lists.
+func ownersMainBox(box string) string {
+	if c, err := loadConfig(); err == nil {
+		if contains(c.Owners, box) {
+			return "named in owners in " + c.path
+		}
+		if c.Me == box {
+			return "the store's me in " + c.path
+		}
+	}
+	if p := signersPath(); listsPrincipal(p, box) {
+		return "it holds a key in " + p
+	}
+	return ""
 }
 
 func cmdUnretire(args []string) error {
@@ -209,7 +285,8 @@ func cmdUnretire(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := list[box]; !ok {
+	old, ok := list[box]
+	if !ok {
 		return fmt.Errorf("%s isn't retired", box)
 	}
 	delete(list, box)
@@ -221,7 +298,9 @@ func cmdUnretire(args []string) error {
 		return err
 	}
 	fmt.Printf("unretired %s: it takes mail again\n", box)
-	return nil
+	who, _ := whoAmI()
+	line := box + " was unretired by " + byWhom(who) + " at " + now().UTC().Format("2006-01-02T15:04:05Z")
+	return retireLetter(dir, list, box, old.MovedTo, line)
 }
 
 // retireName is a box named to retire or move to: a real name, never "me"

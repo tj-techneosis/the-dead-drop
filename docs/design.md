@@ -97,7 +97,11 @@ store checks it in `deliver`, where every send and reply ends up, before
 anything is written, so a send with one retired recipient is refused whole
 and the answer is the same over ssh and behind the gate. It's a refusal
 (exit 5), not a forward: mail is never silently sent somewhere its sender
-didn't name. Nothing already in the box moves; it reads as ever. Only the
+didn't name. Nothing already in the box moves; it reads as ever. Retiring
+and unretiring send a letter from automation to the boxes concerned (the
+box, where it moved, the store's me), so a change to where mail goes is
+never silent, and a person's own main box (the store's owners, its me, a
+name in its allowed_signers) needs `--force`, which the letter names. Only the
 store's own login changes the list (a gated key can't), and a list that
 won't read refuses every send rather than let mail through.
 

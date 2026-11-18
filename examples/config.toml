@@ -45,6 +45,10 @@ host = "store-box"
 # default.
 # box_names_public = true
 
+# On the store's machine: people's own main boxes. Retiring one needs
+# --force (so does me, or a name in the store's allowed_signers).
+# owners = ["alice", "bob"]
+
 # On a machine others reach the store through: commands that arrive here
 # over ssh go on to this machine's host, as whoever sent them. Without it,
 # a command that arrives over ssh runs here.

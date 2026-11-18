@@ -52,7 +52,7 @@ Look after it:
   deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]   one lookout per box
   deaddrop changes [WHO] [--for H] [--every 1m]   on the store's machine: a line each time a pigeonhole changes (what wait listens to)
   deaddrop gc [--days 30]          archived mail older than that goes
-  deaddrop retire BOX [--moved-to NEW] [--note "…"]   mail to BOX is refused, pointing at NEW; what's in it stays readable
+  deaddrop retire BOX [--moved-to NEW] [--note "…"] [--force]   mail to BOX is refused, pointing at NEW; what's in it stays readable (an owner's main box needs --force)
   deaddrop unretire BOX            it takes mail again
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help
@@ -71,7 +71,8 @@ at another box, such as its own; reply honours it when the letter verifies.
 A send to a box that has never had mail is refused, naming the boxes it
 likely meant: --new-box starts one on purpose (your own box and a reply
 need none). A retired box takes no mail, send or reply, and says where to
-send instead.
+send instead; retire and unretire send a letter about it to the boxes
+concerned.
 
 The body is Markdown on stdin. With no --subject, the subject is the
 document's first heading (or its first line). Several --tag on inbox, pull

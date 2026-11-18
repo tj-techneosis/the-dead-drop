@@ -121,6 +121,8 @@ again to Y, and say so; with no Y named, ask who reads X's mail now. Never
 retry X. What's already in a retired box still reads and files as ever.
 Retiring a box is the store's owner's (`deaddrop retire X --moved-to Y
 --note "…"` on the store's machine, `unretire X` to undo): only when asked.
+Each one sends a letter about it to the boxes concerned. Someone's own main
+box is refused without `--force`: never add it unless that person asked.
 
 ## Collecting mail for the work at hand
 
@@ -293,7 +295,7 @@ deaddrop file ID [NAME] [--box WHO] [--for H]
 deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--box WHO] [--for H]
 deaddrop status [--box WHO]... [--json]  # per box, with helpers' unread
 deaddrop status --box WHO --count        # "3 1": unread and urgent, for scripts
-deaddrop retire BOX [--moved-to NEW] [--note "…"] | unretire BOX   # the store's owner: mail to BOX is refused
+deaddrop retire BOX [--moved-to NEW] [--note "…"] [--force] | unretire BOX   # the store's owner: mail to BOX is refused
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]   # on the person's own machine
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]   # block until new mail, then a line per letter
 # --cached on any reading command reads the mirror watch --mirror keeps (letter text on disk: only if they ask)

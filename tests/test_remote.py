@@ -395,10 +395,31 @@ exec {BIN} "$@"
         self.assertIn(hint, p.stderr)
         self.assertEqual(p.returncode, 5)
         self.assertFalse((self.far_store / "bob").exists())
-        self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "old-desk", "--json").stdout)], [kept])
+        self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "old-desk", "--json").stdout)][0], kept)
         self.assertIn("old-desk is retired", self.rdd("status").stdout)
         self.rdd("unretire", "old-desk")
         self.rdd("send", "--to", "old-desk", input="# Back\n\nx\n")
+        self.assertEqual(self.near_files(), [])
+
+    def test_retire_letters_and_the_owner_guard_are_the_stores(self):
+        # The store's own config: its me, and an owner's main box.
+        cfg = self.far / ".config" / "deaddrop" / "config.toml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('me = "admin"\nowners = ["bob"]\n')
+        self.rdd("send", "--to", "old-desk", input="# Before\n\nx\n")
+        self.rdd("retire", "old-desk", "--moved-to", "new-desk", env=dict(DEADDROP_FROM="carol"))
+        line = "old-desk was retired by carol at 2026-11-02T15:30:00Z, moved to new-desk"
+        for box in ("old-desk", "new-desk", "admin"):
+            subjects = [m["subject"] for m in json.loads(self.rdd("inbox", box, "--json").stdout) if m["from"] == "automation"]
+            self.assertEqual(subjects, [line], box)
+        self.rdd("unretire", "old-desk", env=dict(DEADDROP_FROM="carol"))
+        self.assertIn("old-desk was unretired by carol", self.rdd("inbox", "admin").stdout)
+        # bob is an owner's main box on the store, whatever this side's config says.
+        p = self.rdd("retire", "bob", ok=False)
+        self.assertIn("owner's main box", p.stderr)
+        self.assertFalse((self.far_store / "retired.json").exists())
+        self.rdd("retire", "bob", "--moved-to", "new-desk", "--force")
+        self.assertIn("with --force", self.rdd("inbox", "new-desk").stdout)
         self.assertEqual(self.near_files(), [])
 
 
