@@ -438,8 +438,8 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   on the key's behalf; files come only as remote mode sends them
   (`--bundle`), never `--attach` paths;
 - it's one of the store's commands (`send`, `reply`, `inbox`, `ls`, `pull`,
-  `show`, `file`, `mark`, `status --box`, `sent`, `changes`, `version`), not `gc`,
-  `firetower` or a follow-up job;
+  `show`, `file`, `mark`, `status --box`, `sent`, `changes`, `version`), not
+  `retire`, `unretire`, `gc`, the board report or a follow-up job;
 - every box it reads, named or by default, is in `--read`, and to the key
   the store holds no other box: `sent`, thread fingerprints and every hint
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
@@ -756,6 +756,39 @@ times an hour, 4 as sent and 4 as followed up.
 The counts are kept in
 `rings.json` at the store's top.
 
+## Retired boxes
+
+A box exists once something's been sent to it, so a box nobody reads any
+more would still take mail without a word. When a box's owner moves (to a
+new name, a new seat, a shared desk), retire it on the store's machine:
+
+```sh
+deaddrop retire old-desk --moved-to new-desk --note "the desk answers in new-desk now"
+```
+
+From then on every send or reply that would put a copy in `old-desk` is
+refused, whole (no copy goes to anyone else on the same send), with exit 5
+and the way forward:
+
+```
+deaddrop: old-desk is retired; the desk answers in new-desk now (send to new-desk)
+```
+
+A `--reply-box` naming a retired box is refused the same way. With no
+`--moved-to` the box simply takes no mail; if the box it moved to is
+retired later too, the hint follows on to the box that's read. What's
+already in a retired box stays, and reads and files as ever (`inbox BOX`,
+`pull BOX`, `show --box`, `mark --box`). `deaddrop status` marks it
+`(retired)` and lists where each retired box went (`retired`, `moved_to`
+and `retired_note` in `--json`). `deaddrop unretire old-desk` takes it
+back.
+
+The list is the store's, in `retired.json` at its top, with who retired
+each box and when. Only the store changes it, so the check is the same for
+everyone, over ssh too; a gated key can't run `retire` or `unretire`. A
+list that won't read refuses every send until it's fixed, rather than let
+mail through to a retired box.
+
 ## Reports of your own
 
 The Dead Drop has no report feature. A report is any job that ends in
@@ -787,6 +820,7 @@ deaddrop gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config F
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
 deaddrop changes [WHO] [--for H] [--every 1m]   # the store's machine: a line each time a pigeonhole changes (what wait listens to)
 deaddrop gc [--days 30]
+deaddrop retire BOX [--moved-to NEW] [--note "…"]   |   deaddrop unretire BOX   # the store's: mail to BOX is refused
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]
 deaddrop open ID [--keep-unread] | --thread ID | --with WHO | --threads  [--box WHO] [--for H]

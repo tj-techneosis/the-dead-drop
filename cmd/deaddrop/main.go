@@ -52,6 +52,8 @@ Look after it:
   deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]   one lookout per box
   deaddrop changes [WHO] [--for H] [--every 1m]   on the store's machine: a line each time a pigeonhole changes (what wait listens to)
   deaddrop gc [--days 30]          archived mail older than that goes
+  deaddrop retire BOX [--moved-to NEW] [--note "…"]   mail to BOX is refused, pointing at NEW; what's in it stays readable
+  deaddrop unretire BOX            it takes mail again
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help
 
@@ -304,7 +306,7 @@ func refreshInbox(args []string) {
 }
 
 // changesStore are the commands that change what's in the store.
-var changesStore = map[string]bool{"send": true, "reply": true, "mark": true, "gc": true, "follow-up": true}
+var changesStore = map[string]bool{"send": true, "reply": true, "mark": true, "gc": true, "follow-up": true, "retire": true, "unretire": true}
 
 // readsHere are the commands whose messages are checked on the reader's
 // machine when the store is elsewhere.
@@ -339,6 +341,8 @@ var commands = map[string]func([]string) error{
 	"status":    cmdStatus,
 	"firetower": cmdFiretower,
 	"gc":        cmdGc,
+	"retire":    cmdRetire,
+	"unretire":  cmdUnretire,
 	"changes":   cmdChanges,
 	// Not for people: what a --follow-up job runs.
 	"follow-up": cmdFollowUp,

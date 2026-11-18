@@ -371,6 +371,21 @@ exec {BIN} "$@"
         out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
         self.assertIn("unread for helpers: planner 1", out)
 
+    def test_a_retired_box_is_refused_by_the_store(self):
+        hint = "old-desk is retired; the desk answers in new-desk now (send to new-desk)"
+        kept = self.rdd("send", "--to", "old-desk", input="# Before\n\nx\n").stdout.split()[1]
+        self.rdd("retire", "old-desk", "--moved-to", "new-desk", "--note", "the desk answers in new-desk now")
+        self.assertTrue((self.far_store / "retired.json").exists())
+        p = self.rdd("send", "--to", "bob", "--to", "old-desk", input="# After\n\nx\n", ok=False)
+        self.assertIn(hint, p.stderr)
+        self.assertEqual(p.returncode, 5)
+        self.assertFalse((self.far_store / "bob").exists())
+        self.assertEqual([m["id"] for m in json.loads(self.rdd("inbox", "old-desk", "--json").stdout)], [kept])
+        self.assertIn("old-desk is retired", self.rdd("status").stdout)
+        self.rdd("unretire", "old-desk")
+        self.rdd("send", "--to", "old-desk", input="# Back\n\nx\n")
+        self.assertEqual(self.near_files(), [])
+
 
 class RemoteDashes(RemoteBase):
     def test_reads_after_a_double_dash_still_reach_the_store_as_reads(self):
@@ -729,6 +744,18 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
             p = self.rdd(cmd, ok=False)
             self.assertIn("can't run", p.stderr)
             self.assertEqual(p.returncode, 5)  # every gate refusal: one code
+
+    def test_a_gated_key_cant_retire_and_is_refused_at_a_retired_box(self):
+        for cmd in (("retire", "alice"), ("unretire", "alice")):
+            p = self.rdd(*cmd, ok=False)
+            self.assertIn("can't run", p.stderr)
+            self.assertEqual(p.returncode, 5)
+        self.dd("retire", "old-desk", "--moved-to", "new-desk", "--note", "the desk answers in new-desk now",
+                DEADDROP_DIR=str(self.far_store))
+        p = self.rdd("send", "--to", "old-desk", input="# Hi\n\nx\n", ok=False)
+        self.assertIn("old-desk is retired; the desk answers in new-desk now (send to new-desk)", p.stderr)
+        self.assertEqual(p.returncode, 5)
+        self.assertFalse((self.far_store / "old-desk").exists())
 
     def gate(self, line, argv0=None, input=None, extra_env=None, gate_args=()):
         """The gate run directly, as sshd would, with this line."""

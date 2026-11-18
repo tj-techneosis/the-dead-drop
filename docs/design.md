@@ -81,6 +81,17 @@ takes nothing else. That stops a slip, not a person: anyone can set
 `DEADDROP_FROM`, or write into the store's files. Who really sent a message
 is what its signature says (below).
 
+**Retired boxes.** Because a box needs no sign-up, a name nobody reads any
+more still takes mail, silently. Retiring one is a short list at the
+store's top (`retired.json`): the box, where its mail goes now, a note. The
+store checks it in `deliver`, where every send and reply ends up, before
+anything is written, so a send with one retired recipient is refused whole
+and the answer is the same over ssh and behind the gate. It's a refusal
+(exit 5), not a forward: mail is never silently sent somewhere its sender
+didn't name. Nothing already in the box moves; it reads as ever. Only the
+store's own login changes the list (a gated key can't), and a list that
+won't read refuses every send rather than let mail through.
+
 **Personas.** People hand their writing to assistants, and a reader wants
 to know which one is talking. A persona is a label under the sender, never a
 sender: the box, the key and the replies stay the person's. It's in the

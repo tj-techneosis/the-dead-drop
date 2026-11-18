@@ -535,6 +535,11 @@ func readBody() (string, error) {
 // whose files aren't there yet.
 func deliver(dir string, d draft) error {
 	delivered := false // a copy is in a box: a --signed seal is spent
+	// A retired box takes no mail: the whole send is refused, every copy,
+	// before anything is written, and says where to send instead.
+	if err := checkNotRetired(dir, d); err != nil {
+		return err
+	}
 	if err := d.settle(); err != nil {
 		return err
 	}
@@ -1545,6 +1550,10 @@ type boxStatus struct {
 	Read          int            `json:"read"`
 	Archived      int            `json:"archived"`
 	Newest        *Message       `json:"newest_unread,omitempty"`
+	// Retired: the box takes no mail; MovedTo is where it goes now (0.7.16).
+	Retired     bool   `json:"retired,omitempty"`
+	MovedTo     string `json:"moved_to,omitempty"`
+	RetiredNote string `json:"retired_note,omitempty"`
 }
 
 func statusOf(dir, box string) boxStatus {
@@ -1614,9 +1623,18 @@ func cmdStatus(args []string) error {
 			}
 		}
 	}
+	// A list that won't read is said, and the counts still come.
+	retired, err := loadRetired(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "deaddrop: "+err.Error())
+	}
 	out := []boxStatus{}
 	for _, b := range list {
-		out = append(out, statusOf(dir, b))
+		s := statusOf(dir, b)
+		if r, ok := retired[b]; ok {
+			s.Retired, s.MovedTo, s.RetiredNote = true, movedTo(retired, b), r.Note
+		}
+		out = append(out, s)
 	}
 	// --count: one box's unread and urgent, as two bare numbers, for a
 	// script that shouldn't have to parse anything (a hook in an agent's
@@ -1647,7 +1665,25 @@ func cmdStatus(args []string) error {
 	if f.has("json") {
 		return printJSON(out)
 	}
+	// Retired boxes the listing covers: every one (behind the gate, those
+	// the key may read), or those named.
+	var footer []string
+	if f.has("box") {
+		footer = retiredLines(retired, list)
+	} else {
+		readable := []string{}
+		for b := range retired {
+			if gateReadable(b) {
+				readable = append(readable, b)
+			}
+		}
+		footer = retiredLines(retired, readable)
+	}
 	if len(out) == 0 {
+		if len(footer) > 0 {
+			fmt.Println(strings.Join(footer, "\n"))
+			return nil
+		}
 		fmt.Printf("No boxes yet in %s: a box exists once something's been sent to it.\n", dir)
 		return nil
 	}
@@ -1667,9 +1703,20 @@ func cmdStatus(args []string) error {
 		if len(hs) > 0 {
 			helpersCol = strings.Join(hs, ", ")
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", s.Box, s.Unread, s.Urgent, s.Read, s.Archived, helpersCol, newest)
+		name := s.Box
+		if s.Retired {
+			name += " (retired)"
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n", name, s.Unread, s.Urgent, s.Read, s.Archived, helpersCol, newest)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if len(footer) > 0 {
+		fmt.Println()
+		fmt.Println(strings.Join(footer, "\n"))
+	}
+	return nil
 }
 
 func cmdGc(args []string) error {
