@@ -65,6 +65,7 @@ deaddrop send --to me --from automation --tag tool-y --tag report --attach run.c
 | flag | |
 |---|---|
 | `--to WHO` | a box: any lowercase name, or `me`. Repeat it (or `--to a,b`) for copies to several: up to 32 copies a send, counting each `--for` |
+| `--new-box` | the box is new on purpose: without it, a box nothing has ever been sent to is refused (see [New and retired boxes](#new-and-retired-boxes)). A reply needs none |
 | `--subject "…"` | without it, the document's first heading (or its first line) |
 | `--tag T` | repeatable; lowercase. The tool or project first, then the kind of document |
 | `--urgent`, `--fyi` | the urgency; normal without either |
@@ -756,11 +757,35 @@ times an hour, 4 as sent and 4 as followed up.
 The counts are kept in
 `rings.json` at the store's top.
 
-## Retired boxes
+## New and retired boxes
 
-A box exists once something's been sent to it, so a box nobody reads any
-more would still take mail without a word. When a box's owner moves (to a
-new name, a new seat, a shared desk), retire it on the store's machine:
+A box exists once something's been sent to it, so a mistyped name, or a
+short form of someone's box, used to start a box nobody reads. Now a send
+to a box that has never had mail is refused, whole (no copy goes to
+anyone else on the same send), with exit 4 and the boxes it likely meant:
+
+```
+deaddrop: no box "keeper"; did you mean team-keeper? (--new-box starts keeper)
+```
+
+The hints are boxes that have the name as a whole part (`team-keeper`,
+`keeper-desk`), then ones that start or end with it, then ones a letter or
+two away; never a retired box. `--new-box` starts a box on purpose; your own
+box (`--to me`) needs none, and nor does a reply: its box comes from the
+letter, never typed, so it goes even to a sender who has never had mail. A
+reply to a retired box is still refused. `DEADDROP_NEW_BOX=1` is `--new-box`
+on every send, for a script that sets up a store's boxes, never for a
+session.
+
+Behind the gate, the store says nothing about boxes the key can't read, not
+even whether they exist, so a gated key's send to such a box still starts it.
+A store whose box names aren't private can say `box_names_public = true` in
+its config (off by default): then a gated key is refused, with hints from
+every box, like anyone else.
+
+A box nobody reads any more would still take mail without a word. When a
+box's owner moves (to a new name, a new seat, a shared desk), retire it on
+the store's machine:
 
 ```sh
 deaddrop retire old-desk --moved-to new-desk --note "the desk answers in new-desk now"
@@ -804,7 +829,7 @@ What gets reported, and when, belongs to whoever books it.
 ## Everything
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
+deaddrop send --to WHO [--new-box] [--subject S] [--tag T]... [--urgent|--fyi] [--reply-to ID]
               [--attach FILE]... [--follow-up 2d|TIME] [--from automation] [--as NAME] [--for HELPER]...
               [--reply-box BOX] [--ask] < body.md
 deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md

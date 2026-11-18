@@ -27,7 +27,9 @@ tokens, but it can't catch everything: that's on you.
   your own box; `inbox`, `pull` and `mark` read your box unless given
   another.
 - A **box** is any lowercase name (`alice`, `bob`). It exists once
-  something has been sent to it. `deaddrop status` lists them.
+  something has been sent to it. `deaddrop status` lists them. A send to a
+  box that has never had mail is refused unless it says `--new-box` (a reply
+  needs none).
 - `automation` is a sender, never a box: jobs send `--from automation`
   `--to` their owner. You only ever send as yourself or as `automation`.
 
@@ -106,6 +108,12 @@ document.
 
 Say what you sent: who to, the subject, the tags, the id (`send` prints
 the id, the box and the subject).
+
+**A box that doesn't exist.** A send refused with `no box "X"; did you
+mean Y?` (exit 4) went nowhere, not even to the other recipients. Send to
+the box it names if that's clearly who was meant; otherwise ask. Add
+`--new-box` only when the person says X is a new box: never to get past the
+refusal.
 
 **A retired box.** A send refused with "X is retired … (send to Y)" (exit
 5) went nowhere, not even to the other recipients: X's owner moved. Send it
@@ -272,7 +280,7 @@ It runs from a scheduler, not from a session.
 ## Quick reference
 
 ```
-deaddrop send --to WHO [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d|TIME] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
+deaddrop send --to WHO [--new-box] [--subject S] [--tag T]... [--urgent|--fyi] [--attach F]... [--follow-up 2d|TIME] [--from automation] [--as ROLE] [--for HELPER]... [--reply-box BOX] < doc.md
 deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as ROLE] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < doc.md
 deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for H] [--json]
 deaddrop pull  [WHO] [--tag T]... [--from WHO]... [--since 7d] [--unread|--all] [--for H] [--json]

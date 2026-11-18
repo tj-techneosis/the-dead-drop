@@ -371,6 +371,21 @@ exec {BIN} "$@"
         out = self.rdd("inbox", env=dict(DEADDROP_FROM="bob")).stdout
         self.assertIn("unread for helpers: planner 1", out)
 
+    def test_a_box_that_never_existed_is_refused_by_the_store(self):
+        self.rdd("send", "--to", "team-keeper", input="# Hi\n\nx\n")
+        strict = dict(DEADDROP_NEW_BOX=None)
+        p = self.rdd("send", "--to", "team-keeper", "--to", "keeper", input="# Hi\n\nx\n", ok=False, env=strict)
+        self.assertIn('no box "keeper"; did you mean team-keeper?', p.stderr)
+        self.assertEqual(p.returncode, 4)
+        self.assertEqual(len(list((self.far_store / "team-keeper" / "new").glob("*.md"))), 1)
+        self.assertFalse((self.far_store / "keeper").exists())
+        self.rdd("send", "--to", "keeper", "--new-box", input="# Hi\n\nx\n", env=strict)
+        self.assertTrue((self.far_store / "keeper").exists())
+        # The environment's form crosses as the flag: the far side never sees it.
+        self.rdd("send", "--to", "dora", input="# Hi\n\nx\n", env=dict(DEADDROP_NEW_BOX="1"))
+        self.assertIn("--new-box", self.ssh_log.read_text())
+        self.assertEqual(self.near_files(), [])
+
     def test_a_retired_box_is_refused_by_the_store(self):
         hint = "old-desk is retired; the desk answers in new-desk now (send to new-desk)"
         kept = self.rdd("send", "--to", "old-desk", input="# Before\n\nx\n").stdout.split()[1]
@@ -756,6 +771,26 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertIn("old-desk is retired; the desk answers in new-desk now (send to new-desk)", p.stderr)
         self.assertEqual(p.returncode, 5)
         self.assertFalse((self.far_store / "old-desk").exists())
+
+    def test_a_gated_key_is_told_only_about_boxes_it_reads(self):
+        strict = dict(DEADDROP_NEW_BOX=None)
+        self.far_send("team-keeper", "# Hi\n\nx\n")
+        # A box it can't read: nothing said, the send goes through as before.
+        self.rdd("send", "--to", "keeper", input="# Hi\n\nx\n", env=strict)
+        self.assertTrue((self.far_store / "keeper").exists())
+        # One it reads that has never existed: refused, hints from its own boxes only.
+        self.far_send("alice", "# Hi\n\nx\n")
+        p = self.rdd("send", "--to", "alice-helper", input="# Hi\n\nx\n", ok=False, env=strict)
+        self.assertIn('no box "alice-helper"; did you mean alice?', p.stderr)
+        self.assertNotIn("keeper", p.stderr)
+        self.assertEqual(p.returncode, 4)
+        # A store whose box names aren't private says so to everyone.
+        cfg = self.far / ".config" / "deaddrop" / "config.toml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("box_names_public = true\n")
+        p = self.rdd("send", "--to", "keeperr", input="# Hi\n\nx\n", ok=False, env=strict)
+        self.assertIn("did you mean keeper", p.stderr)
+        self.assertFalse((self.far_store / "keeperr").exists())
 
     def gate(self, line, argv0=None, input=None, extra_env=None, gate_args=()):
         """The gate run directly, as sshd would, with this line."""

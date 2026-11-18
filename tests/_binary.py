@@ -107,6 +107,9 @@ class DeadDrop(unittest.TestCase):
         (self.tmp / "home").mkdir(exist_ok=True)
         e.update(HOME=str(self.tmp / "home"), DEADDROP_DIR=str(self.dir), DEADDROP_CONFIG=str(self.config), DEADDROP_NOW=self.clock,
                  DEADDROP_FROM=self.me, DEADDROP_CRONTINENTAL=str(self.cron), DEADDROP_FIRETOWER=str(self.tower))
+        e["DEADDROP_NEW_BOX"] = "1"
+        # Most tests start boxes as they go; those about a box that has
+        # never existed say DEADDROP_NEW_BOX=None.
         for k, v in extra.items():
             if v is None:
                 e.pop(k, None)

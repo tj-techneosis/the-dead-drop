@@ -36,6 +36,7 @@ type draft struct {
 	persona                        string
 	helpers                        []string // --for: pigeonholes in each recipient's box
 	replyBox                       string   // --reply-box: where answers go
+	newBox                         bool     // --new-box: a box that never existed may be started
 	to, tags                       []string
 	body                           string
 	attach                         []string // paths on this machine
@@ -46,13 +47,13 @@ type draft struct {
 
 const replyUsage = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
 
-const sendUsage = `send --to WHO [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
+const sendUsage = `send --to WHO [--new-box] [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
 
 var sendFlags = map[string]bool{
 	"to": true, "subject": true, "tag": true, "urgent": false, "fyi": false,
 	"reply-to": true, "attach": true, "follow-up": true, "from": true, "bundle": false,
 	"signed-by": true, "signed-at": true, "signature": true, "as": true, "for": true, "reply-box": true,
-	"ask": false,
+	"ask": false, "new-box": false,
 }
 
 // helpersOf is a send's --for: the helpers it's addressed to.
@@ -164,7 +165,7 @@ func draftOf(f flags) (draft, error) {
 	if !f.has("to") {
 		return draft{}, badf(u, "who is it for? --to WHO (--to me for your own box)")
 	}
-	d := draft{subject: f.get("subject"), thread: f.get("reply-to"), attach: f.all("attach"),
+	d := draft{subject: f.get("subject"), thread: f.get("reply-to"), attach: f.all("attach"), newBox: f.has("new-box"),
 		signedBy: f.get("signed-by"), signedAt: f.get("signed-at"), sig: f.get("signature")}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return d, bad(u, err)
@@ -345,7 +346,9 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return bad(u, err)
 	}
-	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept}
+	// A reply's box comes from the letter, never typed, so it may start one;
+	// a retired box still refuses it.
+	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept, newBox: true}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return bad(u, err)
 	}
@@ -538,6 +541,11 @@ func deliver(dir string, d draft) error {
 	// A retired box takes no mail: the whole send is refused, every copy,
 	// before anything is written, and says where to send instead.
 	if err := checkNotRetired(dir, d); err != nil {
+		return err
+	}
+	// Nor does a box that has never existed, unless the send says it's new:
+	// a mistyped name would start a box nobody reads.
+	if err := checkBoxesExist(dir, d); err != nil {
 		return err
 	}
 	if err := d.settle(); err != nil {

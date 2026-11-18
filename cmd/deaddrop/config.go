@@ -29,6 +29,11 @@ type Config struct {
 	// Relay: commands that reach this machine over ssh go on to its host,
 	// for people who can only reach the store through it.
 	Relay bool `toml:"relay"`
+	// BoxNamesPublic: on the store's machine, box names aren't private, so
+	// behind the gate a send to a box that has never existed is refused, with
+	// the boxes it likely meant, like anyone's. Off: the gate says nothing
+	// about boxes a key can't read, and such a send goes through.
+	BoxNamesPublic bool `toml:"box_names_public"`
 	// Signing (sign.go): the ssh key this machine signs with (a .pub signs
 	// through the agent), who signs automation mail sent from here, and
 	// the list of who holds which key, for checking what arrives.

@@ -81,6 +81,15 @@ takes nothing else. That stops a slip, not a person: anyone can set
 `DEADDROP_FROM`, or write into the store's files. Who really sent a message
 is what its signature says (below).
 
+**New boxes.** No sign-up also meant a mistyped name started a box nobody
+reads, and the mail sat there unseen. So a send to a box that has never had
+mail is refused (exit 4) unless it says `--new-box`, naming the boxes it
+likely meant; still no list of members, only the folders already there.
+The sender's own box needs no flag, and nor does a reply: its box comes
+from the letter, so it can't be mistyped (a retired one still refuses it). Behind the gate, a refusal would say
+whether a box the key can't read exists, so the check stops there, unless
+the store opts in with `box_names_public`.
+
 **Retired boxes.** Because a box needs no sign-up, a name nobody reads any
 more still takes mail, silently. Retiring one is a short list at the
 store's top (`retired.json`): the box, where its mail goes now, a note. The

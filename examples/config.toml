@@ -37,6 +37,14 @@ host = "store-box"
 # Who signs automation mail sent from here (default: me).
 # sign_as = "alice"
 
+# On the store's machine: box names aren't private. A send to a box that
+# has never had mail is always refused with the boxes it likely meant, but
+# behind the gate a key is told nothing about boxes it can't read, not even
+# whether they exist, so its send to such a box goes through. With this on,
+# a gated key is refused and given hints from every box, like anyone. Off by
+# default.
+# box_names_public = true
+
 # On a machine others reach the store through: commands that arrive here
 # over ssh go on to this machine's host, as whoever sent them. Without it,
 # a command that arrives over ssh runs here.

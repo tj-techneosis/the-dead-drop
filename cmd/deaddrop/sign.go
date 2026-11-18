@@ -509,6 +509,11 @@ func contains(xs []string, x string) bool {
 // sender's machine, so it goes to the store (and into the signature) as a
 // flag.
 func withPersona(cmd string, args []string) []string {
+	// $DEADDROP_NEW_BOX=1 is --new-box on every send: for a script that sets
+	// up a store's boxes, never a session's default.
+	if os.Getenv("DEADDROP_NEW_BOX") == "1" && hops() == 0 && cmd == "send" && !hasFlag(args, "new-box") {
+		args = append(append([]string{}, args...), "--new-box")
+	}
 	if rb := os.Getenv("DEADDROP_REPLY_BOX"); rb != "" && hops() == 0 && (cmd == "send" || cmd == "reply") && !hasFlag(args, "reply-box") {
 		args = append(append([]string{}, args...), "--reply-box", rb)
 	}
@@ -765,6 +770,9 @@ func replyAsSend(args []string) (string, []string, error) {
 	if f.has("reply-box") {
 		out = append(out, "--reply-box", f.get("reply-box"))
 	}
+	// The box comes from the letter, never typed: it may be one that has
+	// never had mail (a retired one still refuses it).
+	out = append(out, "--new-box")
 	hs, err := replyHelpers(&orig, f)
 	if err != nil {
 		return "", nil, bad(u, err)
