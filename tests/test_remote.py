@@ -411,15 +411,13 @@ class RemoteWait(RemoteBase):
         return p
 
     def far_changes(self):
-        """The store side's `deaddrop changes` processes, as pids."""
+        """The store side's `deaddrop changes` processes, as pids (from ps, so it runs on macOS too)."""
+        out = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True).stdout
         pids = []
-        for d in Path("/proc").iterdir():
-            try:
-                argv = (d / "cmdline").read_bytes().split(b"\0")
-            except OSError:
-                continue
-            if b"changes" in argv and any(str(self.far).encode() in a for a in argv):
-                pids.append(int(d.name))
+        for line in out.splitlines():
+            pid, _, cmd = line.strip().partition(" ")
+            if " changes" in cmd and str(self.far) in cmd and pid.isdigit():
+                pids.append(int(pid))
         return pids
 
     def test_a_letter_reaches_a_remote_wait_within_a_second_or_two_over_one_session(self):
