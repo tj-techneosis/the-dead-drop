@@ -404,6 +404,79 @@ class RemoteWait(RemoteBase):
         self.assertEqual(p.returncode, 4)
 
 
+    def start_wait(self, *args, env=None):
+        p = subprocess.Popen([BIN, "wait", *args], env=self.env(**self.near_env(DEADDROP_FROM="bob", **(env or {}))),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.communicate()))
+        return p
+
+    def far_changes(self):
+        """The store side's `deaddrop changes` processes, as pids."""
+        pids = []
+        for d in Path("/proc").iterdir():
+            try:
+                argv = (d / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if b"changes" in argv and any(str(self.far).encode() in a for a in argv):
+                pids.append(int(d.name))
+        return pids
+
+    def test_a_letter_reaches_a_remote_wait_within_a_second_or_two_over_one_session(self):
+        self.rdd("send", "--to", "bob", input="# Old\n\nx\n")
+        self.rdd("wait", env=dict(DEADDROP_FROM="bob"), timeout=10)
+        log_before = self.ssh_log.read_text().count("store-box")
+        p = self.start_wait()
+        time.sleep(1)
+        self.assertIsNone(p.poll())
+        sent = time.monotonic()
+        b = self.dd("send", "--to", "bob", input="# New\n\nx\n", DEADDROP_DIR=str(self.far_store)).stdout.split()[1]
+        out, err = p.communicate(timeout=10)
+        self.assertLess(time.monotonic() - sent, 2)
+        self.assertIn(b, out)
+        self.assertEqual(err, "")
+        lines = self.ssh_log.read_text().splitlines()[-200:]
+        calls = [l for l in lines if "exec \"$d\"" in l][-3:]
+        # One session for the changes, and a look at its start and on the letter.
+        self.assertEqual(self.ssh_log.read_text().count("store-box") - log_before, 3)
+        self.assertIn("'changes' 'bob'", calls[0])
+        self.assertIn("'inbox' 'bob'", calls[1])
+        self.assertIn("'inbox' 'bob'", calls[2])
+        # The store's side ended with the wait, or ends at its next word.
+        self.assertEqual(self.dd("version").returncode, 0)
+
+    def test_a_dropped_session_reconnects_and_loses_nothing_nor_reports_twice(self):
+        self.rdd("send", "--to", "bob", input="# Old\n\nx\n")
+        self.rdd("wait", env=dict(DEADDROP_FROM="bob"), timeout=10)
+        alive = self.tmp / "alive"
+        p = self.start_wait("--every", "10s", "--alive", str(alive))
+        for _ in range(50):
+            if self.far_changes():
+                break
+            time.sleep(0.1)
+        (pid,) = self.far_changes()
+        os.kill(pid, 9)  # the session drops
+        b = self.dd("send", "--to", "bob", input="# While it was down\n\nx\n", DEADDROP_DIR=str(self.far_store)).stdout.split()[1]
+        out, err = p.communicate(timeout=20)
+        self.assertIn(b, out)
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertIn("reconnecting", err)
+        # Reported once: the next wait doesn't say it again.
+        q = self.start_wait("--every", "10s")
+        time.sleep(1.5)
+        self.assertIsNone(q.poll())
+
+    def test_a_store_without_changes_is_looked_at_every_every(self):
+        old = script(self.tmp / "store-old", f'[ "$1" = changes ] && {{ echo "deaddrop: no command \\"changes\\"" >&2; exit 2; }}\nexec "{self.far}/.local/bin/deaddrop" "$@"\n')
+        self.rdd("send", "--to", "bob", input="# Old\n\nx\n")
+        self.rdd("wait", env=dict(DEADDROP_FROM="bob"), timeout=10)
+        p = self.start_wait("--every", "10s", env=dict(DEADDROP_REMOTE_BIN=str(old)))
+        time.sleep(1)
+        b = self.dd("send", "--to", "bob", input="# New\n\nx\n", DEADDROP_DIR=str(self.far_store)).stdout.split()[1]
+        out, err = p.communicate(timeout=20)
+        self.assertIn(b, out)
+        self.assertIn("looking every 10s", err)
+
     def test_a_store_it_cant_reach_is_waited_out_and_alive_goes_stale(self):
         down = script(self.tmp / "ssh-down", "echo 'ssh: connect to host store-box: Connection refused' >&2; exit 255\n")
         alive = self.tmp / "alive"
@@ -988,6 +1061,40 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
         self.assertNotIn("toml", p.stderr)
         log = (self.far_store / "gate.log").read_text()
         self.assertIn("config can't be read", log)
+
+    def test_a_wait_through_the_gate_hears_its_own_box_at_once(self):
+        a = self.far_send("alice", "# Old\n\nx\n")
+        self.assertIn(a, self.rdd("wait", timeout=10).stdout)
+        p = subprocess.Popen([BIN, "wait"], env=self.env(**self.near_env()), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.communicate()))
+        time.sleep(1)
+        sent = time.monotonic()
+        b = self.far_send("alice", "# New\n\nx\n")
+        out, err = p.communicate(timeout=10)
+        self.assertLess(time.monotonic() - sent, 2)
+        self.assertIn(b, out)
+        self.assertNotIn("looking every", err)  # the gate took changes
+
+    def test_changes_behind_the_gate_is_its_own_boxes_only_and_writes_nothing(self):
+        self.far_send("bob", "# Bob's\n\nx\n")
+        for line in ("deaddrop changes bob", "deaddrop changes --box bob", "deaddrop changes alice --for '*'"):
+            p = self.gate(line)
+            self.assertNotEqual(p.returncode, 0, line)
+            self.assertNotIn("ready", p.stdout)
+        self.assertEqual(self.gate("deaddrop changes bob").returncode, 5)
+        self.assertIn("reads only alice, alice-helper", self.gate("deaddrop changes bob").stderr)
+        before = sorted(str(x) for x in self.far_store.rglob("*"))
+        # Its own box, which has no folder yet: it says ready, and makes nothing.
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.far), "SSH_ORIGINAL_COMMAND": "deaddrop changes alice --for alice-pal"}
+        p = subprocess.Popen([str(self.far / ".local" / "bin" / "deaddrop"), "gate", "--as", "alice", "--read", "alice,alice-helper",
+                              "--dir", str(self.far_store), "--config", str(self.far / ".config" / "deaddrop" / "config.toml")],
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(p.stdout.readline(), "ready\n")
+        finally:
+            p.kill()
+            p.communicate()
+        self.assertEqual(sorted(str(x) for x in self.far_store.rglob("*")), before)
 
     def test_every_gate_refusal_exits_5(self):
         self.far_send("alice", "# Hi\n\nx\n")

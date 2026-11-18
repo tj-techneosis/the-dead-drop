@@ -240,6 +240,25 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 		}
 	}
 
+	c := remoteCommand(host, me, cmd, args, stdin)
+	c.Stdout, c.Stderr = stdout, stderr
+	err = c.Run()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &ee) && ee.ExitCode() == exitUnreachable:
+		return exitError{exitUnreachable, "could not reach the store on " + host + " over ssh"}
+	case errors.As(err, &ee) && ee.ExitCode() > 0:
+		// The far side said what was wrong.
+		return exitError{ee.ExitCode(), ""}
+	}
+	return fmt.Errorf("could not run ssh: %v", err)
+}
+
+// remoteCommand is the ssh that runs one command on the store's machine, as
+// me: the line every remote command sends, which the gate reads.
+func remoteCommand(host, me, cmd string, args []string, stdin io.Reader) *exec.Cmd {
 	bin := os.Getenv("DEADDROP_REMOTE_BIN")
 	if bin == "" {
 		c, _ := loadConfig()
@@ -267,17 +286,6 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 	}
 	sshArgs = append(sshArgs, host, line)
 	c := exec.Command(ssh, sshArgs...)
-	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr
-	err = c.Run()
-	var ee *exec.ExitError
-	switch {
-	case err == nil:
-		return nil
-	case errors.As(err, &ee) && ee.ExitCode() == exitUnreachable:
-		return exitError{exitUnreachable, "could not reach the store on " + host + " over ssh"}
-	case errors.As(err, &ee) && ee.ExitCode() > 0:
-		// The far side said what was wrong.
-		return exitError{ee.ExitCode(), ""}
-	}
-	return fmt.Errorf("could not run ssh: %v", err)
+	c.Stdin = stdin
+	return c
 }

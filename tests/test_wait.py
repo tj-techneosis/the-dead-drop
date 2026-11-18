@@ -148,6 +148,91 @@ class Wait(DeadDrop):
         self.assertIn(c, self.wait("--box", "carol").stdout)
         self.assertTrue(self.blocks())  # bob's still reported
 
+    def start(self, *args, **env):
+        env.setdefault("DEADDROP_FROM", "bob")
+        p = subprocess.Popen([BIN, "wait", *args], env=self.env(**env),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.communicate()))
+        return p
+
+    def test_a_letter_sent_while_it_waits_is_reported_within_a_second_or_two(self):
+        # Folder events, not --every (a minute here): the letter wakes it.
+        a = self.send("# Old\n\nx\n", "--to", "bob")
+        self.wait()
+        p = self.start()
+        time.sleep(0.5)
+        self.assertIsNone(p.poll())
+        sent = time.monotonic()
+        b = self.send("# New\n\nx\n", "--to", "bob")
+        out, _ = p.communicate(timeout=10)
+        self.assertLess(time.monotonic() - sent, 2)
+        self.assertIn(b, out)
+        self.assertNotIn(a, out)
+
+    def test_a_box_with_no_folders_yet_wakes_when_its_first_letter_comes(self):
+        self.send("# To carol\n\nx\n", "--to", "carol")  # a store, but no box for bob
+        for_ = self.start("--for", "bob-helper")
+        own = self.start()
+        time.sleep(0.5)
+        sent = time.monotonic()
+        a = self.send("# First\n\nx\n", "--to", "bob")
+        self.assertIn(a, own.communicate(timeout=10)[0])
+        self.assertLess(time.monotonic() - sent, 2)
+        h = self.send("# Helper\n\nx\n", "--to", "bob", "--for", "bob-helper")
+        self.assertIn(h, for_.communicate(timeout=10)[0])
+        self.assertLess(time.monotonic() - sent, 3)
+
+    def test_two_waits_on_one_box_report_a_letter_once(self):
+        self.send("# Old\n\nx\n", "--to", "bob")
+        self.wait()
+        ps = [self.start(), self.start()]
+        time.sleep(0.5)
+        a = self.send("# New\n\nx\n", "--to", "bob")
+        time.sleep(1.5)
+        ended = [p for p in ps if p.poll() is not None]
+        self.assertEqual(len(ended), 1)
+        self.assertIn(a, ended[0].communicate()[0])
+        self.assertIsNone([p for p in ps if p not in ended][0].poll())  # the other still waits
+
+    def test_no_store_yet_wakes_when_the_first_letter_makes_it(self):
+        p = self.start()
+        time.sleep(0.5)
+        sent = time.monotonic()
+        a = self.send("# First\n\nx\n", "--to", "bob")
+        self.assertIn(a, p.communicate(timeout=10)[0])
+        self.assertLess(time.monotonic() - sent, 2)
+
+    def test_alive_is_kept_fresh_while_it_waits(self):
+        self.send("# Old\n\nx\n", "--to", "bob")
+        self.wait()
+        alive = self.tmp / "alive"
+        self.start("--alive", str(alive), "--every", "10s")
+        time.sleep(0.5)
+        self.assertEqual(alive.read_text(), "bob\n")
+        alive.unlink()
+        self.send("# For carol\n\nx\n", "--to", "carol")  # not bob's: no report, but a look
+        time.sleep(1)
+        self.assertFalse(alive.exists())  # carol's mail isn't a change in bob's box
+        self.send("# Another\n\nx\n", "--to", "bob", "--for", "bob-helper")  # bob's folder changes, not his pigeonhole
+        time.sleep(11)
+        self.assertTrue(alive.exists())  # --every still looks, and says so
+
+    def test_changes_says_ready_then_change_and_never_what(self):
+        self.send("# Old\n\nx\n", "--to", "bob")
+        p = subprocess.Popen([BIN, "changes", "bob"], env=self.env(DEADDROP_FROM="bob"),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.kill(), p.communicate()))
+        self.assertEqual(p.stdout.readline(), "ready\n")
+        a = self.send("# Secret subject\n\nx\n", "--to", "bob")
+        self.assertEqual(p.stdout.readline(), "change\n")
+        self.dd("mark", "read", a, DEADDROP_FROM="bob")
+        self.assertEqual(p.stdout.readline(), "change\n")
+
+    def test_changes_on_another_box_that_isnt_there_exits_4_and_makes_nothing(self):
+        p = self.dd("changes", "carol", ok=False, DEADDROP_FROM="bob")
+        self.assertEqual(p.returncode, 4)
+        self.assertFalse(self.dir.exists())
+
 
 if __name__ == "__main__":
     import unittest

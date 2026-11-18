@@ -438,11 +438,16 @@ as `$SSH_ORIGINAL_COMMAND`) and runs it only if:
   on the key's behalf; files come only as remote mode sends them
   (`--bundle`), never `--attach` paths;
 - it's one of the store's commands (`send`, `reply`, `inbox`, `ls`, `pull`,
-  `show`, `file`, `mark`, `status --box`, `sent`, `version`), not `gc`,
+  `show`, `file`, `mark`, `status --box`, `sent`, `changes`, `version`), not `gc`,
   `firetower` or a follow-up job;
 - every box it reads, named or by default, is in `--read`, and to the key
   the store holds no other box: `sent`, thread fingerprints and every hint
   or warning say nothing about the rest; where mail goes (`--to`) is anyone;
+- `changes` (what `wait` listens to) is a read like any other: only a box
+  in `--read`, and it says only that the pigeonhole changed; it writes
+  nothing, makes no folder and holds no lock, and it stays open while the
+  key's `wait` does (one session per waiting seat), ending at its next
+  word after the key hangs up;
 - it sends as `--as` (the gate sets who's asking, whatever the line says), and
   signs as no one else; with `--signed`, only with `--as`'s own key, as the
   store's list of signers has it (the machine's pinned one where there is
@@ -532,8 +537,19 @@ deaddrop wait --alive ~/.cache/waiting # and rewrite that file after every look
 deaddrop wait --json                   # the letters as inbox --json gives them, without text
 ```
 
-It looks every minute (`--every`, not more often than every 10 seconds). It
-retries only what can clear by itself: a store it can't reach (which is
+It hears mail as it comes, within a second or so, not on a timer. With the
+store on this machine it waits on the box's folder (inotify on Linux,
+kqueue on macOS), and still looks every minute (`--every`, not more often
+than every 10 seconds) in case an event was missed. With the store
+elsewhere it keeps one ssh session open to it, running `deaddrop changes`
+there, which says only that the pigeonhole changed (never what: no id,
+sender or subject), and looks at the store the usual way when it does, so
+signatures are still checked here. `--every` is then how often the store
+says it's still there (which rewrites `--alive`), and how long to wait
+before reconnecting a session that dropped soon after it opened; a letter
+that lands while the session is down is found by the look made once it's
+back. A store whose deaddrop is older than 0.7.14 can't say when mail comes:
+the wait says so once and looks every `--every`, as before. It retries only what can clear by itself: a store it can't reach (which is
 also how a key the store's machine turns away at ssh looks) and an answer
 it can't read, saying so once per new error, while its `--alive` file goes
 stale. Anything else ends it with the error: exit 4 for a box that isn't
@@ -554,7 +570,8 @@ error before printing anything; if a save after printing fails, it says so,
 and the next wait may report the same letters again.
 
 `--alive FILE` holds `BOX`, or `BOX HELPER` with `--for`, and is rewritten
-only after a look that worked, so its age says whether a wait is running and
+only after a look that worked (or, with the store elsewhere, the store's
+word every `--every` that it's still there), so its age says whether a wait is running and
 reaching the store. Where it's going is checked when the wait starts (the
 nearest folder that exists, since the rest is made); a path that can't be
 written fails then, with exit 2, never later.
@@ -768,6 +785,7 @@ deaddrop mark read|unread|archive ID... | --tag T... [--from WHO]... [--since â€
 deaddrop status [--box WHO]... [--json]   |   deaddrop status --box WHO --count
 deaddrop gate --as NAME --read BOX[,BOX]... [--signed] [--dir STORE] [--config FILE]   # the store's machine: an ssh forced command
 deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]
+deaddrop changes [WHO] [--for H] [--every 1m]   # the store's machine: a line each time a pigeonhole changes (what wait listens to)
 deaddrop gc [--days 30]
 deaddrop watch [--every 1m] [--no-hooks] [--box WHO] [--for H] [--mirror]
 deaddrop wait [--box WHO] [--for H] [--every 1m] [--alive FILE] [--again] [--json]

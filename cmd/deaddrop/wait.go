@@ -25,8 +25,20 @@ import (
 // everything unread). A letter that's read and later marked unread again is
 // new again.
 //
+// It isn't a timer. With the store here it waits on the pigeonhole's folder
+// (watchSlot), armed before each look so nothing lands between the look and
+// the wait unseen, and looks again every --every in case an event was
+// missed. With the store elsewhere it holds one ssh session to the store's
+// `deaddrop changes` (changes.go), which says "change" and nothing about
+// what; the look is the usual inbox, checked here. --every is then the
+// store's heartbeat (which rewrites --alive) and the pause before
+// reconnecting a session that dropped soon after it opened; a reconnect
+// looks again once the session is ready. A store that can't say changes
+// (an older deaddrop) is looked at every --every, said once.
+//
 // --alive FILE is rewritten with "BOX" (or "BOX HELPER") after every look at
-// the store that worked, so something else (a hook) can tell a wait is
+// the store that worked, and on every "alive" from the store's changes
+// session, so something else (a hook) can tell a wait is
 // running, and on which box, by the file's age. A look that fails leaves it
 // alone: a wait that can't reach the store goes stale, as it should.
 //
@@ -127,13 +139,99 @@ func cmdWait(args []string) error {
 	if watchFor != "" {
 		fetch = append(fetch, "--for", watchFor)
 	}
+	host, err := remoteHost()
+	if err != nil {
+		return err
+	}
+	dir := ""
+	if host == "" {
+		if dir, err = storeDir(); err != nil {
+			return err
+		}
+	}
 	// The inner inbox's codes that mean something here come back as they are.
 	keeps := map[int]bool{exitNoBox: true, exitRefused: true, exitUnreachable: true, 2: true}
 	lastErr, aliveErr := "", ""
+	say := func(err error) {
+		if err.Error() != lastErr {
+			fmt.Fprintf(os.Stderr, "%s deaddrop: %v (still waiting)\n", time.Now().Format("15:04:05"), err)
+			lastErr = err.Error()
+		}
+	}
+	touchAlive := func() {
+		if alive == "" {
+			return
+		}
+		line := box
+		if watchFor != "" {
+			line += " " + watchFor
+		}
+		// A write that fails is said once, and the file goes stale:
+		// that's what it's for, and it isn't mail.
+		if err := writeAtomic(alive, []byte(line+"\n"), 0o600); err != nil && err.Error() != aliveErr {
+			fmt.Fprintf(os.Stderr, "%s deaddrop: --alive %s: %v (still waiting)\n", time.Now().Format("15:04:05"), alive, err)
+			aliveErr = err.Error()
+		} else if err == nil {
+			aliveErr = ""
+		}
+	}
+	// With the store elsewhere, one ssh session stays open to it and says
+	// when the pigeonhole changes (feed); a store that can't (an older
+	// deaddrop, or one whose gate doesn't know changes) is looked at every
+	// --every instead (polling, said once after a look that worked).
+	var feed *changeFeed
+	polling, pollSaid := false, false
+	defer func() {
+		if feed != nil {
+			feed.stop()
+		}
+	}()
 	for {
+		var w *dirWatch // armed before the look, so nothing lands unseen
+		switch {
+		case host == "":
+			w = watchSlot(dir, slotDir(dir, box, watchFor))
+		case feed == nil && !polling:
+			f, err := startFeed(host, box, watchFor, every)
+			if ee, ok := err.(exitError); ok && ee.code == exitUnreachable {
+				say(err)
+				time.Sleep(every)
+				continue
+			}
+			if err != nil {
+				polling = true
+			} else {
+				feed = f
+			}
+		}
+		pause := func() {
+			switch {
+			case w != nil:
+				w.wait(every)
+				w.close()
+			case feed != nil:
+				if !feed.await(every, touchAlive) {
+					// Dropped: the next look starts a new session (after
+					// --every, if this one didn't last that long), and
+					// looks again once it's open, so nothing is lost.
+					say(feed.dropped(host))
+					short := time.Since(feed.began) < every
+					feed.stop()
+					feed = nil
+					if short {
+						time.Sleep(every)
+					}
+				}
+			default:
+				time.Sleep(every)
+			}
+		}
 		started := time.Now()
 		out, err := selfKeeping(keeps, fetch...)
 		if ee, ok := err.(exitError); err != nil && (!ok || ee.code != exitUnreachable) {
+			if w != nil {
+				w.close()
+			}
 			return err // waiting won't change it
 		}
 		var ms []*Message
@@ -143,30 +241,24 @@ func cmdWait(args []string) error {
 			}
 		}
 		if err != nil {
-			if err.Error() != lastErr {
-				fmt.Fprintf(os.Stderr, "%s deaddrop: %v (still waiting)\n", time.Now().Format("15:04:05"), err)
-				lastErr = err.Error()
+			say(err)
+			if w != nil {
+				w.close()
 			}
 			time.Sleep(every)
 			continue
 		}
 		lastErr = ""
-		if alive != "" {
-			line := box
-			if watchFor != "" {
-				line += " " + watchFor
-			}
-			// A write that fails is said once, and the file goes stale:
-			// that's what it's for, and it isn't mail.
-			if err := writeAtomic(alive, []byte(line+"\n"), 0o600); err != nil && err.Error() != aliveErr {
-				fmt.Fprintf(os.Stderr, "%s deaddrop: --alive %s: %v (still waiting)\n", time.Now().Format("15:04:05"), alive, err)
-				aliveErr = err.Error()
-			} else if err == nil {
-				aliveErr = ""
-			}
+		touchAlive()
+		if polling && !pollSaid {
+			fmt.Fprintf(os.Stderr, "%s deaddrop: the store can't say when mail comes (an older deaddrop there?): looking every %s\n", time.Now().Format("15:04:05"), every)
+			pollSaid = true
 		}
 		unlock, err := lockWaited(box)
 		if err != nil {
+			if w != nil {
+				w.close()
+			}
 			return fmt.Errorf("the wait's state: %v", err)
 		}
 		reported := map[string]bool{}
@@ -200,8 +292,11 @@ func cmdWait(args []string) error {
 		if len(fresh) == 0 {
 			writeWaited(box, keep) // only pruning: nothing lost if it fails
 			unlock()
-			time.Sleep(every)
+			pause()
 			continue
+		}
+		if w != nil {
+			w.close()
 		}
 		// Said first, kept after: a wait killed in between reports them
 		// again, never loses them.

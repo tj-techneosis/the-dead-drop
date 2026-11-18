@@ -341,7 +341,18 @@ seconds), and `deaddrop wait`, which ends as soon as there's mail to report.
 `wait` is for a program or an agent that should be woken by mail rather than
 poll for it: started in the background, its exit is the wake. What it has
 reported is state of its own, per box, so a letter landing between two
-waits is never lost to a snapshot taken at the start. Everyone with a scheduler
+waits is never lost to a snapshot taken at the start. A wait isn't a poll:
+on the store's machine it blocks on the box's folder (inotify, kqueue) and
+looks when the folder changes; elsewhere it holds one ssh session to the
+store's `deaddrop changes`, which says only "change" (never what changed,
+so the reading, the signature checks and the state of what's reported all
+stay on the reader's machine) and "alive" every `--every`. Each watch is
+armed before the look it guards (the store side arms the next one before
+it says "change"), so a letter landing between a look and the wait after
+it still wakes it; a session that drops reconnects and looks again, so
+nothing lands unseen. `--every` survives as a backstop: the local wait
+still looks that often, and a store too old to say `changes` is polled at
+it. Everyone with a scheduler
 books `deaddrop watch` with it instead; `examples/watch/` has Crontinental,
 launchd, systemd and cron.
 

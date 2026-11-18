@@ -17,7 +17,9 @@ Claude Code setup.
 | `cmd/deaddrop/followup.go` | follow-ups (Crontinental jobs), the ring and its per-sender cap (`rings.json`); ring tags are names Crontinental takes (`deaddrop_box`, `deaddrop_for`) |
 | `cmd/deaddrop/firetower.go` | `deaddrop firetower`: one lookout per box |
 | `cmd/deaddrop/watch.go` | a person's own machine: `watch` (the inbox file, `new.d` hooks), `show`, `open`, `bar` |
-| `cmd/deaddrop/wait.go` | `deaddrop wait`: block until mail no wait has reported (`waited@<box>[@<helper>].json`, locked), a line per letter, `--alive`; retries only an unreachable store (255) or an unreadable answer, ends on everything else; never prunes from a fetch older than the state |
+| `cmd/deaddrop/wait.go` | `deaddrop wait`: block until mail no wait has reported (`waited@<box>[@<helper>].json`, locked), a line per letter, `--alive`; retries only an unreachable store (255) or an unreadable answer, ends on everything else; never prunes from a fetch older than the state; woken by folder events here, or by the store's `changes` over one ssh session, `--every` only as backstop, heartbeat and reconnect |
+| `cmd/deaddrop/changes.go` | `deaddrop changes`: on the store's machine, `ready`, then `change` or `alive` lines for one pigeonhole, never what changed; writes nothing; the gate allows it for `--read` boxes. Also the reader's end (`changeFeed`) and `watchSlot` |
+| `cmd/deaddrop/dirwatch_*.go` | one folder's changes: inotify (Linux), kqueue (macOS), none elsewhere |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
 | `cmd/deaddrop/vcache.go` | the reader's cache of passed signature checks (`verified.json`), keyed on the list, ssh-keygen, signer, seal and text; only where the list is the reader's own and the state folder, resolved, is inside home with every folder up to home theirs |

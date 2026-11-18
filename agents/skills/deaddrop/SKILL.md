@@ -241,7 +241,8 @@ it unasked.
 nothing until mail comes: run `deaddrop wait` **in the background** (the
 session's background-task tool), not a loop of your own. It exits when the
 box has mail it hasn't reported, printing a line per letter (never the
-text); that exit wakes the session. Then `pull` what it named, act, `mark`
+text); that exit wakes the session, within a second or so of the letter
+landing (it hears the store's changes as they happen; it isn't a timer). Then `pull` what it named, act, `mark`
 what you handled, and start it again. A letter that lands while you work is
 still reported by the next wait, and one you left unread isn't reported
 twice (`--again` reports everything unread). `--box`/`--for` for a box or

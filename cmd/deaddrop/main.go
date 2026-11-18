@@ -50,6 +50,7 @@ Look after it:
   deaddrop status --box WHO --count        one box's unread and urgent, as two numbers
   deaddrop gate --as NAME --read BOX,... [--signed] [--dir D] [--config F]   on the store's machine: an ssh forced command for one key
   deaddrop firetower [--next 6m|TIME|none] [--box WHO]... [--smoke-after 30m] [--fire-after 3h] [--ring] [--pigeonholes]   one lookout per box
+  deaddrop changes [WHO] [--for H] [--every 1m]   on the store's machine: a line each time a pigeonhole changes (what wait listens to)
   deaddrop gc [--days 30]          archived mail older than that goes
 
   deaddrop upgrade [--check] | deaddrop version | deaddrop help
@@ -338,6 +339,7 @@ var commands = map[string]func([]string) error{
 	"status":    cmdStatus,
 	"firetower": cmdFiretower,
 	"gc":        cmdGc,
+	"changes":   cmdChanges,
 	// Not for people: what a --follow-up job runs.
 	"follow-up": cmdFollowUp,
 }

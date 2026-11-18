@@ -359,6 +359,9 @@ func gateSealReserve(sig string) (release func(), err error) {
 var gateCommands = map[string]bool{
 	"send": true, "reply": true, "inbox": true, "ls": true, "pull": true, "show": true,
 	"file": true, "mark": true, "status": true, "sent": true, "version": true,
+	// changes reads, and only that something changed, in a box the key may
+	// read (checked as every read's box is).
+	"changes": true,
 }
 
 // gateReadable says a gated caller may read box (always true ungated).
@@ -472,7 +475,7 @@ func cmdGate(args []string) error {
 	}
 	if !gateCommands[words[0]] {
 		what := cleanLine(words[0], 40)
-		return refused("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent and version", what)
+		return refused("this key can't run %s: only send, reply, inbox, ls, pull, show, file, mark, status, sent, changes and version", what)
 	}
 	cmd, rest := words[0], words[1:]
 	if err := gateCheck(cmd, rest, as); err != nil {
