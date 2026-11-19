@@ -286,6 +286,20 @@ It keeps only passes, keyed on the list's bytes, the ssh-keygen that
 checked, the signer, the seal and the signed text, and it steps aside for
 keys that expire (`valid-before`, `valid-after`) or a certificate authority.
 
+Most checks don't need ssh-keygen at all, cache or no cache: a reader on a
+shared login (a pinned list, so no cache) would otherwise run it once per
+letter, every read. So the reader checks a signature in its own process, by
+`ssh-keygen -Y verify`'s rules (the SSHSIG, our namespace, the hash, the
+list's principal patterns, `namespaces`, `valid-after` and `valid-before`),
+and answers only when it's sure: the signature holds and a line vouches for
+it, or the key is on no line of the list (nobody's: can't check). Everything
+else goes to ssh-keygen as before: a signature that doesn't hold, whose
+failure ssh-keygen words; a list with any line it doesn't read in full (a
+certificate authority, an option it doesn't know); a key type it doesn't
+take; a key within a day of its valid time. It's a fast path, never a second
+opinion, so it never says verified where ssh-keygen wouldn't, and the tests
+hold its answers to ssh-keygen's.
+
 The far side is told `DEADDROP_FROM` (the caller) and `DEADDROP_HOPS` (how
 many machines the command has come through). It never sends the command round again
 on its own: if its config has a `host` and no `relay = true`, it isn't the

@@ -419,7 +419,8 @@ class Signed(DeadDrop):
         broken = self.tmp / "no-keygen"
         broken.write_text("#!/bin/sh\nexit 1\n")
         broken.chmod(0o755)
-        self.assertNotEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), **env)[0]["signature"], "verified")
+        # (Only where ssh-keygen checks: with the fast path off.)
+        self.assertNotEqual(self.inbox(DEADDROP_SSH_KEYGEN=str(broken), DEADDROP_NO_INPROC="1", **env)[0]["signature"], "verified")
         # A forged "verified" in a cache the list's owner doesn't control: a
         # list others can write turns the cache off.
         os.chmod(self.signers, 0o666)

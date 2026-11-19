@@ -380,11 +380,24 @@ func verifyState(m *Message) (string, string) {
 	if _, err := os.Stat(signers); err != nil {
 		return sigUnknown, "signed by " + m.SignedBy + ", but this machine has no list of signers (" + signers + ")"
 	}
-	path, done, err := sigFile(m.Sig)
-	if err != nil {
-		return sigBad, err.Error()
+	if _, err := base64.StdEncoding.DecodeString(m.Sig); err != nil {
+		return sigBad, "the signature isn't base64"
 	}
-	defer done()
+	// The signature as a file, for ssh-keygen: made only when it's asked
+	// (most checks are worked out here, sshsig.go).
+	var path string
+	var tmpErr error
+	sigPath := func() string {
+		if path == "" && tmpErr == nil {
+			path, _, tmpErr = sigFile(m.Sig)
+		}
+		return path
+	}
+	defer func() {
+		if path != "" {
+			os.Remove(path)
+		}
+	}()
 	// A follow-up raises a message to urgent after it was signed, and says
 	// what it was. Only ever to urgent, and the note says so.
 	// What the letter could have been signed as. A follow-up time is sealed
@@ -424,7 +437,14 @@ func verifyState(m *Message) (string, string) {
 	for _, t := range tries {
 		payload := signedPayload(m.From, m.Persona, m.For, m.ReplyBox, t.followUp, m.Recipients, m.Subject, m.Tags, t.urgency, m.Thread, sumsOf(m), m.SignedAt, m.Body)
 		ok := cachedCheck(signers, m.SignedBy, m.Sig, payload, func() bool {
-			c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", path)
+			if ok, sure := quickVerify(signers, m.SignedBy, m.Sig, payload); sure {
+				return ok
+			}
+			p := sigPath()
+			if tmpErr != nil {
+				return false
+			}
+			c := exec.Command(sshKeygen(), "-Y", "verify", "-f", signers, "-I", m.SignedBy, "-n", signNamespace, "-s", p)
 			c.Stdin = bytes.NewReader(payload)
 			return c.Run() == nil
 		})
@@ -456,12 +476,25 @@ func verifyState(m *Message) (string, string) {
 			return sigVerified, "signed by " + m.SignedBy + when + raised
 		}
 	}
+	if tmpErr != nil {
+		return sigBad, tmpErr.Error()
+	}
 	// Whose key it is, by this machine's list: someone else's is a forgery;
 	// nobody's is a key this machine can't vouch for.
 	owners := cachedOwners(signers, m.Sig, func() []string {
-		out, _ := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", path).Output()
+		if o, sure := quickOwners(signers, m.Sig); sure {
+			return o
+		}
+		p := sigPath()
+		if tmpErr != nil {
+			return nil
+		}
+		out, _ := exec.Command(sshKeygen(), "-Y", "find-principals", "-f", signers, "-s", p).Output()
 		return strings.Fields(string(out))
 	})
+	if tmpErr != nil {
+		return sigBad, tmpErr.Error()
+	}
 	switch {
 	case len(owners) == 0 && listsPrincipal(signers, m.SignedBy):
 		return sigBad, fmt.Sprintf("it says %s signed it, but that isn't %s's key", m.SignedBy, m.SignedBy)

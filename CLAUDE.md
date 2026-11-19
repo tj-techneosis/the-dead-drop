@@ -22,6 +22,7 @@ Claude Code setup.
 | `cmd/deaddrop/dirwatch_*.go` | one folder's changes: inotify (Linux), kqueue (macOS), none elsewhere |
 | `cmd/deaddrop/markdown.go` | the safe Markdown-to-HTML for `show --html` |
 | `cmd/deaddrop/sign.go` | signatures: what's signed, signing on the sender's machine, checking on the reader's |
+| `cmd/deaddrop/sshsig.go` | checking a signature in this process (`ssh-keygen -Y verify`'s rules, golang.org/x/crypto/ssh), only when the answer is sure; anything it doesn't read in full, and every signature that doesn't hold, goes to ssh-keygen. `DEADDROP_NO_INPROC` turns it off |
 | `cmd/deaddrop/vcache.go` | the reader's cache of passed signature checks (`verified.json`), keyed on the list, ssh-keygen, signer, seal and text; only where the list is the reader's own and the state folder, resolved, is inside home with every folder up to home theirs |
 | `cmd/deaddrop/ledger.go` | the reader's seal ledger (`seals.json` in the state folder): replays read as delivered again |
 | `cmd/deaddrop/sent.go` | `sent`: a person's sent mail, copies put back together |
@@ -48,7 +49,8 @@ Claude Code setup.
   `DEADDROP_BIN` build checked on such a machine reads its signatures as
   unknown. A behaviour change comes with a
   test that fails without it.
-- **One static binary.** The standard library and BurntSushi/toml.
+- **One static binary.** The standard library, BurntSushi/toml and
+  golang.org/x/crypto/ssh (signature checks).
 - **The message file is a contract.** People and other tools read it.
   Header fields are added, never renamed or repurposed. The CLI is the only
   writer.

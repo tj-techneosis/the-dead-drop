@@ -360,8 +360,8 @@ go over ssh's stdin; nothing is written on the
 calling machine except what `pull` prints, the ssh connection's socket in
 `~/.ssh` (while it's open), the reader's ledger of seals it
 has seen (hashes and ids, so a signed letter copied under a new id reads as
-delivered again), a cache of signature checks that passed (so reading
-doesn't run ssh-keygen once per letter every time; only where the list of
+delivered again), a cache of signature checks that passed (most are checked in-process,
+and this saves running ssh-keygen again for the rest; only where the list of
 signers is your own private file, your state folder is inside your home
 both as given and with links resolved, nothing on the way is writable by
 others, the cache file is a plain file of yours, and never under a pinned
