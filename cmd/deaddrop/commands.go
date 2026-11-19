@@ -46,7 +46,7 @@ type draft struct {
 	signedBy, signedAt, sig string
 }
 
-const replyUsage = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md"
+const replyUsage = "reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME] [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] [--attach FILE]... < body.md"
 
 const sendUsage = `send --to WHO [--new-box] [--subject "…"] [--tag T]... [--urgent|--fyi] [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME] [--from WHO] [--as NAME] [--for HELPER]... [--reply-box BOX] < body.md`
 
@@ -310,12 +310,18 @@ func cmdSend(args []string) error {
 
 func cmdReply(args []string) error {
 	const u = replyUsage
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true, "attach": true})
 	if err != nil {
 		return bad(u, err)
 	}
 	if len(f.pos) != 1 {
 		return badf(u, "reply to one message: its id")
+	}
+	// A reply's attachments are files on the store's machine, named by the
+	// person running it there: never a path that came over ssh or through
+	// the gate, which would name a file on the store (send bundles its own).
+	if f.has("attach") && (hops() > 0 || gateRead != nil) {
+		return badf(u, "--attach on a reply works only on the store's machine")
 	}
 	me, err := whoAmI()
 	if err != nil {
@@ -349,7 +355,7 @@ func cmdReply(args []string) error {
 	}
 	// A reply's box comes from the letter, never typed, so it may start one;
 	// a retired box still refuses it.
-	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept, newBox: true}
+	d := draft{from: me, to: []string{replyTo(orig)}, thread: orig.ID, tags: kept, newBox: true, attach: f.all("attach")}
 	if d.urgency, err = urgencyOf(f); err != nil {
 		return bad(u, err)
 	}

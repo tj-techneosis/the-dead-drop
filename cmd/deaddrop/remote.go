@@ -233,6 +233,18 @@ func runRemoteTo(host, cmd string, args []string, stdout, stderr io.Writer) erro
 			args = append(rest, "--bundle")
 		}
 	}
+	// A reply's --attach names a file here, which the store would read as
+	// one of its own: refused rather than sent across.
+	if cmd == "reply" {
+		for _, a := range args {
+			if a == "--" {
+				break
+			}
+			if a == "--attach" || strings.HasPrefix(a, "--attach=") {
+				return fmt.Errorf("--attach on a reply works only on the store's machine; send --reply-to ID --attach FILE instead")
+			}
+		}
+	}
 	if stdin == nil && (cmd == "send" || cmd == "reply") {
 		stdin = os.Stdin
 		if presetBody != nil {

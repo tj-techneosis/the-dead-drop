@@ -52,6 +52,26 @@ exec env -i PATH=/usr/bin:/bin HOME="{self.far}" DEADDROP_NOW="$DEADDROP_NOW" \\
 
 
 class Remote(RemoteBase):
+    def test_a_reply_never_sends_a_path_across(self):
+        # --attach on a reply names a file on this side; the store must never
+        # read it as one of its own.
+        id = self.rdd("send", "--to", "alice", input="x\n").stdout.split()[1]
+        att = self.tmp / "a.txt"
+        att.write_text("a")
+        p = self.rdd("reply", id, "--attach", str(att), input="y\n", ok=False)
+        self.assertIn("only on the store's machine", p.stderr)
+        p = self.rdd("reply", id, "--attach=/etc/hostname", input="y\n", ok=False)
+        self.assertIn("only on the store's machine", p.stderr)
+        # Signed, a reply goes as a send, which would bundle it across: refused
+        # all the same, before anything is read or sent.
+        p = self.rdd("reply", id, "--attach", str(att), input="y\n", ok=False,
+                     env=dict(DEADDROP_SIGN_KEY=key("alice")[0]))
+        self.assertIn("only on the store's machine", p.stderr)
+        # And a far side that's asked anyway (an old client) refuses too.
+        p = self.dd("reply", id, "--attach", str(att), input="y\n", ok=False,
+                    DEADDROP_DIR=str(self.far_store), DEADDROP_HOPS="1")
+        self.assertIn("only on the store's machine", p.stderr)
+
     def test_send_pull_mark_with_nothing_written_here(self):
         # Build order step 3.
         att = self.tmp / "outside" / "run.log"

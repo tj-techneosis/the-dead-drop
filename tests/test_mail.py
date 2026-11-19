@@ -358,6 +358,24 @@ class Attachments(DeadDrop):
         self.assertIn("[attached: numbers.csv", self.dd("pull").stdout)
         self.assertIn("plain file name", self.dd("file", id, "../../etc/passwd", ok=False).stderr)
 
+    def test_a_reply_carries_attachments(self):
+        # An answer to a card, with the owner's screenshot on it.
+        orig = self.send("# Run this\n", "--to", "bob", "--tag", "hands")
+        a = self.tmp / "image-1.jpg"
+        a.write_bytes(b"\xff\xd8\xff\xe0shot")
+        self.me = "bob"
+        r = self.dd("reply", orig, "--attach", str(a), input="It failed.\n").stdout.split()[1]
+        self.me = "alice"
+        m = [m for m in self.inbox() if m["id"] == r][0]
+        self.assertEqual((m["thread"], m["attachments"]), (orig, ["image-1.jpg"]))
+        self.assertEqual(subprocess_bytes(self, "file", r, "image-1.jpg"), b"\xff\xd8\xff\xe0shot")
+        # A missing file sends nothing.
+        self.me = "bob"
+        p = self.dd("reply", orig, "--attach", str(self.tmp / "nope.jpg"), input="x\n", ok=False)
+        self.assertIn("--attach", p.stderr)
+        self.me = "alice"
+        self.assertEqual(len([m for m in self.inbox() if m.get("thread") == orig]), 1)
+
     def test_gc_takes_archived_mail_and_its_files(self):
         a = self.tmp / "f.txt"
         a.write_text("f")

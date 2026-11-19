@@ -20,7 +20,7 @@ Leave something:
                 [--reply-to ID] [--attach FILE]... [--follow-up 2d|TIME]
                 [--from automation] [--as NAME] [--for HELPER]... [--reply-box BOX] [--ask] < body.md
   deaddrop reply ID [--box WHO] [--urgent|--fyi] [--tag T]... [--untag T]... [--as NAME]
-                [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] < body.md
+                [--for HELPER]... [--reply-box BOX] [--follow-up 2d|TIME] [--attach FILE]... < body.md
 
 Collect it ([--for HELPER] reads a helper's pigeonhole; '*' is every one):
   deaddrop inbox [WHO] [--tag T]... [--from WHO]... [--since D] [--read|--all] [--for H] [--json]

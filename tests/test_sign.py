@@ -162,6 +162,18 @@ class Signed(DeadDrop):
         self.assertEqual((m["signature"], m["signed_by"]), ("verified", "bob"))
         self.assertEqual((m["subject"], m["thread"], m["tags"]), ("Re: Question", id, ["tool-x", "answer"]))
 
+    def test_a_signed_reply_carries_its_attachments(self):
+        # With a key, a reply goes as a signed send: its --attach goes with it
+        # and is sealed, rather than refused as a flag send doesn't know.
+        id = self.send("# Question\n\nx\n", "--to", "bob", **self.as_("alice"))
+        att = self.tmp / "shot.png"
+        att.write_bytes(b"\x89PNGshot")
+        r = self.dd("reply", id, "--attach", str(att), input="Here.\n", **self.as_("bob")).stdout.split()[1]
+        m = self.one("alice")
+        self.assertEqual((m["id"], m["thread"], m["attachments"]), (r, id, ["shot.png"]))
+        self.assertEqual((m["signature"], m["signed_by"]), ("verified", "bob"))
+        self.assertIn("attachment_sha256: [", next((self.dir / "alice" / "new").glob("*.md")).read_text())
+
     def test_a_raised_follow_up_still_verifies(self):
         installed = self.tmp / "home" / ".local" / "bin" / "deaddrop"
         installed.parent.mkdir(parents=True)

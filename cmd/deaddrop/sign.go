@@ -752,12 +752,23 @@ func signAs() (string, error) {
 // it can be signed here: the original comes from the store first.
 func replyAsSend(args []string) (string, []string, error) {
 	const u = replyUsage
-	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true})
+	f, err := parseFlags(args, map[string]bool{"urgent": false, "fyi": false, "tag": true, "untag": true, "follow-up": true, "as": true, "for": true, "reply-box": true, "box": true, "attach": true})
 	if err != nil {
 		return "", nil, bad(u, err)
 	}
 	if len(f.pos) != 1 {
 		return "", nil, badf(u, "reply to one message: its id")
+	}
+	// Signed, a reply goes as a send, which would bundle its attachments
+	// across: a reply's --attach stays a store's-machine thing either way.
+	if f.has("attach") {
+		host, err := remoteHost()
+		if err != nil {
+			return "", nil, err
+		}
+		if host != "" {
+			return "", nil, badf(u, "--attach on a reply works only on the store's machine; send --reply-to ID --attach FILE instead")
+		}
 	}
 	show := []string{"show", f.pos[0], "--json"}
 	if f.has("box") {
@@ -802,6 +813,9 @@ func replyAsSend(args []string) (string, []string, error) {
 	}
 	if f.has("reply-box") {
 		out = append(out, "--reply-box", f.get("reply-box"))
+	}
+	for _, a := range f.all("attach") {
+		out = append(out, "--attach", a)
 	}
 	// The box comes from the letter, never typed: it may be one that has
 	// never had mail (a retired one still refuses it).
